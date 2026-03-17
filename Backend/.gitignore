@@ -1,0 +1,56 @@
+# ========================
+# 1. Dependencies
+# ========================
+node_modules/
+package-lock.json
+# (Optional: uncomment the line above if you are building a published library, 
+# but keep it commented out if this is a deployed server application so deployments are deterministic)
+
+# ========================
+# 2. Environment Variables & Secrets (CRITICAL)
+# ========================
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.pem
+
+# ========================
+# 3. Serverless & Cloud Deployment
+# ========================
+.serverless/
+.netlify/
+.vercel/
+.aws/
+dist/
+build/
+
+# ========================
+# 4. Logs
+# ========================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========================
+# 5. Testing & Coverage
+# ========================
+coverage/
+.nyc_output/
+
+# ========================
+# 6. OS & Editor Files
+# ========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
