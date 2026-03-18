@@ -5,10 +5,8 @@ const login = async (req, res) => {
   const { email, password, environment } = req.body;
 
   try {
-    // 1. Initial Logging
     logger.info('Login request received', { email, environment });
 
-    // 2. Body Validation
     if (!email || !password || !environment) {
       logger.warn('Validation failed: Missing fields', { email, environment });
       return res.status(400).json({ 
@@ -17,19 +15,15 @@ const login = async (req, res) => {
       });
     }
 
-    // 3. Service Call
     const authData = await authService.loginToSalesforce(email, password, environment);
-    // 4. Success Response
     logger.info('Authentication successful', { userId: authData.user.id });
     return res.status(200).json({
       success: true,
       message: `Successfully authenticated with Salesforce ${environment}`,
-      user: authData.user // This matches your AuthResponse interface in Angular
+      user: authData.user
     });
 
   } catch (error) {
-    // 5. Error Handling
-    // If it's a known Salesforce error, send 401, otherwise 500
     const statusCode = error.name === 'SalesforceAuthError' ? 401 : 500;
     
     logger.error('Login process failed', { 

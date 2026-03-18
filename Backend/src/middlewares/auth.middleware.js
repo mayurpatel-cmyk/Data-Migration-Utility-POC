@@ -1,16 +1,14 @@
-// middlewares/auth.middleware.js
 const jsforce = require('jsforce');
-const logger = require('../utils/logger')(__filename); // 1. Import your logger
+const logger = require('../utils/logger')(__filename);
 
 const requireSalesforceAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  const instanceUrl = req.headers['x-sf-url'];
+  const instanceUrl = req.headers.instanceurl;
+  const accessToken = req.headers.accesstoken;
 
-  // 2. Log Warning if headers are missing
-  if (!authHeader || !authHeader.startsWith('Bearer ') || !instanceUrl) {
+  if ( !instanceUrl || !accessToken) {
     logger.warn('Unauthorized request: Missing Salesforce Token or Instance URL', {
-      hasAuthHeader: !!authHeader,
       hasInstanceUrl: !!instanceUrl,
+      hasAccessToken: !!accessToken,
       endpoint: req.originalUrl 
     });
 
@@ -20,8 +18,6 @@ const requireSalesforceAuth = (req, res, next) => {
     });
   }
 
-  const accessToken = authHeader.split(' ')[1]; // Extracts token after "Bearer "
-
   try {
     // Reconstruct the jsforce connection without needing a password!
     req.sfConn = new jsforce.Connection({
@@ -29,7 +25,6 @@ const requireSalesforceAuth = (req, res, next) => {
       accessToken: accessToken
     });
 
-    // 3. Log Success (Optional: change to logger.debug if this gets too noisy in production)
     logger.info('Salesforce connection reconstructed from headers', {
       instanceUrl: instanceUrl,
       endpoint: req.originalUrl
@@ -37,7 +32,6 @@ const requireSalesforceAuth = (req, res, next) => {
 
     next(); 
   } catch (error) {
-    // 4. Log Error if jsforce fails to initialize
     logger.error('Failed to initialize Salesforce connection', { 
       error: error.message,
       stack: error.stack,
