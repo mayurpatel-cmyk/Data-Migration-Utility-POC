@@ -7,18 +7,17 @@ export interface LoginCredentials {
   environment: string;
   email: string;
   password?: string;
-  //securityToken?: string; // 1. Added Security Token for Salesforce
 }
 
 export interface AuthResponse {
   success: boolean;
   message: string;
-  //token: string;          // 2. Added the JWT token returned by Node
-  user: {                 // 3. Updated to match the real backend user object
+  user: {
     id: string;
     email: string;
     environment: string;
     sfUrl: string;
+    accessToken: string;
   };
 }
 

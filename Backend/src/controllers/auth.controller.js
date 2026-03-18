@@ -19,7 +19,6 @@ const login = async (req, res) => {
 
     // 3. Service Call
     const authData = await authService.loginToSalesforce(email, password, environment);
-
     // 4. Success Response
     logger.info('Authentication successful', { userId: authData.user.id });
     return res.status(200).json({

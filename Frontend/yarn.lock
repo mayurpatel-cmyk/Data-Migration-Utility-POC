@@ -297,6 +297,13 @@
   dependencies:
     "@angular-eslint/bundled-angular-compiler" "21.1.0"
 
+"@angular/animations@^21.0.5", "@angular/animations@21.0.5":
+  version "21.0.5"
+  resolved "https://registry.npmjs.org/@angular/animations/-/animations-21.0.5.tgz"
+  integrity sha512-7Lr60wLlYcGG+VDnnOY9xpn8Zz3yyJcWGSjNEbXPEGaaD0nTZLNZ1nIXRhTeYZwosK5GvPDFxq68kdLxczskHA==
+  dependencies:
+    tslib "^2.3.0"
+
 "@angular/build@21.0.3":
   version "21.0.3"
   resolved "https://registry.npmjs.org/@angular/build/-/build-21.0.3.tgz"
@@ -365,7 +372,7 @@
     yargs "18.0.0"
     zod "4.1.13"
 
-"@angular/common@^20.0.0", "@angular/common@^21.0.0 || ^22.0.0", "@angular/common@>=19.0.0", "@angular/common@>=20.0.0", "@angular/common@21.0.5":
+"@angular/common@^20.0.0", "@angular/common@^21.0.0", "@angular/common@^21.0.0 || ^22.0.0", "@angular/common@>=19.0.0", "@angular/common@>=20.0.0", "@angular/common@21.0.5":
   version "21.0.5"
   resolved "https://registry.npmjs.org/@angular/common/-/common-21.0.5.tgz"
   integrity sha512-/ZI11F6Wxr8TZRVO4O7pmhBJ9YxDg9mvA76e0PiivmqZggM02HY0y3XPMP3hAOe4K+PfaVBgMAu3P9t32klzfA==
@@ -4957,6 +4964,13 @@ ngx-scrollbar@18.0.0:
   integrity sha512-+ykmY491x+nzXvnecJvZHvDz0YWuX1r7SYMxNG4RVHXm5Z68P/8kd/3ryLD6DXdNWmJawd4NGvqq2ZkUKb/g3A==
   dependencies:
     tslib "^2.3.0"
+
+ngx-toastr@^20.0.5:
+  version "20.0.5"
+  resolved "https://registry.npmjs.org/ngx-toastr/-/ngx-toastr-20.0.5.tgz"
+  integrity sha512-JcGu1Cbl+0SovPhxma72ygGeZHtpHWWKwBCyiabb+MSWYtXu/SOwEZ2HTWtZ4wcEYOOiy9tDQZgiEKWXpibpRw==
+  dependencies:
+    tslib "^2.8.1"
 
 node-addon-api@^6.1.0:
   version "6.1.0"
