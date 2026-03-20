@@ -65,6 +65,23 @@ class SalesforceService {
       throw error; 
     }
   }
+
+async getCurrentUserInfo(conn) {
+    try {
+      // Reconstructed connections lack userInfo. Fetch it manually:
+      const identity = await conn.identity();
+      const userId = identity.user_id;
+
+      const userData = await conn.query(
+        `SELECT Id, Name, Email, Username, CompanyName FROM User WHERE Id = '${userId}'`
+      );
+
+      return userData.records[0];
+    } catch (error) {
+      logger.error('Service Error: User Info', { error: error.message });
+      throw error;
+    }
+  }
 }
 
 module.exports = new SalesforceService();

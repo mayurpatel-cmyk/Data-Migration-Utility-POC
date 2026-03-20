@@ -22,7 +22,7 @@ const loginToSalesforce = async (email, password, environment) => {
         id: userInfo.id,
         email: email,
         environment: environment,
-        sfUrl: conn.instanceUrl, 
+        instanceUrl: conn.instanceUrl, 
         accessToken: conn.accessToken
       }
     };

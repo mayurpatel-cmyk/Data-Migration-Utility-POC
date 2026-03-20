@@ -9,4 +9,6 @@ router.get('/standard-objects',requireSalesforceAuth,  sfController.getStandardO
 // Get fields for a specific object (e.g. /api/sf/fields/Account)
 router.get('/fields/:objectName',requireSalesforceAuth,  sfController.getObjectFields);
 
+router.get('/user-info',requireSalesforceAuth,  sfController.getUserDetails);
+
 module.exports = router;
