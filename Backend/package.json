@@ -16,9 +16,11 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
+    "fast-csv": "^5.0.5",
     "helmet": "^8.1.0",
     "jsforce": "^3.10.14",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
     "winston": "^3.19.0"
   },
   "devDependencies": {

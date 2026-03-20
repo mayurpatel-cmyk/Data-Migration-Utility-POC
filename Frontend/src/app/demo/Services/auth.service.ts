@@ -7,17 +7,18 @@ export interface LoginCredentials {
   environment: string;
   email: string;
   password?: string;
+  //securityToken?: string; // 1. Added Security Token for Salesforce
 }
 
 export interface AuthResponse {
   success: boolean;
   message: string;
-  user: {
+  token: string;          // 2. Added the JWT token returned by Node
+  user: {                 // 3. Updated to match the real backend user object
     id: string;
     email: string;
     environment: string;
     sfUrl: string;
-    accessToken: string;
   };
 }
 
@@ -37,10 +38,11 @@ export class AuthService {
   login(credentials: LoginCredentials): Observable<AuthResponse> {
     return this.http.post<AuthResponse>(this.apiUrl, credentials).pipe(
       tap((response) => {
-        if (response.success && response.user) {
+        if (response.success && response.user && response.token) {
           // 1. Persist data
           localStorage.setItem('user_data', JSON.stringify(response.user));
-          
+          localStorage.setItem('token', response.token);
+
           // 2. Update Signal (This allows AuthGuard to pass)
           this.currentUser.set(response.user);
         }
