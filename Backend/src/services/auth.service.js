@@ -23,11 +23,8 @@ const loginToSalesforce = async (email, password, environment) => {
         id: userInfo.id,
         email: email,
         environment: environment,
-<<<<<<< HEAD
         sfUrl: conn.instanceUrl, // Mapping instanceUrl to sfUrl for your frontend
-=======
         instanceUrl: conn.instanceUrl, 
->>>>>>> Ms-dynamic
         accessToken: conn.accessToken
       }
     };
