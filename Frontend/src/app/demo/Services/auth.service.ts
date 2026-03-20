@@ -18,7 +18,8 @@ export interface AuthResponse {
     id: string;
     email: string;
     environment: string;
-    sfUrl: string;
+    instanceUrl: string;
+    accessToken: string;
   };
 }
 
