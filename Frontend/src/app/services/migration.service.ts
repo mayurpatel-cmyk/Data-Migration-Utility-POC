@@ -1,5 +1,7 @@
+/* eslint-disable @angular-eslint/prefer-inject */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 @Injectable({
@@ -11,22 +13,22 @@ export class MigrationService {
   constructor(private http: HttpClient) {}
 
   // Helper to get headers with the JWT token
-  private getHeaders(): HttpHeaders {
-    const token = localStorage.getItem('token');
-    console.log("Token being sent:", token);
+  // private getHeaders(): HttpHeaders {
+  //   const token = localStorage.getItem('token');
+  //   console.log("Token being sent:", token);
 
     
-    return new HttpHeaders({
-      'Authorization': `Bearer ${token}`
-    });
-  }
+  //   return new HttpHeaders({
+  //     'Authorization': `Bearer ${token}`
+  //   });
+  // }
 
   /**
    * 1. Fetch all Salesforce Objects (for your dropdown)
    */
   getSFObjects(): Observable<any[]> {
     return this.http.get<any[]>(`${this.apiUrl}/objects`, {
-      headers: this.getHeaders()
+     
     });
   }
 
@@ -36,7 +38,7 @@ export class MigrationService {
    */
   getSFFields(objectName: string): Observable<any[]> {
     return this.http.get<any[]>(`${this.apiUrl}/fields/${objectName}`, {
-      headers: this.getHeaders()
+  
     });
   }
 
@@ -56,7 +58,7 @@ export class MigrationService {
     formData.append('mappings', JSON.stringify(payload.mappings));
 
     return this.http.post(`${this.apiUrl}/upload`, formData, {
-      headers: this.getHeaders()
+
     });
   }
 }

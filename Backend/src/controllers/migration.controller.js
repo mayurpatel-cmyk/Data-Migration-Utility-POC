@@ -5,7 +5,7 @@ exports.getObjects = async (req, res) => {
     try {
         const sfConfig = {
             accessToken: req.user.accessToken,
-            instanceUrl: req.user.sfUrl
+            instanceUrl: req.user.instanceUrl
         };
         const objects = await migrationService.getSalesforceObjects(sfConfig);
         res.status(200).json(objects);
@@ -19,7 +19,7 @@ exports.getFields = async (req, res) => {
     try {
         const sfConfig = {
             accessToken: req.user.accessToken,
-            instanceUrl: req.user.sfUrl
+            instanceUrl: req.user.instanceUrl
         };
         const fields = await migrationService.getObjectFields(sfConfig, req.params.name);
         res.status(200).json(fields);
@@ -33,7 +33,7 @@ exports.migrate = async (req, res) => {
     try {
         const sfConfig = {
             accessToken: req.user.accessToken,
-            instanceUrl: req.user.sfUrl
+            instanceUrl: req.user.instanceUrl
         };
         const metadata = {
             operation: req.body.operation || 'insert',

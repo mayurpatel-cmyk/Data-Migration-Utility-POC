@@ -3,8 +3,9 @@ const csv = require('fast-csv');
 const fs = require('fs');
 
 // Fetch all creatable SObjects
-exports.getSalesforceObjects = async (sfConfig) => {
-    const conn = new jsforce.Connection(sfConfig);
+exports.getSalesforceObjects = async (conn) => {
+     logger.info('Executing describeGlobal to fetch standard objects');
+      
     const meta = await conn.describeGlobal();
     return meta.sobjects
         .filter(obj => obj.createable && obj.updateable)
@@ -12,17 +13,20 @@ exports.getSalesforceObjects = async (sfConfig) => {
 };
 
 // Fetch fields for a specific object
-exports.getObjectFields = async (sfConfig, objectName) => {
-    const conn = new jsforce.Connection(sfConfig);
-    const meta = await conn.describe(objectName);
+exports.getObjectFields = async (conn, objectName) => {
+    logger.info(`Executing describe for object: ${objectName}`);
+      
+      const meta = await conn.sobject(objectName).describe();
     return meta.fields
         .filter(f => f.createable || f.updateable)
         .map(f => ({ label: f.label, name: f.name }));
 };
 
 // Migration logic with Mapping
-exports.runBulkMigration = async (sfConfig, file, metadata) => {
-    const conn = new jsforce.Connection(sfConfig);
+exports.runBulkMigration = async (conn, file, metadata) => {
+         logger.info('Executing describeGlobal to fetch standard objects');
+      
+    const meta = await conn.describeGlobal();
     const records = [];
     const mappings = metadata.mappings; // e.g., { "Zoho Email": "Email" }
 
