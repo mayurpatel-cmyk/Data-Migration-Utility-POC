@@ -16,14 +16,14 @@
         <div class="dropdown-menu dropdown-user-profile dropdown-menu-end pc-h-dropdown" ngbDropdownMenu>
           <div class="dropdown-header">
             <h4>
-              Good Morning,
+              Hello,
               <span class="small text-muted">{{ currentUser?.Name || 'Guest' }}</span>
             </h4>
             
             <p class="text-muted">{{ currentUser?.CompanyName || 'Salesforce User' }}</p>
             
             <hr />
-            <ng-scrollbar style="height: calc(100vh - 280px)" visibility="hover">
+            <ng-scrollbar style="height: calc(70vh - 280px)" visibility="hover">
               <a [routerLink]="['/login']" class="dropdown-item">
                 <i class="ti ti-logout"></i>
                 <span>Logout</span>

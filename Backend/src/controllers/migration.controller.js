@@ -1,4 +1,5 @@
 const migrationService = require('../services/migration.service');
+const logger = require('../utils/logger')(__filename);
 
 exports.migrateData = async (req, res) => {
   const email = req.headers['user-email']; 

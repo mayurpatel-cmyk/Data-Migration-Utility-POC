@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, map,tap } from 'rxjs';
-
+import { Observable, map, tap } from 'rxjs';
 
 @Injectable({
   providedIn: 'root'
@@ -10,9 +9,9 @@ import { Observable, map,tap } from 'rxjs';
 export class MigrationService {
   private http = inject(HttpClient);
   private apiUrl = 'http://localhost:3000/api/sf'; 
-  private apiUrl2 = 'http://localhost:3000/api/migrate';
+  private migrateUrl = 'http://localhost:3000/api/migrate-data';
 
- private getHeaders(): HttpHeaders {
+  private getHeaders(): HttpHeaders {
     const userData = JSON.parse(localStorage.getItem('user_data') || '{}');
     
     return new HttpHeaders({
@@ -31,14 +30,12 @@ export class MigrationService {
     );
   }
 
-getObjectFields(objectName: string): Observable<any[]> {
+  getObjectFields(objectName: string): Observable<any[]> {
     return this.http.get<any>(`${this.apiUrl}/fields/${objectName}`, {
       headers: this.getHeaders(),
       withCredentials: true 
     }).pipe(
-      // This prints EXACTLY what Node.js sent back before Angular touches it
       tap(rawResponse => console.log('RAW BACKEND RESPONSE:', rawResponse)),
-      
       map(response => {
         if (response.fields) return response.fields;
         if (response.data) return response.data;
@@ -49,9 +46,9 @@ getObjectFields(objectName: string): Observable<any[]> {
   }
 
   migrateData(payload: any): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl2}/migrate-data`, payload, {
+    return this.http.post<any>(this.migrateUrl, payload, {
       headers: this.getHeaders(),
       withCredentials: true 
     });
-}
+  }
 }

@@ -22,7 +22,7 @@ export class LoginComponent {
   loading = signal(false);
 
   loginModal = signal({
-    environment: 'production',
+    environment: 'Production',
     email: '',
     password: ''
   });
@@ -56,7 +56,7 @@ export class LoginComponent {
     this.authService.login(this.loginModal()).subscribe({
       next: () => {
         this.loading.set(false);
-        this.toastr.success(`Successfully connected to ${this.loginModal().environment}!`, 'Login Success');
+        this.toastr.success(`Successfully Connected To Salesforce ${this.loginModal().environment} Environment!`, 'Login Success');
         this.router.navigate(['/dashboard']);
       },
       error: (err) => {

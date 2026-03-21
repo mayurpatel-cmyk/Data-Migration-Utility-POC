@@ -11,7 +11,10 @@ class SalesforceService {
       const allObjects = meta.sobjects.map(obj => ({
           name: obj.name,
           label: obj.label,
-          keyPrefix: obj.keyPrefix
+          keyPrefix: obj.keyPrefix,
+          // NEW: Identify if the object is a Custom Metadata Type, Custom Object, or Standard
+          isCustomMetadata: obj.name.endsWith('__mdt'),
+          isCustomObject: obj.name.endsWith('__c')
         }));
 
       logger.info('Successfully fetched all objects', { 
@@ -28,6 +31,50 @@ class SalesforceService {
       throw error; 
     }
 }
+
+// async getAllCustomMetadataTypes(conn) {
+//     try {
+//       logger.info('Fetching list of Custom Metadata Types');
+//       const allObjects = await this.getAllObjects(conn);
+      
+//       const mdtObjects = allObjects.filter(obj => obj.isCustomMetadata);
+      
+//       logger.info('Successfully filtered Custom Metadata Types', {
+//         mdtCount: mdtObjects.length
+//       });
+      
+//       return mdtObjects;
+//     } catch (error) {
+//       logger.error('Service Error: Failed to fetch Custom Metadata Types', { 
+//         error: error.message 
+//       });
+//       throw error;
+//     }
+//   }
+
+//   // NEW METHOD: Fetch records for a specific Custom Metadata Type
+//   async getCustomMetadataRecords(conn, mdtObjectName) {
+//     try {
+//       // Safety check to ensure we are querying an MDT
+//       if (!mdtObjectName.endsWith('__mdt')) {
+//         throw new Error(`Invalid Object Name: ${mdtObjectName}. Must end with __mdt`);
+//       }
+//       logger.info(`Fetching records for Custom Metadata Type: ${mdtObjectName}`);
+//       const records = await conn.sobject(mdtObjectName).find();
+
+//       logger.info(`Successfully fetched records for ${mdtObjectName}`, {
+//         recordCount: records.length
+//       });
+
+//       return records;
+//     } catch (error) {
+//       logger.error(`Service Error: Failed to fetch records for ${mdtObjectName}`, {
+//         error: error.message,
+//         stack: error.stack
+//       });
+//       throw error;
+//     }
+//   }
 
   async getFieldsForObject(conn, objectName) {
     try {

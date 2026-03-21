@@ -1,5 +1,5 @@
 // Angular import
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit,ChangeDetectorRef } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http'; // Added HttpClient
 import { CommonModule } from '@angular/common'; // Usually needed for async/pipes
@@ -19,7 +19,7 @@ export class NavRightComponent implements OnInit {
   currentUser: any = null; 
   isLoading: boolean = true;
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient,private cdr: ChangeDetectorRef) {}
 
   ngOnInit(): void {
     this.getUserData();
@@ -58,15 +58,32 @@ getUserData(): void {
             this.currentUser = response.data;
           }
           this.isLoading = false;
+          setTimeout(() => {
+            if (response.success && response.data) {
+              this.currentUser = response.data;
+            }
+            this.isLoading = false;
+            this.cdr.detectChanges(); // Force the HTML to update with the new name!
+          });
         },
         error: (error) => {
           console.error('Error fetching user data', error);
           this.isLoading = false;
+          setTimeout(() => {
+            console.error('Error fetching user data', error);
+            this.isLoading = false;
+            this.cdr.detectChanges();
+          });
         }
       });
     } else {
       console.warn('No user email found, skipping API call.');
       this.isLoading = false;
+      setTimeout(() => {
+        console.warn('No user email found, skipping API call.');
+        this.isLoading = false;
+        this.cdr.detectChanges();
+      });
     }
   }
 }
