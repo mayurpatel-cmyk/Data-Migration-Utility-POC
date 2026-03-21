@@ -11,7 +11,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   if (user && user.accessToken && user.instanceUrl) {
     const clonedRequest = req.clone({
       setHeaders: {
-        Authorization: `Bearer ${user.accessToken}`,
+        Authorization: `${user.accessToken}`,
         'x-sf-url': user.instanceUrl 
       }
     });

@@ -71,11 +71,10 @@ exports.getObjectFields = async (req, res) => {
 
 exports.getUserDetails = async (req, res) => {
   const email = req.headers['user-email']; 
+  console.log("🚀 ~  email:",  email)
   
   try {
     const conn = req.sfConn; 
-
-    // 1. Connection Check
     if (!conn) {
       logger.warn('Failed to fetch user details: No active Salesforce connection', {
         userEmail: email,
@@ -88,17 +87,11 @@ exports.getUserDetails = async (req, res) => {
     }
 
     logger.info('Fetching Salesforce user profile', { userEmail: email });
-
-    // 2. Call the service method we created earlier
     const userDetails = await sfService.getCurrentUserInfo(conn);
-
-    // 3. Log success
     logger.info('Successfully fetched user details', { 
       userEmail: email, 
       sfUsername: userDetails.username 
     });
-
-    // 4. Send response to frontend
     res.json({ 
       success: true, 
       data: userDetails 

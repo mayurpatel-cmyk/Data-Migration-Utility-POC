@@ -5,6 +5,7 @@ const cors = require('cors');
 // 1. Import your isolated route files
 const authRoutes = require('./src/routes/auth.routes');
 const sfRoutes = require('./src/routes/sfRoutes');
+const migrateRoutes = require('./src/routes/migration.routes');
 
 
 const app = express();
@@ -27,6 +28,7 @@ app.use(express.json());
 // This means the router.post('/login') in auth.routes.js automatically becomes /api/auth/login
 app.use('/api/auth', authRoutes);
 app.use('/api/sf',sfRoutes );
+app.use('/api/migrate-data',migrateRoutes );
 
 
 // Export the app

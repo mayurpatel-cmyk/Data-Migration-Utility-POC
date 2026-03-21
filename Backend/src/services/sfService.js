@@ -1,16 +1,13 @@
 const logger = require('../utils/logger')(__filename); 
 
 class SalesforceService {
-  /**
-   * Fetches only Standard Objects (Account, Contact, etc.)
-   */
+
   async getAllObjects(conn) {
     try {
       logger.info('Executing describeGlobal to fetch all objects');
       
       const meta = await conn.describeGlobal();
       
-      // Removed the filter here as well
       const allObjects = meta.sobjects.map(obj => ({
           name: obj.name,
           label: obj.label,
@@ -32,9 +29,6 @@ class SalesforceService {
     }
 }
 
-  /**
-   * Fetches all fields for a specific object
-   */
   async getFieldsForObject(conn, objectName) {
     try {
       logger.info(`Executing describe for object: ${objectName}`);
@@ -67,7 +61,6 @@ class SalesforceService {
 
 async getCurrentUserInfo(conn) {
     try {
-      // Reconstructed connections lack userInfo. Fetch it manually:
       const identity = await conn.identity();
       const userId = identity.user_id;
 
