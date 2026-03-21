@@ -3,7 +3,6 @@ import { RouterModule, Routes } from '@angular/router';
 import { AdminComponent } from './theme/layout/admin/admin.component';
 import { GuestComponent } from './theme/layout/guest/guest.component';
 import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
-import { MigrationTool } from './migration-tool/migration-tool';
 
 export const routes: Routes = [
   {
@@ -29,11 +28,7 @@ export const routes: Routes = [
       {
         path: 'dashboard',
         loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
-      },
-      {
-        path: 'migrate',
-        component: MigrationTool
-      },
+      }
       // ... rest of your admin routes
     ]
   }

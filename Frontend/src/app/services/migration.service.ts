@@ -1,64 +1,54 @@
-/* eslint-disable @angular-eslint/prefer-inject */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Injectable, inject } from '@angular/core';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { Observable, map,tap } from 'rxjs';
+
 
 @Injectable({
   providedIn: 'root'
 })
 export class MigrationService {
-  private apiUrl = 'http://localhost:3000/api/migration';
+  private http = inject(HttpClient);
+  private apiUrl = 'http://localhost:3000/api/sf'; 
 
-  constructor(private http: HttpClient) {}
-
-  // Helper to get headers with the JWT token
-  // private getHeaders(): HttpHeaders {
-  //   const token = localStorage.getItem('token');
-  //   console.log("Token being sent:", token);
-
+ private getHeaders(): HttpHeaders {
+    // Grab the user data that your AuthService saved during login
+    const userData = JSON.parse(localStorage.getItem('user_data') || '{}');
     
-  //   return new HttpHeaders({
-  //     'Authorization': `Bearer ${token}`
-  //   });
-  // }
-
-  /**
-   * 1. Fetch all Salesforce Objects (for your dropdown)
-   */
-  getSFObjects(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/objects`, {
-     
+    return new HttpHeaders({
+      'user-email': userData.email || '',
+      // Add the two headers your Node middleware is begging for!
+      'instanceurl': userData.instanceUrl || '', 
+      'accesstoken': userData.accessToken || ''  
     });
   }
 
-  /**
-   * 2. Fetch all Fields for a specific Object (for your mapping table)
-   * @param objectName e.g., 'Lead' or 'Account'
-   */
-  getSFFields(objectName: string): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/fields/${objectName}`, {
-  
-    });
+  // 1. Updated URL to match '/standard-objects'
+  getAllObjects(): Observable<any[]> {
+    return this.http.get<{success: boolean, data: any[]}>(`${this.apiUrl}/all-objects`, { 
+      headers: this.getHeaders(),
+      withCredentials: true
+    }).pipe(
+      map(response => response.data) 
+    );
   }
 
-  /**
-   * 3. Updated Upload Data
-   * Now includes the 'mappings' object from the UI
-   */
-  uploadData(file: File, payload: any): Observable<any> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('operation', payload.operation);
-    formData.append('objectName', payload.objectName);
-    formData.append('externalId', payload.externalId || '');
-
-    // IMPORTANT: Send the field mapping as a stringified JSON
-    // Format: { "Zoho_Column_Name": "Salesforce_Field_API_Name" }
-    formData.append('mappings', JSON.stringify(payload.mappings));
-
-    return this.http.post(`${this.apiUrl}/upload`, formData, {
-
-    });
+  // 2. Updated URL to match '/fields/:objectName'
+getObjectFields(objectName: string): Observable<any[]> {
+    return this.http.get<any>(`${this.apiUrl}/fields/${objectName}`, {
+      headers: this.getHeaders(),
+      withCredentials: true 
+    }).pipe(
+      // 1. This prints EXACTLY what Node.js sent back before Angular touches it
+      tap(rawResponse => console.log('RAW BACKEND RESPONSE:', rawResponse)),
+      
+      // 2. This safely grabs the fields, even if the backend named the property 'data' instead
+      map(response => {
+        if (response.fields) return response.fields;
+        if (response.data) return response.data;
+        if (Array.isArray(response)) return response; // Just in case it sent a raw array!
+        return []; // If all else fails, return an empty array so the UI doesn't crash
+      })
+    );
   }
 }

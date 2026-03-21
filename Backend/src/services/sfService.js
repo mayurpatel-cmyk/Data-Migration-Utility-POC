@@ -4,34 +4,33 @@ class SalesforceService {
   /**
    * Fetches only Standard Objects (Account, Contact, etc.)
    */
-  async getStandardObjects(conn) {
+  async getAllObjects(conn) {
     try {
-      logger.info('Executing describeGlobal to fetch standard objects');
+      logger.info('Executing describeGlobal to fetch all objects');
       
       const meta = await conn.describeGlobal();
       
-      const standardObjects = meta.sobjects
-        .filter(obj => !obj.custom && obj.queryable)
-        .map(obj => ({
+      // Removed the filter here as well
+      const allObjects = meta.sobjects.map(obj => ({
           name: obj.name,
           label: obj.label,
           keyPrefix: obj.keyPrefix
         }));
 
-      logger.info('Successfully fetched standard objects', { 
-        objectCount: standardObjects.length 
+      logger.info('Successfully fetched all objects', { 
+        objectCount: allObjects.length 
       });
       
-      return standardObjects;
+      return allObjects;
       
     } catch (error) {
-      logger.error('Salesforce API Error: Failed to fetch standard objects', { 
+      logger.error('Salesforce API Error: Failed to fetch all objects', { 
         error: error.message, 
         stack: error.stack 
       });
       throw error; 
     }
-  }
+}
 
   /**
    * Fetches all fields for a specific object

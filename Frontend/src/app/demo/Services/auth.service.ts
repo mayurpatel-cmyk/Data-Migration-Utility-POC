@@ -39,12 +39,19 @@ export class AuthService {
   login(credentials: LoginCredentials): Observable<AuthResponse> {
     return this.http.post<AuthResponse>(this.apiUrl, credentials).pipe(
       tap((response) => {
-        if (response.success && response.user && response.token) {
+        // Removed the strict check for response.token
+        if (response.success && response.user) {
+          
           // 1. Persist data
           localStorage.setItem('user_data', JSON.stringify(response.user));
-          localStorage.setItem('token', response.token);
+          
+          // Note: If you want to store the Salesforce accessToken from the user object, 
+          // you can do it like this:
+          if (response.user.accessToken) {
+             localStorage.setItem('token', response.user.accessToken);
+          }
 
-          // 2. Update Signal (This allows AuthGuard to pass)
+          // 2. Update Signal 
           this.currentUser.set(response.user);
         }
       })
