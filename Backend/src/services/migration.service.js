@@ -1,36 +1,39 @@
 const logger = require('../utils/logger')(__filename); 
 
 class MigrationService {
-  async insertRecords(conn, targetObject, records) {
-    try {
-      logger.info(`Starting migration: Inserting ${records.length} records into ${targetObject}`);
-      
-      const results = [];
-      const chunkSize = 200; // Salesforce REST API batch limit
-
-      // Process the records in safe chunks
-      for (let i = 0; i < records.length; i += chunkSize) {
-        const chunk = records.slice(i, i + chunkSize);
-        
-        logger.info(`Processing batch ${Math.floor(i / chunkSize) + 1} of ${Math.ceil(records.length / chunkSize)}...`);
-        
-        // Push the chunk to Salesforce
-        const chunkResults = await conn.sobject(targetObject).create(chunk, { allowRecursive: true });
-        
-        // Ensure results are always pushed as an array
-        results.push(...(Array.isArray(chunkResults) ? chunkResults : [chunkResults]));
-      }
-
-      logger.info(`Successfully completed migration to ${targetObject}`);
-      return results;
-
-    } catch (error) {
-      logger.error(`Migration Failed for ${targetObject}`, { 
-        error: error.message, 
-        stack: error.stack 
+ async insertRecords(conn, targetObject, records) {
+  try {
+    //Filter out empty objects and clean headers
+    const cleanRecords = records
+      .filter(record => Object.keys(record).length > 0) // Remove empty rows
+      .map(record => {
+        const cleanRow = {};
+        Object.entries(record).forEach(([key, value]) => {
+          // Remove any hidden whitespace or newlines from the Salesforce Field Name
+          const cleanKey = key.trim();
+          if (cleanKey && value !== undefined) {
+            cleanRow[cleanKey] = value;
+          }
+        });
+        return cleanRow;
       });
-      throw error; 
+
+    if (cleanRecords.length === 0) {
+      throw new Error("No valid data rows found after cleaning.");
     }
+    logger.info(`Starting Bulk migration: ${cleanRecords.length} records into ${targetObject}`);
+    const results = await conn.bulk.load(targetObject, "insert", cleanRecords);
+
+    return results;
+
+  } catch (error) {
+    if (error.message.includes('InvalidBatch')) {
+      logger.error('Bulk API Header Error: Check if your mapped Salesforce field names are valid API names (e.g. No spaces, no special chars).');
+    }
+    logger.error(`Bulk Migration Service Error: ${error.message}`);
+    throw error;
   }
 }
-  module.exports = new MigrationService();
+}
+
+module.exports = new MigrationService();

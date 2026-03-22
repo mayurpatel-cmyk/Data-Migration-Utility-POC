@@ -2,48 +2,76 @@ const migrationService = require('../services/migration.service');
 const logger = require('../utils/logger')(__filename);
 
 exports.migrateData = async (req, res) => {
-  const email = req.headers['user-email']; 
+  const email = req.headers['user-email'];
   const { targetObject, records } = req.body;
 
   try {
-    const conn = req.sfConn; 
+    const conn = req.sfConn;
 
-    // 1. Validation
     if (!conn) {
-      return res.status(401).json({ success: false, message: "No active Salesforce connection found." });
+      return res.status(401).json({
+        success: false,
+        message: "No active Salesforce connection found. Please log in again."
+      });
     }
+
     if (!targetObject || !records || !Array.isArray(records) || records.length === 0) {
-      return res.status(400).json({ success: false, message: "Missing target object or empty records payload." });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payload: Target object or records missing."
+      });
     }
 
-    logger.info(`Migration request received for ${targetObject}`, { userEmail: email, recordCount: records.length });
+    logger.info(`Bulk Migration started for ${targetObject}`, {
+      userEmail: email,
+      recordCount: records.length
+    });
 
-    // 2. Execute Migration
     const results = await migrationService.insertRecords(conn, targetObject, records);
 
-    // 3. Calculate Success vs Failures
-    const successfulCount = results.filter(r => r.success).length;
-    const failedCount = results.filter(r => !r.success).length;
+    //  Calculate Success vs Failures
+    const successfulCount = results.filter(r => r.success === true).length;
+    const failedCount = results.filter(r => r.success === false).length;
 
-    // Grab the errors for any records that failed (e.g., missing required fields)
-    const errors = results
-      .filter(r => !r.success)
-      .map(r => ({ id: r.id, errors: r.errors }));
+    //include the 'row' index to help the user identify which row in their CSV failed
+    const errorDetails = results
+      .map((r, index) => ({ row: index + 1, result: r }))
+      .filter(item => item.result.success === false)
+      .map(item => ({
+        row: item.row,
+        //API can return errors in .errors or .error depending on the failure type
+        message: item.result.errors ? item.result.errors.map(e => e.message).join(', ') : (item.result.error || 'Unknown Error')
+      }));
 
-    // 4. Send Results Back to Angular
-    res.json({ 
-      success: true, 
-      message: `Migration finished! Successfully inserted ${successfulCount} records. Failed: ${failedCount}.`,
+    logger.info(`Migration completed for ${targetObject}`, {
+      total: records.length,
+      success: successfulCount,
+      failed: failedCount
+    });
+
+    // 5. Send Results Back to Angular
+    res.json({
+      success: true,
+      message: `Migration finished!`,
       stats: {
         total: records.length,
         success: successfulCount,
         failed: failedCount
       },
-      errors: errors.length > 0 ? errors : null
+      // Only send the first 100 errors to avoid bloating the response
+      errors: errorDetails.length > 0 ? errorDetails.slice(0, 100) : null
     });
 
   } catch (error) {
-    logger.error('Migration Controller Error', { error: error.message, userEmail: email });
-    res.status(500).json({ success: false, error: "Migration failed", details: error.message });
+    logger.error('Migration Controller Error', {
+      error: error.message,
+      userEmail: email,
+      stack: error.stack
+    });
+
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error during migration"
+    });
   }
 };
