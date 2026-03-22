@@ -22,7 +22,7 @@ export class LoginComponent {
   loading = signal(false);
 
   loginModal = signal({
-    environment: 'Production',
+    environment: 'production',
     email: '',
     password: ''
   });
