@@ -27,7 +27,7 @@ exports.migrateData = async (req, res) => {
       recordCount: records.length
     });
 
-    const results = await migrationService.insertRecords(conn, targetObject, records);
+    const { results, sentRecords } = await migrationService.insertRecords(conn, targetObject, records);
 
     //  Calculate Success vs Failures
     const successfulCount = results.filter(r => r.success === true).length;
@@ -49,17 +49,31 @@ exports.migrateData = async (req, res) => {
       failed: failedCount
     });
 
+    const failures = results
+      .map((result, index) => {
+        if (!result.success) {
+          return {
+            // We attach the original data so frontend can show "Account Name" or "Email"
+            record: sentRecords[index], 
+            error: result.errors ? result.errors.map(e => e.message).join(', ') : (result.error || 'Unknown Salesforce Error')
+          };
+        }
+        return null;
+      })
+      .filter(item => item !== null);
+
     // 5. Send Results Back to Angular
     res.json({
       success: true,
       message: `Migration finished!`,
       stats: {
-        total: records.length,
+        total: sentRecords.length,
         success: successfulCount,
         failed: failedCount
       },
+      failures: failures,
       // Only send the first 100 errors to avoid bloating the response
-      errors: errorDetails.length > 0 ? errorDetails.slice(0, 100) : null
+      // errors: errorDetails.length > 0 ? errorDetails.slice(0, 100) : null
     });
 
   } catch (error) {

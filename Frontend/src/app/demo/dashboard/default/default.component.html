@@ -137,20 +137,167 @@
         </table>
       </div>
 
-      <div class="row mt-3">
+    <div class="row mt-3">
         <div class="col-sm-12 text-end">
-
-          <button class="btn btn-success" [disabled]="isMigrating" (click)="startMigration()">
-
-            @if (isMigrating) {
-            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-            Migrating Data...
-            } @else {
-            <i class="feather icon-play-circle me-2"></i> Start Migration
-            }
-
+          <button class="btn btn-secondary me-2" (click)="currentStep = 2">Back</button>
+          <button class="btn btn-primary" (click)="goToReview()">
+            Review & Confirm <i class="feather icon-eye ms-2"></i>
           </button>
+        </div>
+    </div>
 
+    </app-card>
+  </div>
+</div>
+}
+@if (currentStep === 4) {
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 4: Review Your Mappings">
+      <div class="alert alert-warning mb-4">
+        <i class="feather icon-alert-triangle me-2"></i>
+        Please confirm that these <strong>{{ confirmedMappings.length }}</strong> fields are mapped correctly.
+      </div>
+
+      <div class="table-responsive border rounded">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th width="45%">Source ({{ selectedCRM }})</th>
+              <th width="10%" class="text-center"></th>
+              <th width="45%">Destination (Salesforce)</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (m of confirmedMappings; track m.csvField) {
+            <tr>
+              <td>
+                <span class="badge bg-light text-dark border p-2 w-100 text-start">
+                   <i class="feather icon-file-text me-2 text-primary"></i> {{ m.csvField }}
+                </span>
+              </td>
+              <td class="text-center text-primary fw-bold">➔</td>
+              <td>
+                <span class="badge bg-success-light text-success border border-success p-2 w-100 text-start">
+                  <i class="feather icon-target me-2"></i> {{ m.sfField }}
+                </span>
+              </td>
+            </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <div class="row mt-4">
+        <div class="col-sm-12 text-end">
+          <button class="btn btn-secondary me-2" [disabled]="isMigrating" (click)="currentStep = 3">
+            Edit Mapping
+          </button>
+          <button class="btn btn-success" [disabled]="isMigrating" (click)="startMigration()">
+            @if (isMigrating) {
+              <span class="spinner-border spinner-border-sm me-2"></span> Migrating...
+            } @else {
+              <i class="feather icon-check-circle me-2"></i> Confirm & Start Migration
+            }
+          </button>
+        </div>
+      </div>
+    </app-card>
+  </div>
+</div>
+}
+@if (currentStep === 5) {
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 5: Final Result">
+
+      <div class="text-center mb-5 pb-3 border-bottom">
+
+        @if (migrationSummary?.success > 0 && migrationSummary?.failed === 0) {
+          <div class="animation-container">
+            <i class="feather icon-check-circle text-success display-4"></i>
+            <h2 class="text-success mt-3 fw-bold">Migration Successful!</h2>
+            <p class="text-muted fs-5">Excellent! All records have been pushed to Salesforce without any issues.</p>
+          </div>
+        }
+
+        @else if (migrationSummary?.success > 0 && migrationSummary?.failed > 0) {
+          <div class="animation-container">
+            <i class="feather icon-alert-circle text-warning display-4"></i>
+            <h2 class="text-warning mt-3 fw-bold">Partial Migration Complete</h2>
+            <p class="text-muted fs-5">Some records were imported, but <strong>{{ migrationSummary.failed }}</strong> records encountered errors.</p>
+          </div>
+        }
+
+        @else if (migrationSummary?.failed > 0 && migrationSummary?.success === 0) {
+          <div class="animation-container">
+            <i class="feather icon-x-circle text-danger display-4"></i>
+            <h2 class="text-danger mt-3 fw-bold">Migration Failed</h2>
+            <p class="text-muted fs-5">None of the records could be imported. Please review the error log below to fix your data.</p>
+          </div>
+        }
+      </div>
+
+      <div class="row text-center mb-4">
+        <div class="col-md-4">
+          <div class="p-3 border rounded bg-light shadow-sm">
+            <h6 class="text-muted mb-1 uppercase small fw-bold">Processed</h6>
+            <h3 class="fw-bold mb-0 text-dark">{{ (migrationSummary?.success || 0) + (migrationSummary?.failed || 0) }}</h3>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="p-3 border rounded bg-success-light shadow-sm">
+            <h6 class="text-success mb-1 uppercase small fw-bold">Success</h6>
+            <h3 class="text-success fw-bold mb-0">{{ migrationSummary?.success || 0 }}</h3>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="p-3 border rounded bg-danger-light shadow-sm">
+            <h6 class="text-danger mb-1 uppercase small fw-bold">Failed</h6>
+            <h3 class="text-danger fw-bold mb-0">{{ migrationSummary?.failed || 0 }}</h3>
+          </div>
+        </div>
+      </div>
+
+      @if (failedRecords.length > 0) {
+      <div class="mt-5">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="text-danger m-0"><i class="feather icon-list me-2"></i> Detailed Error Log</h5>
+            <span class="badge bg-danger">{{ failedRecords.length }} Errors Found</span>
+        </div>
+        <div class="table-responsive border rounded shadow-sm" style="max-height: 350px; overflow-y: auto;">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-danger sticky-top">
+              <tr>
+                <th width="30%" class="text-white fw-bold p-3">Record Identifier</th>
+                <th width="70%" class="text-white fw-bold p-3">Salesforce Error Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (fail of failedRecords; track $index) {
+              <tr>
+                <td class="p-3 fw-bold text-dark border-end">
+                  {{ fail.record.Name || fail.record['Account Name'] || fail.record.LastName || 'Record #' + ($index + 1) }}
+                </td>
+                <td class="p-3 text-danger small bg-light-danger">
+                  <div class="d-flex align-items-start">
+                    <i class="feather icon-info me-2 mt-1"></i>
+                    <span>{{ fail.error }}</span>
+                  </div>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+      }
+
+      <div class="row mt-5">
+        <div class="col-sm-12 text-center">
+          <button class="btn btn-primary btn-lg shadow" (click)="currentStep = 1">
+            <i class="feather icon-plus-circle me-2"></i> New Migration
+          </button>
         </div>
       </div>
 
