@@ -241,3 +241,110 @@ td .form-select {
 .shadow-sm {
     box-shadow: 0 .125rem .25rem rgba(0,0,0,.075)!important;
 }
+
+.btn-outline-success {
+  border: 2px solid #28a745 !important;
+  color: #28a745 !important;
+  &:hover {
+    background-color: #28a745 !important;
+    color: #fff !important;
+  }
+}
+
+.btn-outline-danger {
+  border: 2px solid #ff5252 !important;
+  color: #ff5252 !important;
+  &:hover {
+    background-color: #ff5252 !important;
+    color: #fff !important;
+  }
+}
+
+@keyframes slideAndFade {
+  0% {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* This targets the wrapping div of every new step */
+.row.mb-4 {
+  animation: slideAndFade 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  /* This ensures the scroll target has some "breathing room" at the top */
+  scroll-margin-top: 20px;
+}
+
+/* --- Progress Bar Styling --- */
+.progress-container {
+  .progress-bar {
+    background-color: #04a9f5;
+    transition: width 0.6s cubic-bezier(0.65, 0, 0.35, 1);
+  }
+}
+
+/* --- CRM Tile Styling --- */
+.crm-tile {
+  background: #fff;
+  border: 2px solid #eaeef2;
+  border-radius: 12px;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  height: 100%;
+
+  &:hover {
+    border-color: #04a9f5;
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(4, 169, 245, 0.1);
+  }
+
+  &.active {
+    border-color: #04a9f5;
+    background-color: rgba(4, 169, 245, 0.03);
+
+    .check-mark {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .tile-icon {
+    font-size: 2.5rem;
+    display: block;
+  }
+
+  h5 {
+    font-weight: 700;
+    color: #333;
+  }
+
+  /* Hidden checkmark that appears on active */
+  .check-mark {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #04a9f5;
+    color: #fff;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    opacity: 0;
+    transform: scale(0.5);
+    transition: all 0.2s ease;
+  }
+}
+
+/* --- Smooth Scrolling Padding --- */
+.row.mb-4 {
+  scroll-margin-top: 50px; /* Gives space for the fixed progress bar if you have one */
+}

@@ -40,7 +40,7 @@ export class DefaultComponent implements OnInit {
   isMigrating = false;
   migrationSummary: any = null;
   failedRecords: any[] = []; // To store { record: any, error: string }
-
+  successfulRecords: any[] = []; // To store successfully migrated records for review
   // --- PREVIEW STATE ---
   previewData: any[] = [];
   showPreview = false;
@@ -62,7 +62,15 @@ export class DefaultComponent implements OnInit {
 
   onCRMSelect(crm: string) {
     this.selectedCRM = crm;
-    if (this.currentStep === 1) this.currentStep = 2;
+    setTimeout(() => {
+    this.currentStep = 2;
+    this.autoNavigate(); // This pulls Step 2 into view automatically
+    this.cdr.detectChanges();
+  }, 300);
+    // if (this.currentStep === 1) {
+    //   this.currentStep = 2;
+    //   this.autoNavigate();
+    // }
   }
 
   onFileSelected(event: any) {
@@ -124,6 +132,7 @@ export class DefaultComponent implements OnInit {
 
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
+      this.autoNavigate();
       this.isLoadingFields = true;
 
       this.mappings = this.csvHeaders.map(header => ({
@@ -196,7 +205,9 @@ export class DefaultComponent implements OnInit {
     }
 
     this.currentStep = 4;
+    this.autoNavigate();
     this.cdr.detectChanges();
+
   }
 
  startMigration() {
@@ -247,6 +258,7 @@ export class DefaultComponent implements OnInit {
         this.migrationService.migrateData(payload).subscribe({
           next: (response) => {
             // 1. Turn off the loading spinner
+            console.log('Migration response from server:', response);
             this.isMigrating = false;
 
             // 2. Calculate stats
@@ -254,6 +266,7 @@ export class DefaultComponent implements OnInit {
             const failedCount = response.stats?.failed || 0;
             this.migrationSummary = response.stats;
             this.failedRecords = response.failures || [];
+            this.successfulRecords = response.successfulRecords || [];
             const msg = `Successfully inserted ${successCount} records. Failed: ${failedCount}`;
 
             // 3. Check the stats to determine which toast to show
@@ -270,6 +283,7 @@ export class DefaultComponent implements OnInit {
 
             // 4. Safely tell Angular to update the screen (stops the spinner)
             this.currentStep = 5;
+            this.autoNavigate();
             this.cdr.detectChanges();
           },
           error: (err) => {
@@ -290,4 +304,48 @@ export class DefaultComponent implements OnInit {
       }
     }, 10); // 10ms delay is imperceptible to the user, but a lifetime for Angular!
   }
+ downloadSuccessLog() {
+  const worksheet = utils.json_to_sheet(this.successfulRecords);
+  const csvOutput = utils.sheet_to_csv(worksheet);
+  this.saveAsCsv(csvOutput, 'success_log');
 }
+
+downloadErrorLog() {
+  // We transform the failedRecords array to make the CSV readable
+  const report = this.failedRecords.map(f => ({
+    Error: f.error,
+    ...f.record
+  }));
+
+  const worksheet = utils.json_to_sheet(report);
+  const csvOutput = utils.sheet_to_csv(worksheet);
+  this.saveAsCsv(csvOutput, 'error_log');
+}
+
+// Helper to trigger the browser download
+private saveAsCsv(buffer: string, fileName: string) {
+  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = window.URL.createObjectURL(data);
+  link.download = `${fileName}_${new Date().getTime()}.csv`;
+  link.click();
+}
+
+private autoNavigate() {
+  // We wait 100ms for Angular's @if to actually put the new HTML on the screen
+  setTimeout(() => {
+    // We look for the "active" row (the one that just appeared)
+    const element = document.querySelector('.row.mb-4:last-of-type');
+    if (element) {
+      element.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+        inline: 'nearest'
+      });
+    }
+  }, 100);
+}
+
+}
+
+
