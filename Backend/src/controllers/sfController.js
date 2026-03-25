@@ -1,35 +1,38 @@
 const sfService = require('../services/sfService');
 const logger = require('../utils/logger')(__filename);
 
-exports.getStandardObjects = async (req, res) => {
+exports.getAllObjects = async (req, res) => {
   const email = req.headers['user-email']; 
   
   try {
     const conn = req.sfConn; 
 
     if (!conn) {
-      logger.warn('Failed to fetch standard objects: No active Salesforce connection', {
+      logger.warn('Failed to fetch objects: No active Salesforce connection', {
         userEmail: email,
         endpoint: req.originalUrl
       });
       return res.status(401).json({ success: false, message: "No active Salesforce connection found." });
     }
 
-    logger.info('Fetching standard Salesforce objects', { userEmail: email });
+    logger.info('Fetching all Salesforce objects', { userEmail: email });
 
     const meta = await conn.describeGlobal();
-    const standardObjects = meta.sobjects
-      .filter(obj => !obj.custom && obj.queryable)
-      .map(obj => ({ name: obj.name, label: obj.label }));
+    
+    // Removed the filter here to map all objects directly
+    const allObjects = meta.sobjects.map(obj => ({ 
+      name: obj.name, 
+      label: obj.label 
+    }));
 
-    logger.info('Successfully fetched standard objects', { 
+    logger.info('Successfully fetched all objects', { 
       userEmail: email, 
-      objectCount: standardObjects.length 
+      objectCount: allObjects.length 
     });
 
-    res.json({ success: true, data: standardObjects });
+    res.json({ success: true, data: allObjects });
   } catch (error) {
-    logger.error('Error fetching standard Salesforce objects', {
+    logger.error('Error fetching Salesforce objects', {
       error: error.message,
       stack: error.stack,
       userEmail: email,
@@ -63,5 +66,49 @@ exports.getObjectFields = async (req, res) => {
       endpoint: req.originalUrl
     });
     res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+exports.getUserDetails = async (req, res) => {
+  const email = req.headers['user-email']; 
+  console.log("🚀 ~  email:",  email)
+  
+  try {
+    const conn = req.sfConn; 
+    if (!conn) {
+      logger.warn('Failed to fetch user details: No active Salesforce connection', {
+        userEmail: email,
+        endpoint: req.originalUrl
+      });
+      return res.status(401).json({ 
+        success: false, 
+        message: "No active Salesforce connection found." 
+      });
+    }
+
+    logger.info('Fetching Salesforce user profile', { userEmail: email });
+    const userDetails = await sfService.getCurrentUserInfo(conn);
+    logger.info('Successfully fetched user details', { 
+      userEmail: email, 
+      sfUsername: userDetails.username 
+    });
+    res.json({ 
+      success: true, 
+      data: userDetails 
+    });
+
+  } catch (error) {
+    logger.error('Error fetching Salesforce user details', {
+      error: error.message,
+      stack: error.stack,
+      userEmail: email,
+      endpoint: req.originalUrl
+    });
+    
+    res.status(500).json({ 
+      success: false, 
+      error: "Internal Server Error",
+      details: error.message 
+    });
   }
 };

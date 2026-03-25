@@ -23,14 +23,15 @@ export const NavigationItems: NavigationItem[] = [
     icon: 'icon-navigation',
     children: [
       {
-        id: 'dashboard',
-        title: 'Dashboard',
+        id: 'migration',
+        title: 'Data-Migration',
         type: 'item',
         classes: 'nav-item',
-        url: '/default',
+        url: '/migration',
         icon: 'ti ti-dashboard',
-        breadcrumbs: false
+        breadcrumbs: true
       }
     ]
   }
+
 ];

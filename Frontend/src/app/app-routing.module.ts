@@ -28,7 +28,7 @@ export const routes: Routes = [
       {
         path: 'dashboard',
         loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
-      },
+      }
       // ... rest of your admin routes
     ]
   }

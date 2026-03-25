@@ -17,12 +17,13 @@ const loginToSalesforce = async (email, password, environment) => {
       instanceUrl: conn.instanceUrl 
     });
 
+    // Structure this to match your Angular AuthResponse interface
     return {
       user: {
         id: userInfo.id,
         email: email,
         environment: environment,
-        sfUrl: conn.instanceUrl, 
+        instanceUrl: conn.instanceUrl,
         accessToken: conn.accessToken
       }
     };
@@ -33,6 +34,7 @@ const loginToSalesforce = async (email, password, environment) => {
       sfError: error.message 
     });
 
+    // Create a specific error to catch in the controller
     const authError = new Error(error.message || 'Invalid Salesforce credentials');
     authError.name = 'SalesforceAuthError';
     throw authError;

@@ -23,3 +23,65 @@ body.berry-dark .tab-content {
     background: #1565c0;
   }
 }
+
+/* Add a little breathing room between cards */
+.mb-4 {
+  margin-bottom: 1.5rem !important;
+}
+
+/* Style the file input container */
+.file-upload-wrapper {
+  position: relative;
+  
+  input[type="file"] {
+    padding: 0.5rem;
+    cursor: pointer;
+    border: 2px dashed #ced4da; /* Gives it a slight drag-and-drop feel */
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    transition: all 0.2s ease-in-out;
+
+    &:hover {
+      border-color: #04a9f5; /* Primary color hover effect */
+      background-color: #fff;
+    }
+  }
+}
+
+/* Make sure the primary button looks active when enabled */
+.btn-primary:not(:disabled) {
+  box-shadow: 0 4px 6px rgba(4, 169, 245, 0.2);
+}
+
+
+/* Keep existing styles, add these: */
+
+.table-responsive {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e2e5e8;
+}
+
+.table {
+  margin-bottom: 0; /* removes extra space at bottom of table */
+  
+  th {
+    background-color: #f4f7fa;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    letter-spacing: 0.5px;
+  }
+  
+  td {
+    vertical-align: middle;
+  }
+}
+
+/* Make the select dropdown look cleaner in the table */
+td .form-select {
+  border-color: #ced4da;
+  &:focus {
+    border-color: #04a9f5;
+    box-shadow: 0 0 0 0.2rem rgba(4, 169, 245, 0.25);
+  }
+}

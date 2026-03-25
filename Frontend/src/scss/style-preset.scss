@@ -16,11 +16,6 @@ File: style.css
 
 @import 'node_modules/bootstrap/scss/mixins';
 
-/* src/styles.scss */
-@import 'ngx-toastr/toastr';
-
-/* Your other global styles below... */
-
 @each $name, $value in $preset-colors {
   [part='#{$name}'] {
     $pc-body: #eef2f6;

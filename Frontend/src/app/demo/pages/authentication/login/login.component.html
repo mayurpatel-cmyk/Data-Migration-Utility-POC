@@ -15,7 +15,6 @@
                 </div>
               </div>
             </div>
-            
             <div class="form-floating mb-3">
               <select class="form-select" id="salesforceEnvironment" aria-label="Salesforce Environment"
                 [field]="loginForm.environment">
@@ -26,7 +25,6 @@
             </div>
 
             <h5 class="my-4 d-flex justify-content-center">Sign in with Username</h5>
-            
             <div class="form-floating mb-3">
               <input
                 type="email"
@@ -45,7 +43,6 @@
                 </div>
               }
             </div>
-            
             <div class="form-floating mb-3">
               <input
                 type="password"
@@ -64,6 +61,12 @@
                 </div>
               }
             </div>
+            
+            @if (error()) {
+              <div class="alert alert-danger" role="alert">
+                {{ error() }}
+              </div>
+            }
             
             <div class="d-grid mt-4">
               <button type="submit" class="btn btn-secondary" [disabled]="loading()">

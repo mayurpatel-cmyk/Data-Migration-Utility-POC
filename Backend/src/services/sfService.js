@@ -1,41 +1,81 @@
 const logger = require('../utils/logger')(__filename); 
 
 class SalesforceService {
-  /**
-   * Fetches only Standard Objects (Account, Contact, etc.)
-   */
-  async getStandardObjects(conn) {
+
+  async getAllObjects(conn) {
     try {
-      logger.info('Executing describeGlobal to fetch standard objects');
+      logger.info('Executing describeGlobal to fetch all objects');
       
       const meta = await conn.describeGlobal();
       
-      const standardObjects = meta.sobjects
-        .filter(obj => !obj.custom && obj.queryable)
-        .map(obj => ({
+      const allObjects = meta.sobjects.map(obj => ({
           name: obj.name,
           label: obj.label,
-          keyPrefix: obj.keyPrefix
+          keyPrefix: obj.keyPrefix,
+          // NEW: Identify if the object is a Custom Metadata Type, Custom Object, or Standard
+          isCustomMetadata: obj.name.endsWith('__mdt'),
+          isCustomObject: obj.name.endsWith('__c')
         }));
 
-      logger.info('Successfully fetched standard objects', { 
-        objectCount: standardObjects.length 
+      logger.info('Successfully fetched all objects', { 
+        objectCount: allObjects.length 
       });
       
-      return standardObjects;
+      return allObjects;
       
     } catch (error) {
-      logger.error('Salesforce API Error: Failed to fetch standard objects', { 
+      logger.error('Salesforce API Error: Failed to fetch all objects', { 
         error: error.message, 
         stack: error.stack 
       });
       throw error; 
     }
-  }
+}
 
-  /**
-   * Fetches all fields for a specific object
-   */
+// async getAllCustomMetadataTypes(conn) {
+//     try {
+//       logger.info('Fetching list of Custom Metadata Types');
+//       const allObjects = await this.getAllObjects(conn);
+      
+//       const mdtObjects = allObjects.filter(obj => obj.isCustomMetadata);
+      
+//       logger.info('Successfully filtered Custom Metadata Types', {
+//         mdtCount: mdtObjects.length
+//       });
+      
+//       return mdtObjects;
+//     } catch (error) {
+//       logger.error('Service Error: Failed to fetch Custom Metadata Types', { 
+//         error: error.message 
+//       });
+//       throw error;
+//     }
+//   }
+
+//   // NEW METHOD: Fetch records for a specific Custom Metadata Type
+//   async getCustomMetadataRecords(conn, mdtObjectName) {
+//     try {
+//       // Safety check to ensure we are querying an MDT
+//       if (!mdtObjectName.endsWith('__mdt')) {
+//         throw new Error(`Invalid Object Name: ${mdtObjectName}. Must end with __mdt`);
+//       }
+//       logger.info(`Fetching records for Custom Metadata Type: ${mdtObjectName}`);
+//       const records = await conn.sobject(mdtObjectName).find();
+
+//       logger.info(`Successfully fetched records for ${mdtObjectName}`, {
+//         recordCount: records.length
+//       });
+
+//       return records;
+//     } catch (error) {
+//       logger.error(`Service Error: Failed to fetch records for ${mdtObjectName}`, {
+//         error: error.message,
+//         stack: error.stack
+//       });
+//       throw error;
+//     }
+//   }
+
   async getFieldsForObject(conn, objectName) {
     try {
       logger.info(`Executing describe for object: ${objectName}`);
@@ -63,6 +103,22 @@ class SalesforceService {
         objectName: objectName
       });
       throw error; 
+    }
+  }
+
+async getCurrentUserInfo(conn) {
+    try {
+      const identity = await conn.identity();
+      const userId = identity.user_id;
+
+      const userData = await conn.query(
+        `SELECT Id, Name, Email, Username, CompanyName FROM User WHERE Id = '${userId}'`
+      );
+
+      return userData.records[0];
+    } catch (error) {
+      logger.error('Service Error: User Info', { error: error.message });
+      throw error;
     }
   }
 }

@@ -1,0 +1,35 @@
+.crm-grid {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  margin: 20px 0;
+
+  .crm-card {
+    border: 2px solid #ddd;
+    border-radius: 12px;
+    padding: 20px;
+    width: 120px;
+    text-align: center;
+    cursor: pointer;
+    transition: 0.3s;
+
+    &:hover:not(.disabled) { border-color: #0070d2; background: #f0f8ff; }
+    &.disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .icon { font-size: 32px; font-weight: bold; color: #0070d2; margin-bottom: 10px; }
+  }
+}
+
+.table-scroll { max-height: 400px; overflow-y: auto; margin: 20px 0; border: 1px solid #eee; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  th, td { padding: 12px; border-bottom: 1px solid #eee; text-align: left; }
+  th { background: #fafafa; position: sticky; top: 0; }
+}
+
+.actions { display: flex; justify-content: space-between; margin-top: 20px; }
+.btn-primary { background: #0070d2; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+.btn-secondary { background: #eee; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+.btn-success { background: #2e844a; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }

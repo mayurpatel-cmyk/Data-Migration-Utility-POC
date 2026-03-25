@@ -8,11 +8,11 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const user = authService.currentUser();
 
   // If we have a user with a token, clone the request and add headers
-  if (user && user.accessToken && user.sfUrl) {
+  if (user && user.accessToken && user.instanceUrl) {
     const clonedRequest = req.clone({
       setHeaders: {
-        Authorization: `Bearer ${user.accessToken}`,
-        'x-sf-url': user.sfUrl 
+        Authorization: `${user.accessToken}`,
+        'x-sf-url': user.instanceUrl 
       }
     });
     return next(clonedRequest);
