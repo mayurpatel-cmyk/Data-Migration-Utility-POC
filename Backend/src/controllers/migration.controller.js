@@ -28,7 +28,7 @@ exports.migrateData = async (req, res) => {
       recordCount: records.length
     });
 
-    const results = await migrationService.insertRecords(conn, targetObject, records);
+    const { results, sentRecords } = await migrationService.insertRecords(conn, targetObject, records);
 
    // const logFilePath = await logService.saveMigrationLog(targetObject, records, results);
     
@@ -52,6 +52,46 @@ exports.migrateData = async (req, res) => {
       success: successfulCount,
       failed: failedCount
     });
+    console.log('Full migration results:', results);
+    
+    const successfulRecords = results
+      .map((result, index) => {
+        if(result.success){
+          return {
+          SalesforceId: result.id, // The new Salesforce ID
+          ...sentRecords[index]};
+        }
+        return null;
+      })
+      .filter(record => record !== null);
+    
+ 
+    const failures = results
+      .map((result, index) => {
+        if (!result.success) {
+          let errorMessage = 'Unknown Error';
+          if (Array.isArray(result.errors) && result.errors.length > 0) {
+        // If it's an array of strings, we just join them. 
+        // If they are objects, we grab the message.
+        errorMessage = result.errors
+          .map(e => (typeof e === 'string' ? e : (e.message || JSON.stringify(e))))
+          .join(', ');
+      } else if (result.error) {
+        errorMessage = result.error;
+      }
+          // return {
+          //   // We attach the original data so frontend can show "Account Name" or "Email"
+          //   record: sentRecords[index], 
+          //   error: result.errors ? result.errors.map(e => e.message).join(', ') : (result.error || 'Unknown Salesforce Error')
+          // };
+        return {
+        record: sentRecords[index], // Original data for the first column
+        error: errorMessage        // Cleaned up string for the second column
+        };
+        }
+        return null;
+      })
+      .filter(item => item !== null);
 
     // 5. Send Results Back to Angular
     res.json({
@@ -59,14 +99,14 @@ exports.migrateData = async (req, res) => {
       message: `Migration finished`,
       // message: `Migration finished. Logs saved to ${logFilePath}`,
       stats: {
-        total: records.length,
+        total: sentRecords.length,
         success: successfulCount,
         failed: failedCount
       },
-     // logFile: path.basename(logFilePath) ,
+      failures: failures,
+      successfulRecords: successfulRecords
       // Only send the first 100 errors to avoid bloating the response
-      errors: errorDetails.length > 0 ? errorDetails.slice(0, 100) : null
-      
+      // errors: errorDetails.length > 0 ? errorDetails.slice(0, 100) : null
     });
 
   } catch (error) {

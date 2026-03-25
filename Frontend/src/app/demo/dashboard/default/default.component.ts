@@ -45,16 +45,12 @@ export class DefaultComponent implements OnInit {
   sfFields: any[] = [];
   mappings: { csvField: string, sfField: string }[] = [];
   confirmedMappings: { csvField: string, sfField: string }[] = [];
-  
-  // --- NEW QUEUE STATE ---
-  migrationQueue: QueuedMigration[] = [];
-  
   isLoadingFields = false;
   isMigrating = false;
-  migrationSummary: any = { success: 0, failed: 0 };
-  failedRecords: any[] = [];
-  successfulRecords: any[] = [];
-
+  migrationSummary: any = null;
+  failedRecords: any[] = []; // To store { record: any, error: string }
+  successfulRecords: any[] = []; // To store successfully migrated records for review
+  // --- PREVIEW STATE ---
   previewData: any[] = [];
   showPreview = false;
 
@@ -73,18 +69,18 @@ export class DefaultComponent implements OnInit {
     });
   }
 
-onCRMSelect(crm: string) {
-  if (!crm) return; // Ignore empty selection
-  
-  this.selectedCRM = crm;
-  
-  // Existing smooth transition logic
-  setTimeout(() => {
+  onCRMSelect(crm: string) {
+    this.selectedCRM = crm;
+    setTimeout(() => {
     this.currentStep = 2;
     this.autoNavigate(); // This pulls Step 2 into view automatically
     this.cdr.detectChanges();
   }, 300);
-}
+    // if (this.currentStep === 1) {
+    //   this.currentStep = 2;
+    //   this.autoNavigate();
+    // }
+  }
 
   onFileSelected(event: any) {
     const file = event.target.files[0];
@@ -151,8 +147,58 @@ onCRMSelect(crm: string) {
     }
   }
 
-  // --- MULTI-OBJECT ADD TO QUEUE ---
-  addToQueue() {
+  // generatePreview() {
+  //   const activeMappings = this.mappings.filter(m => m.sfField !== '');
+
+  //   if (activeMappings.length === 0) {
+  //     this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
+  //     return;
+  //   }
+
+  //   const worksheet = this.workbook!.Sheets[this.selectedSheetName];
+  //   const rawData: any[] = utils.sheet_to_json(worksheet);
+
+  //   // Transform ONLY the first 5 rows for the preview
+  //   const limit = Math.min(rawData.length, 5);
+  //   const previewRows = [];
+
+  //   for (let i = 0; i < limit; i++) {
+  //     const rawRow = rawData[i];
+  //     const sfRecord: any = {};
+
+  //     activeMappings.forEach(mapping => {
+  //       if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
+  //         // Use the mapped Salesforce field name as the key
+  //         sfRecord[mapping.sfField] = rawRow[mapping.csvField];
+  //       }
+  //     });
+
+  //     previewRows.push(sfRecord);
+  //   }
+
+  //   this.previewData = previewRows;
+  //   this.showPreview = true;
+  //   this.toastr.info('Preview generated! Check below the mapping table.', 'Preview Ready');
+  // }
+
+  goToReview() {
+    // Filter only the fields that were actually mapped
+    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
+
+    if (this.confirmedMappings.length === 0) {
+      this.toastr.warning('Please map at least one field before proceeding.', 'Mapping Required');
+      return;
+    }
+
+    this.currentStep = 4;
+    this.autoNavigate();
+    this.cdr.detectChanges();
+
+  }
+
+ startMigration() {
+    this.showPreview = false; // Hide preview table while migrating
+
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
@@ -216,23 +262,67 @@ onCRMSelect(crm: string) {
         const rawData: any[] = utils.sheet_to_json(worksheet);
         const sfRecords = rawData.map(rawRow => {
           const sfRecord: any = {};
-          job.mappings.forEach(mapping => {
-            if (rawRow[mapping.csvField] != null) {
+
+          // activeMappings.forEach(mapping => {
+          //   if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
+          //     sfRecord[mapping.sfField] = rawRow[mapping.csvField];
+          //   }
+          // });
+          this.confirmedMappings.forEach(mapping => {
+            if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
               sfRecord[mapping.sfField] = rawRow[mapping.csvField];
             }
           });
           return sfRecord;
         });
 
-        const payload = { targetObject: job.objectName, records: sfRecords };
-        
-        // Use firstValueFrom to await the observable in the loop
-        const response: any = await firstValueFrom(this.migrationService.migrateData(payload));
-        
-        this.migrationSummary.success += (response.stats?.success || 0);
-        this.migrationSummary.failed += (response.stats?.failed || 0);
-        if (response.failures) this.failedRecords.push(...response.failures);
-        if (response.successfulRecords) this.successfulRecords.push(...response.successfulRecords);
+        const payload = {
+          targetObject: this.selectedObject,
+          records: sfRecords
+        };
+
+        // 3. Send the data to the backend
+       // 3. Send the data to the backend
+        this.migrationService.migrateData(payload).subscribe({
+          next: (response) => {
+            // 1. Turn off the loading spinner
+            console.log('Migration response from server:', response);
+            this.isMigrating = false;
+
+            // 2. Calculate stats
+            const successCount = response.stats?.success || 0;
+            const failedCount = response.stats?.failed || 0;
+            this.migrationSummary = response.stats;
+            this.failedRecords = response.failures || [];
+            this.successfulRecords = response.successfulRecords || [];
+            const msg = `Successfully inserted ${successCount} records. Failed: ${failedCount}`;
+
+            // 3. Check the stats to determine which toast to show
+            if (successCount > 0 && failedCount === 0) {
+              // 100% Success
+              this.toastr.success(msg, 'Migration Complete!');
+            } else if (successCount > 0 && failedCount > 0) {
+              // Partial Success (Some worked, some failed)
+              this.toastr.warning(msg, 'Partial Migration');
+            } else {
+              // 100% Failure (Salesforce rejected everything)
+              this.toastr.error(`${msg}. Check required fields!`, 'Migration Failed');
+            }
+
+            // 4. Safely tell Angular to update the screen (stops the spinner)
+            this.currentStep = 5;
+            this.autoNavigate();
+            this.cdr.detectChanges();
+          },
+          error: (err) => {
+            this.isMigrating = false;
+            const errMsg = err.error?.message || 'Check console for details';
+            this.toastr.error(errMsg, 'Server Error');
+
+            // Safely tell Angular to update the screen
+            this.cdr.detectChanges();
+          }
+        });
 
       } catch (error) {
         this.toastr.error(`Failed to migrate ${job.objectName}`, 'Queue Error');
@@ -279,4 +369,48 @@ onCRMSelect(crm: string) {
       }
     }, 100);
   }
+ downloadSuccessLog() {
+  const worksheet = utils.json_to_sheet(this.successfulRecords);
+  const csvOutput = utils.sheet_to_csv(worksheet);
+  this.saveAsCsv(csvOutput, 'success_log');
 }
+
+downloadErrorLog() {
+  // We transform the failedRecords array to make the CSV readable
+  const report = this.failedRecords.map(f => ({
+    Error: f.error,
+    ...f.record
+  }));
+
+  const worksheet = utils.json_to_sheet(report);
+  const csvOutput = utils.sheet_to_csv(worksheet);
+  this.saveAsCsv(csvOutput, 'error_log');
+}
+
+// Helper to trigger the browser download
+private saveAsCsv(buffer: string, fileName: string) {
+  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = window.URL.createObjectURL(data);
+  link.download = `${fileName}_${new Date().getTime()}.csv`;
+  link.click();
+}
+
+private autoNavigate() {
+  // We wait 100ms for Angular's @if to actually put the new HTML on the screen
+  setTimeout(() => {
+    // We look for the "active" row (the one that just appeared)
+    const element = document.querySelector('.row.mb-4:last-of-type');
+    if (element) {
+      element.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+        inline: 'nearest'
+      });
+    }
+  }, 100);
+}
+
+}
+
+
