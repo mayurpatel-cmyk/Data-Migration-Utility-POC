@@ -1,6 +1,5 @@
 const migrationService = require('../services/migration.service');
 const logger = require('../utils/logger')(__filename);
-//const logService = require('../services/logService');
 
 exports.migrateData = async (req, res) => {
   const email = req.headers['user-email'];
@@ -29,9 +28,6 @@ exports.migrateData = async (req, res) => {
     });
 
     const { results, sentRecords } = await migrationService.insertRecords(conn, targetObject, records);
-
-   // const logFilePath = await logService.saveMigrationLog(targetObject, records, results);
-    
 
     //  Calculate Success vs Failures
     const successfulCount = results.filter(r => r.success === true).length;
@@ -96,8 +92,7 @@ exports.migrateData = async (req, res) => {
     // 5. Send Results Back to Angular
     res.json({
       success: true,
-      message: `Migration finished`,
-      // message: `Migration finished. Logs saved to ${logFilePath}`,
+      message: `Migration finished!`,
       stats: {
         total: sentRecords.length,
         success: successfulCount,

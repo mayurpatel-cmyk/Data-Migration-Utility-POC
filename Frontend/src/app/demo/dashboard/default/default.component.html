@@ -70,34 +70,15 @@
     <app-card cardTitle="Step 1: Select Source CRM">
       <div class="row">
         <div class="col-md-6">
-          <div class="text-center mb-4">
-            <div class="bg-light-primary d-inline-block p-3 rounded-circle mb-3">
-              <i class="feather icon-database text-primary display-6"></i>
-            </div>
-            <h4>Where is your data coming from?</h4>
-            <p class="text-muted">Select your current CRM provider to start the migration process.</p>
-          </div>
-
           <div class="form-group">
-            <label for="crmDropdown" class="form-label fw-bold">Source CRM System</label>
-            <div class="input-group">
-              <span class="input-group-text bg-white"><i class="feather icon-share-2 text-primary"></i></span>
-              <select 
-                id="crmDropdown" 
-                class="form-select form-control-lg shadow-sm" 
-                [(ngModel)]="selectedCRM" 
-                (ngModelChange)="onCRMSelect($event)">
-                <option value="" disabled selected>-- Select a CRM Platform --</option>
-                <option value="Zoho">Zoho CRM</option>
-                <option value="HubSpot">HubSpot</option>
-                <option value="MSDynamics">Microsoft Dynamics 365</option>
-                <option value="Salesforce">Salesforce (Org to Org)</option>
-                <option value="Other">Other (Generic CSV/XLSX)</option>
-              </select>
-            </div>
-            <small class="text-muted mt-2 d-block">
-              <i class="feather icon-info me-1"></i> We will use this to help identify standard field names.
-            </small>
+            <label for="crmSelect" class="form-label fw-bold">Which CRM are you migrating from?</label>
+            <select id="crmSelect" class="form-select form-control" [(ngModel)]="selectedCRM"
+              (ngModelChange)="onCRMSelect($event)">
+              <option value="" disabled selected>-- Choose a CRM --</option>
+              <option value="Zoho">Zoho CRM</option>
+              <option value="MSDynamics">Microsoft Dynamics 365</option>
+              <option value="HubSpot">HubSpot</option>
+            </select>
           </div>
         </div>
       </div>
@@ -108,96 +89,107 @@
 @if (currentStep === 2) {
 <div class="row mb-4">
   <div class="col-sm-12">
-    <app-card cardTitle="Step 2: Upload Data & Select Target Object">
+    <app-card cardTitle="Step 2: Upload Data & Select Target">
       <div class="row">
-        <div class="col-md-6">
-          <label class="form-label fw-bold">1. Upload File</label>
-          <input type="file" class="form-control" (change)="onFileSelected($event)">
-          @if (availableSheets.length > 1) {
-          <div class="mt-3">
-            <label class="form-label small fw-bold text-primary">Select Sheet:</label>
-            <select class="form-select" [(ngModel)]="selectedSheetName" (ngModelChange)="onSheetSelect($event)">
-              @for (sheet of availableSheets; track sheet) { <option [value]="sheet">{{ sheet }}</option> }
-            </select>
-          </div>
-          }
-        </div>
-        <div class="col-md-6">
-          <label class="form-label fw-bold">2. Select Target Salesforce Object</label>
-          <select class="form-select" [(ngModel)]="selectedObject">
-            <option value="" disabled selected>-- Choose an Object --</option>
-            @for (obj of sfObjects; track obj.name) { <option [value]="obj.name">{{ obj.label }}</option> }
-          </select>
-        </div>
-      </div>
 
-      <div class="row mt-4">
-        <div class="col-sm-12 d-flex justify-content-between">
-          <div>
-            @if (migrationQueue.length > 0) {
-              <span class="badge bg-info p-2"><i class="feather icon-list me-1"></i> {{ migrationQueue.length }} Objects Queued</span>
+        <div class="col-md-6">
+          <div class="form-group">
+            <label for="fileUpload" class="form-label fw-bold">1. Upload your Export (.csv or .xlsx)</label>
+            <div class="file-upload-wrapper">
+              <input type="file" id="fileUpload" class="form-control"
+                accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                (change)="onFileSelected($event)">
+            </div>
+
+            @if (selectedFile) {
+            <small class="text-success mt-1 d-block">
+              <i class="feather icon-check-circle"></i> {{ selectedFile.name }} loaded successfully.
+            </small>
+            }
+
+            @if (availableSheets.length > 1) {
+            <div class="mt-3 p-3 bg-light rounded border">
+              <label class="form-label fw-bold text-primary">
+                <i class="feather icon-layers me-1"></i> Multiple Sheets Detected! Which sheet do you want to map?
+              </label>
+              <select class="form-select border-primary" [(ngModel)]="selectedSheetName"
+                (ngModelChange)="onSheetSelect($event)">
+                <option value="" disabled selected>-- Select a Sheet --</option>
+                @for (sheet of availableSheets; track sheet) {
+                <option [value]="sheet">{{ sheet }}</option>
+                }
+              </select>
+            </div>
             }
           </div>
-          <button class="btn btn-primary" [disabled]="!selectedFile || !selectedObject" (click)="goToMapping()">
-            Map This Object <i class="feather icon-arrow-right ms-2"></i>
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-group">
+            <label for="objectSelect" class="form-label fw-bold">2. Select Target Salesforce Object</label>
+            <select id="objectSelect" class="form-select form-control" [(ngModel)]="selectedObject">
+              <option value="" disabled selected>-- Choose an Object --</option>
+              @if (isLoadingObjects) {
+              <option value="" disabled>Loading objects...</option>
+              }
+              @for (obj of sfObjects; track obj.name) {
+              <option [value]="obj.name">{{ obj.label }}</option>
+              }
+            </select>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="row mt-3">
+        <div class="col-sm-12 text-end">
+          <button class="btn btn-primary" [disabled]="!selectedFile || !selectedObject || !selectedSheetName"
+            (click)="goToMapping()">
+            Next: Map Fields <i class="feather icon-arrow-right ms-2"></i>
           </button>
         </div>
       </div>
     </app-card>
-
-    @if (migrationQueue.length > 0) {
-    <div class="mt-4">
-      <app-card cardTitle="Migration Queue">
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Object</th>
-                <th>Source Sheet</th>
-                <th>Mapped Fields</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (item of migrationQueue; track $index) {
-              <tr>
-                <td><span class="fw-bold text-success">{{ item.objectName }}</span></td>
-                <td>{{ item.sheetName }}</td>
-                <td>{{ item.mappings.length }} fields</td>
-                <td><button class="btn btn-sm btn-link text-danger" (click)="removeFromQueue($index)">Remove</button></td>
-              </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-        <div class="text-end mt-3">
-          <button class="btn btn-success" (click)="goToReview()">Review & Start Migration</button>
-        </div>
-      </app-card>
-    </div>
-    }
   </div>
 </div>
 } @if (currentStep === 3) {
 <div class="row mb-4">
   <div class="col-sm-12">
-    <app-card cardTitle="Step 3: Map Fields for {{ selectedObject }}">
+    <app-card cardTitle="Step 3: Map Your Fields">
+
+      <div class="alert alert-info mb-3">
+        <i class="feather icon-info me-2"></i>
+        Match your uploaded CSV/xlsx columns to the correct Salesforce fields. Leave the dropdown blank to ignore a
+        column.
+      </div>
+
       <div class="table-responsive">
-        <table class="table table-hover align-middle">
+        <table class="table table-hover table-bordered align-middle">
           <thead class="table-light">
             <tr>
-              <th>CSV Column</th>
-              <th>Salesforce Field</th>
+              <th width="50%">CSV Column ({{ selectedCRM }})</th>
+              <th width="50%">Salesforce Field ({{ selectedObject }})</th>
             </tr>
           </thead>
           <tbody>
             @for (mapping of mappings; track mapping.csvField) {
             <tr>
-              <td class="fw-bold text-primary">{{ mapping.csvField }}</td>
+              <td class="fw-bold text-primary">
+                <i class="feather icon-file-text me-2"></i> {{ mapping.csvField }}
+              </td>
               <td>
-                <select class="form-select" [(ngModel)]="mapping.sfField">
-                  <option value="">-- Ignore --</option>
-                  @for (field of sfFields; track $index) { <option [value]="field.name">{{ field.label }} ({{ field.type }})</option> }
+                <select class="form-select" [(ngModel)]="mapping.sfField" [disabled]="isLoadingFields">
+                  <option value="">-- Ignore this column --</option>
+
+                  @if (isLoadingFields) {
+                  <option value="" disabled>Loading fields...</option>
+                  }
+
+                  @for (field of sfFields; track $index) {
+                  <option [value]="field.name">
+                    {{ field.label }} ({{ field.type }})
+                  </option>
+                  }
                 </select>
               </td>
             </tr>
@@ -391,99 +383,7 @@
 
         </div>
       </div>
-    </app-card>
-  </div>
-</div>
-}
 
-@if (currentStep === 4) {
-<div class="row mb-4">
-  <div class="col-sm-12">
-    <app-card cardTitle="Step 4: Review Your Migration Queue">
-      @for (job of migrationQueue; track $index) {
-      <div class="mb-4 p-3 border rounded bg-light">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="text-primary m-0"><i class="feather icon-target me-2"></i> {{ job.objectName }} ({{ job.mappings.length }} Fields)</h5>
-          <span class="badge bg-light text-dark border p-2">Sheet: {{ job.sheetName }}</span>
-        </div>
-        
-        <div class="table-responsive border-top">
-          <table class="table table-sm table-hover mb-0 mt-3 align-middle">
-            <thead class="table-info small">
-              <tr>
-                @for (m of job.mappings; track m.sfField) { <th>{{ m.sfField }}</th> }
-              </tr>
-            </thead>
-            <tbody>
-              @for (row of job.previewData; track $index) {
-              <tr>
-                @for (m of job.mappings; track m.sfField) { <td class="small">{{ row[m.sfField] }}</td> }
-              </tr>
-              }
-            </tbody>
-          </table>
-          <small class="text-muted italic">* Showing first 3 records for preview.</small>
-        </div>
-      </div>
-      }
-
-      <div class="row mt-5">
-        <div class="col-sm-12 text-end">
-          <button class="btn btn-secondary me-2" [disabled]="isMigrating" (click)="currentStep = 2">Edit Queue</button>
-          <button class="btn btn-success" [disabled]="isMigrating" (click)="startMigration()">
-            @if (isMigrating) { <span class="spinner-border spinner-border-sm me-2"></span> Processing Queue... }
-            @else { <i class="feather icon-check-circle me-2"></i> Confirm & Start Migration }
-          </button>
-        </div>
-      </div>
-    </app-card>
-  </div>
-</div>
-}
-
-@if (currentStep === 5) {
-<div class="row mb-4">
-  <div class="col-sm-12">
-    <app-card cardTitle="Step 5: Final Result">
-      <div class="text-center mb-5 pb-3 border-bottom">
-        @if (migrationSummary?.success > 0 && migrationSummary?.failed === 0) {
-          <div class="animation-container"><i class="feather icon-check-circle text-success display-4"></i><h2 class="text-success mt-3 fw-bold">Queue Migration Successful!</h2></div>
-        } @else if (migrationSummary?.success > 0 && migrationSummary?.failed > 0) {
-          <div class="animation-container"><i class="feather icon-alert-circle text-warning display-4"></i><h2 class="text-warning mt-3 fw-bold">Partial Queue Complete</h2></div>
-        } @else {
-          <div class="animation-container"><i class="feather icon-x-circle text-danger display-4"></i><h2 class="text-danger mt-3 fw-bold">Migration Failed</h2></div>
-        }
-      </div>
-
-      <div class="row text-center mb-4">
-        <div class="col-md-4"><div class="p-3 border rounded bg-light shadow-sm"><h6 class="text-muted small fw-bold uppercase">Processed</h6><h3 class="fw-bold mb-0">{{ migrationSummary.success + migrationSummary.failed }}</h3></div></div>
-        <div class="col-md-4"><div class="p-3 border rounded bg-success-light shadow-sm"><h6 class="text-success small fw-bold uppercase">Success</h6><h3 class="text-success fw-bold mb-0">{{ migrationSummary.success }}</h3></div></div>
-        <div class="col-md-4"><div class="p-3 border rounded bg-danger-light shadow-sm"><h6 class="text-danger small fw-bold uppercase">Failed</h6><h3 class="text-danger fw-bold mb-0">{{ migrationSummary.failed }}</h3></div></div>
-      </div>
-
-      @if (failedRecords.length > 0) {
-        <div class="table-responsive mt-4 border rounded shadow-sm" style="max-height: 350px;">
-          <table class="table table-hover align-middle mb-0">
-            <thead class="table-danger sticky-top"><tr><th class="p-3">Record Identifier</th><th class="p-3">Error</th></tr></thead>
-            <tbody>
-              @for (fail of failedRecords; track $index) {
-                <tr>
-                  <td class="p-3 fw-bold">{{ fail.record.Name || fail.record.LastName || 'Record #' + ($index + 1) }}</td>
-                  <td class="p-3 text-danger"><i class="feather icon-info me-2"></i> {{ fail.error }}</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-      }
-
-      <div class="row mt-5 border-top pt-4">
-        <div class="col-sm-12 text-center">
-          <button class="btn btn-outline-success me-3" (click)="downloadSuccessLog()"><i class="feather icon-download-cloud me-2"></i> Success Log</button>
-          <button class="btn btn-outline-danger me-3" (click)="downloadErrorLog()"><i class="feather icon-alert-octagon me-2"></i> Error Log</button>
-          <button class="btn btn-primary" (click)="currentStep = 1; migrationQueue = []"><i class="feather icon-plus-circle me-2"></i> New Migration</button>
-        </div>
-      </div>
     </app-card>
   </div>
 </div>
