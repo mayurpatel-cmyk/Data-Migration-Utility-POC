@@ -21,9 +21,11 @@
     "jsforce": "^3.10.14",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
+    "serverless-http": "^4.0.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "serverless-dotenv-plugin": "^6.0.0"
   }
 }
