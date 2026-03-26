@@ -20,6 +20,14 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
 
+  // --- MULTI-OBJECT QUEUE STATE ---
+  migrationQueue: { 
+    sheetName: string, 
+    targetObject: string, 
+    csvHeaders: string[],
+    mappings: { csvField: string, sfField: string }[] 
+  }[] = [];
+
   currentStep: number = 1;
   selectedCRM: string = '';
 
@@ -39,11 +47,17 @@ export class DefaultComponent implements OnInit {
   isLoadingFields = false;
   isMigrating = false;
   migrationSummary: any = null;
-  failedRecords: any[] = []; // To store { record: any, error: string }
-  successfulRecords: any[] = []; // To store successfully migrated records for review
+  failedRecords: any[] = []; 
+  successfulRecords: any[] = []; 
+
   // --- PREVIEW STATE ---
-  previewData: any[] = [];
   showPreview = false;
+  previewData: any[] = [];
+  previewHeaders: string[] = [];
+  
+  previewingItemIndex: number | null = null;
+  previewItemData: any[] = [];
+  previewItemHeaders: string[] = [];
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -63,14 +77,10 @@ export class DefaultComponent implements OnInit {
   onCRMSelect(crm: string) {
     this.selectedCRM = crm;
     setTimeout(() => {
-    this.currentStep = 2;
-    this.autoNavigate(); // This pulls Step 2 into view automatically
-    this.cdr.detectChanges();
-  }, 300);
-    // if (this.currentStep === 1) {
-    //   this.currentStep = 2;
-    //   this.autoNavigate();
-    // }
+      this.currentStep = 2;
+      this.autoNavigate();
+      this.cdr.detectChanges();
+    }, 300);
   }
 
   onFileSelected(event: any) {
@@ -97,7 +107,6 @@ export class DefaultComponent implements OnInit {
       };
 
       reader.readAsArrayBuffer(file);
-
     } else {
       this.selectedFile = null;
       this.csvHeaders = [];
@@ -109,15 +118,12 @@ export class DefaultComponent implements OnInit {
     this.selectedSheetName = sheetName;
     if (this.workbook) {
       const worksheet = this.workbook.Sheets[sheetName];
-
       const json: any[][] = utils.sheet_to_json(worksheet, { header: 1 });
 
       if (json.length > 0) {
         this.csvHeaders = json[0]
           .map((h: any) => h ? String(h).trim() : '')
           .filter((h: string) => h.length > 0);
-
-        console.log(`Headers extracted from sheet "${sheetName}":`, this.csvHeaders);
       } else {
         this.csvHeaders = [];
         this.toastr.warning(`Sheet "${sheetName}" appears to be empty.`, 'Empty Data');
@@ -126,14 +132,14 @@ export class DefaultComponent implements OnInit {
   }
 
   goToMapping() {
-    if (this.csvHeaders.length === 0) {
-      return;
-    }
+    if (this.csvHeaders.length === 0) return;
 
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
       this.isLoadingFields = true;
+      this.showPreview = false;
+      this.previewingItemIndex = null;
 
       this.mappings = this.csvHeaders.map(header => ({
         csvField: header,
@@ -157,111 +163,283 @@ export class DefaultComponent implements OnInit {
             this.toastr.error('Failed to load object fields.', 'API Error');
           });
         }
-      }); // <-- ALL BRACKETS FIXED HERE
+      }); 
     }
   }
 
-  // generatePreview() {
-  //   const activeMappings = this.mappings.filter(m => m.sfField !== '');
+  // --- IN-STEP 3 CHANGE HANDLERS ---
+  
+  onSheetChangeInMapping(newSheet: string) {
+    this.onSheetSelect(newSheet);
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header,
+      sfField: ''
+    }));
+    this.showPreview = false;
+  }
 
-  //   if (activeMappings.length === 0) {
-  //     this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
-  //     return;
-  //   }
+  onObjectChangeInMapping(newObject: string) {
+    if (!newObject) return;
+    
+    this.isLoadingFields = true;
+    this.showPreview = false;
+    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+      next: (response: any) => {
+        const fieldsArray = response.fields ? response.fields : response;
+        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
+        this.mappings.forEach(m => m.sfField = '');
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.cdr.detectChanges();
+        });
+      },
+      error: (err) => {
+        console.error('Failed to load fields:', err);
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.cdr.detectChanges();
+          this.toastr.error('Failed to load object fields.', 'API Error');
+        });
+      }
+    });
+  }
 
-  //   const worksheet = this.workbook!.Sheets[this.selectedSheetName];
-  //   const rawData: any[] = utils.sheet_to_json(worksheet);
+  // --- MULTI-OBJECT QUEUE METHODS ---
 
-  //   // Transform ONLY the first 5 rows for the preview
-  //   const limit = Math.min(rawData.length, 5);
-  //   const previewRows = [];
+  getConfirmedCount(mappings: { csvField: string, sfField: string }[]): number {
+    return mappings.filter(m => m.sfField && m.sfField !== '').length;
+  }
 
-  //   for (let i = 0; i < limit; i++) {
-  //     const rawRow = rawData[i];
-  //     const sfRecord: any = {};
+  queueAnotherObject() {
+    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field before adding to the queue.', 'No Mappings');
+      return;
+    }
 
-  //     activeMappings.forEach(mapping => {
-  //       if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
-  //         // Use the mapped Salesforce field name as the key
-  //         sfRecord[mapping.sfField] = rawRow[mapping.csvField];
-  //       }
-  //     });
+    this.migrationQueue.push({
+      sheetName: this.selectedSheetName,
+      targetObject: this.selectedObject,
+      csvHeaders: [...this.csvHeaders],
+      mappings: [...this.mappings] 
+    });
 
-  //     previewRows.push(sfRecord);
-  //   }
+    this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
 
-  //   this.previewData = previewRows;
-  //   this.showPreview = true;
-  //   this.toastr.info('Preview generated! Check below the mapping table.', 'Preview Ready');
-  // }
+    this.selectedObject = '';
+    this.sfFields = [];
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header,
+      sfField: ''
+    }));
+    this.confirmedMappings = [];
+    this.showPreview = false;
+    this.previewingItemIndex = null;
+    
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.cdr.detectChanges();
+  }
+
+  removeFromQueue(index: number) {
+    if (this.previewingItemIndex === index) {
+      this.previewingItemIndex = null;
+    } else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) {
+      this.previewingItemIndex--;
+    }
+    const removed = this.migrationQueue.splice(index, 1)[0];
+    this.toastr.info(`Removed ${removed.targetObject} from queue.`, 'Item Removed');
+  }
+
+  editQueuedItem(index: number) {
+    if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
+      this.migrationQueue.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        csvHeaders: [...this.csvHeaders],
+        mappings: [...this.mappings]
+      });
+      this.toastr.info(`Saved current ${this.selectedObject} mapping to queue.`);
+    }
+
+    const itemToEdit = this.migrationQueue.splice(index, 1)[0];
+    this.previewingItemIndex = null;
+    this.showPreview = false;
+
+    this.selectedSheetName = itemToEdit.sheetName;
+    this.selectedObject = itemToEdit.targetObject;
+    this.csvHeaders = [...itemToEdit.csvHeaders];
+    this.mappings = [...itemToEdit.mappings];
+    
+    this.currentStep = 3;
+    this.isLoadingFields = true;
+    this.cdr.detectChanges();
+
+    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+      next: (response: any) => {
+        const fieldsArray = response.fields ? response.fields : response;
+        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
+        this.isLoadingFields = false;
+        
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.isLoadingFields = false;
+        this.toastr.error(`Failed to load fields for ${this.selectedObject}.`, 'API Error');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // --- PREVIEW METHODS ---
+  
+  previewCurrentMapping() {
+    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
+      return;
+    }
+
+    const worksheet = this.workbook!.Sheets[this.selectedSheetName];
+    const rawData: any[] = utils.sheet_to_json(worksheet);
+
+    this.previewHeaders = activeMappings.map(m => m.sfField);
+    const limit = Math.min(rawData.length, 5);
+    const previewRows = [];
+
+    for (let i = 0; i < limit; i++) {
+      const rawRow = rawData[i];
+      const sfRecord: any = {};
+      activeMappings.forEach(mapping => {
+        sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
+      });
+      previewRows.push(sfRecord);
+    }
+
+    this.previewData = previewRows;
+    this.showPreview = true;
+    this.toastr.info('Preview generated for current mapping.', 'Preview Ready');
+  }
+
+  previewQueuedItem(index: number) {
+    if (this.previewingItemIndex === index) {
+      this.previewingItemIndex = null; 
+      return;
+    }
+
+    const item = this.migrationQueue[index];
+    const activeMappings = item.mappings.filter(m => m.sfField !== '');
+    
+    if (activeMappings.length === 0) {
+      this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
+      return;
+    }
+
+    const worksheet = this.workbook!.Sheets[item.sheetName];
+    const rawData: any[] = utils.sheet_to_json(worksheet);
+
+    this.previewItemHeaders = activeMappings.map(m => m.sfField);
+    const limit = Math.min(rawData.length, 5);
+    const previewRows = [];
+
+    for (let i = 0; i < limit; i++) {
+      const rawRow = rawData[i];
+      const sfRecord: any = {};
+      activeMappings.forEach(mapping => {
+        sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
+      });
+      previewRows.push(sfRecord);
+    }
+
+    this.previewItemData = previewRows;
+    this.previewingItemIndex = index;
+  }
+
+  // --- REVIEW & MIGRATE ---
 
   goToReview() {
-    // Filter only the fields that were actually mapped
     this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
 
-    if (this.confirmedMappings.length === 0) {
-      this.toastr.warning('Please map at least one field before proceeding.', 'Mapping Required');
+    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+      this.toastr.warning('Please map at least one field or ensure you have queued objects before proceeding.', 'Mapping Required');
       return;
     }
 
     this.currentStep = 4;
     this.autoNavigate();
     this.cdr.detectChanges();
-
   }
 
- startMigration() {
-    this.showPreview = false; // Hide preview table while migrating
+  // HELPER: Combine the queue + the currently active mapping for the final Review Screen display
+  getAllMigrationPlans() {
+    const plans = [...this.migrationQueue];
+    if (this.confirmedMappings.length > 0) {
+      plans.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        csvHeaders: this.csvHeaders,
+        mappings: this.confirmedMappings
+      });
+    }
+    return plans;
+  }
 
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+  // HELPER: Get only fields that were actually mapped for the Review Screen display
+  getActiveMappings(mappings: any[]) {
+    return mappings.filter(m => m.sfField && m.sfField !== '');
+  }
 
-    if (activeMappings.length === 0) {
+  startMigration() {
+    this.showPreview = false; 
+    this.previewingItemIndex = null;
+
+    if (this.confirmedMappings.length > 0) {
+      this.migrationQueue.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        mappings: [...this.confirmedMappings],
+        csvHeaders: [...this.csvHeaders] 
+      });
+      this.confirmedMappings = [];
+    }
+
+    if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
     }
 
-    // 1. Instantly turn on the spinner
     this.isMigrating = true;
-    this.cdr.detectChanges(); // Tell Angular to draw the spinner right NOW
+    this.cdr.detectChanges(); 
 
-    // 2. Push the heavy Excel crunching to the background (next browser tick)
-    // This stops the NG0100 error and prevents the browser from freezing!
     setTimeout(() => {
       try {
-        const worksheet = this.workbook!.Sheets[this.selectedSheetName];
-        const rawData: any[] = utils.sheet_to_json(worksheet);
+        const jobsPayload: any[] = [];
 
-        const sfRecords = rawData.map(rawRow => {
-          const sfRecord: any = {};
+        for (const job of this.migrationQueue) {
+          const worksheet = this.workbook!.Sheets[job.sheetName];
+          const rawData: any[] = utils.sheet_to_json(worksheet);
 
-          // activeMappings.forEach(mapping => {
-          //   if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
-          //     sfRecord[mapping.sfField] = rawRow[mapping.csvField];
-          //   }
-          // });
-          this.confirmedMappings.forEach(mapping => {
-            if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
-              sfRecord[mapping.sfField] = rawRow[mapping.csvField];
-            }
+          const activeJobMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
+
+          const sfRecords = rawData.map(rawRow => {
+            const sfRecord: any = {};
+            activeJobMappings.forEach(mapping => {
+              if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
+                sfRecord[mapping.sfField] = rawRow[mapping.csvField];
+              }
+            });
+            return sfRecord;
           });
 
-          return sfRecord;
-        });
+          jobsPayload.push({
+            targetObject: job.targetObject,
+            records: sfRecords
+          });
+        }
 
-        const payload = {
-          targetObject: this.selectedObject,
-          records: sfRecords
-        };
-
-        // 3. Send the data to the backend
-       // 3. Send the data to the backend
-        this.migrationService.migrateData(payload).subscribe({
+        this.migrationService.migrateData(jobsPayload).subscribe({
           next: (response) => {
-            // 1. Turn off the loading spinner
-            console.log('Migration response from server:', response);
             this.isMigrating = false;
-
-            // 2. Calculate stats
             const successCount = response.stats?.success || 0;
             const failedCount = response.stats?.failed || 0;
             this.migrationSummary = response.stats;
@@ -269,19 +447,14 @@ export class DefaultComponent implements OnInit {
             this.successfulRecords = response.successfulRecords || [];
             const msg = `Successfully inserted ${successCount} records. Failed: ${failedCount}`;
 
-            // 3. Check the stats to determine which toast to show
             if (successCount > 0 && failedCount === 0) {
-              // 100% Success
               this.toastr.success(msg, 'Migration Complete!');
             } else if (successCount > 0 && failedCount > 0) {
-              // Partial Success (Some worked, some failed)
               this.toastr.warning(msg, 'Partial Migration');
             } else {
-              // 100% Failure (Salesforce rejected everything)
               this.toastr.error(`${msg}. Check required fields!`, 'Migration Failed');
             }
 
-            // 4. Safely tell Angular to update the screen (stops the spinner)
             this.currentStep = 5;
             this.autoNavigate();
             this.cdr.detectChanges();
@@ -290,61 +463,52 @@ export class DefaultComponent implements OnInit {
             this.isMigrating = false;
             const errMsg = err.error?.message || 'Check console for details';
             this.toastr.error(errMsg, 'Server Error');
-
-            // Safely tell Angular to update the screen
             this.cdr.detectChanges();
           }
         });
 
       } catch (error) {
-        // Catch any weird Excel parsing errors safely
         this.isMigrating = false;
         this.toastr.error('Failed to read data from the file.', 'Parsing Error');
         this.cdr.detectChanges();
       }
-    }, 10); // 10ms delay is imperceptible to the user, but a lifetime for Angular!
+    }, 10); 
   }
- downloadSuccessLog() {
-  const worksheet = utils.json_to_sheet(this.successfulRecords);
-  const csvOutput = utils.sheet_to_csv(worksheet);
-  this.saveAsCsv(csvOutput, 'success_log');
+
+  downloadSuccessLog() {
+    const worksheet = utils.json_to_sheet(this.successfulRecords);
+    const csvOutput = utils.sheet_to_csv(worksheet);
+    this.saveAsCsv(csvOutput, 'success_log');
+  }
+
+  downloadErrorLog() {
+    const report = this.failedRecords.map(f => ({
+      Error: f.error,
+      ...f.record
+    }));
+    const worksheet = utils.json_to_sheet(report);
+    const csvOutput = utils.sheet_to_csv(worksheet);
+    this.saveAsCsv(csvOutput, 'error_log');
+  }
+
+  private saveAsCsv(buffer: string, fileName: string) {
+    const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(data);
+    link.download = `${fileName}_${new Date().getTime()}.csv`;
+    link.click();
+  }
+
+  private autoNavigate() {
+    setTimeout(() => {
+      const element = document.querySelector('.row.mb-4:last-of-type');
+      if (element) {
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+    }, 100);
+  }
 }
-
-downloadErrorLog() {
-  // We transform the failedRecords array to make the CSV readable
-  const report = this.failedRecords.map(f => ({
-    Error: f.error,
-    ...f.record
-  }));
-
-  const worksheet = utils.json_to_sheet(report);
-  const csvOutput = utils.sheet_to_csv(worksheet);
-  this.saveAsCsv(csvOutput, 'error_log');
-}
-
-// Helper to trigger the browser download
-private saveAsCsv(buffer: string, fileName: string) {
-  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = window.URL.createObjectURL(data);
-  link.download = `${fileName}_${new Date().getTime()}.csv`;
-  link.click();
-}
-
-private autoNavigate() {
-  // We wait 100ms for Angular's @if to actually put the new HTML on the screen
-  setTimeout(() => {
-    // We look for the "active" row (the one that just appeared)
-    const element = document.querySelector('.row.mb-4:last-of-type');
-    if (element) {
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-        inline: 'nearest'
-      });
-    }
-  }, 100);
-}
-
-}
-
