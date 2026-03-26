@@ -20,8 +20,23 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
 
+<<<<<<< Updated upstream
   currentStep: number = 1;
   selectedCRM: string = '';
+=======
+  // --- MULTI-OBJECT QUEUE STATE ---
+  migrationQueue: {
+    sheetName: string,
+    targetObject: string,
+    csvHeaders: string[],
+    mappings: { csvField: string, sfField: string }[]
+  }[] = [];
+
+  // currentStep: number = 1;
+  // selectedCRM: string = '';
+  currentStep: number = 2;
+  selectedCRM: string = 'Zoho';
+>>>>>>> Stashed changes
 
   selectedFile: File | null = null;
   selectedObject: string = '';
@@ -39,11 +54,25 @@ export class DefaultComponent implements OnInit {
   isLoadingFields = false;
   isMigrating = false;
   migrationSummary: any = null;
+<<<<<<< Updated upstream
   failedRecords: any[] = []; // To store { record: any, error: string }
   successfulRecords: any[] = []; // To store successfully migrated records for review
+=======
+  failedRecords: any[] = [];
+  successfulRecords: any[] = [];
+
+>>>>>>> Stashed changes
   // --- PREVIEW STATE ---
   previewData: any[] = [];
+<<<<<<< Updated upstream
   showPreview = false;
+=======
+  previewHeaders: string[] = [];
+
+  previewingItemIndex: number | null = null;
+  previewItemData: any[] = [];
+  previewItemHeaders: string[] = [];
+>>>>>>> Stashed changes
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -157,6 +186,7 @@ export class DefaultComponent implements OnInit {
             this.toastr.error('Failed to load object fields.', 'API Error');
           });
         }
+<<<<<<< Updated upstream
       }); // <-- ALL BRACKETS FIXED HERE
     }
   }
@@ -168,6 +198,48 @@ export class DefaultComponent implements OnInit {
   //     this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
   //     return;
   //   }
+=======
+      });
+    }
+  }
+
+  // --- IN-STEP 3 CHANGE HANDLERS ---
+
+  onSheetChangeInMapping(newSheet: string) {
+    this.onSheetSelect(newSheet);
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header,
+      sfField: ''
+    }));
+    this.showPreview = false;
+  }
+
+  onObjectChangeInMapping(newObject: string) {
+    if (!newObject) return;
+
+    this.isLoadingFields = true;
+    this.showPreview = false;
+    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+      next: (response: any) => {
+        const fieldsArray = response.fields ? response.fields : response;
+        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
+        this.mappings.forEach(m => m.sfField = '');
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.cdr.detectChanges();
+        });
+      },
+      error: (err) => {
+        console.error('Failed to load fields:', err);
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.cdr.detectChanges();
+          this.toastr.error('Failed to load object fields.', 'API Error');
+        });
+      }
+    });
+  }
+>>>>>>> Stashed changes
 
   //   const worksheet = this.workbook!.Sheets[this.selectedSheetName];
   //   const rawData: any[] = utils.sheet_to_json(worksheet);
@@ -180,20 +252,162 @@ export class DefaultComponent implements OnInit {
   //     const rawRow = rawData[i];
   //     const sfRecord: any = {};
 
+<<<<<<< Updated upstream
   //     activeMappings.forEach(mapping => {
   //       if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
   //         // Use the mapped Salesforce field name as the key
   //         sfRecord[mapping.sfField] = rawRow[mapping.csvField];
   //       }
   //     });
+=======
+    this.migrationQueue.push({
+      sheetName: this.selectedSheetName,
+      targetObject: this.selectedObject,
+      csvHeaders: [...this.csvHeaders],
+      mappings: [...this.mappings]
+    });
+>>>>>>> Stashed changes
 
   //     previewRows.push(sfRecord);
   //   }
 
+<<<<<<< Updated upstream
   //   this.previewData = previewRows;
   //   this.showPreview = true;
   //   this.toastr.info('Preview generated! Check below the mapping table.', 'Preview Ready');
   // }
+=======
+    this.selectedObject = '';
+    this.sfFields = [];
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header,
+      sfField: ''
+    }));
+    this.confirmedMappings = [];
+    this.showPreview = false;
+    this.previewingItemIndex = null;
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.cdr.detectChanges();
+  }
+
+  removeFromQueue(index: number) {
+    if (this.previewingItemIndex === index) {
+      this.previewingItemIndex = null;
+    } else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) {
+      this.previewingItemIndex--;
+    }
+    const removed = this.migrationQueue.splice(index, 1)[0];
+    this.toastr.info(`Removed ${removed.targetObject} from queue.`, 'Item Removed');
+  }
+
+  editQueuedItem(index: number) {
+    if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
+      this.migrationQueue.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        csvHeaders: [...this.csvHeaders],
+        mappings: [...this.mappings]
+      });
+      this.toastr.info(`Saved current ${this.selectedObject} mapping to queue.`);
+    }
+
+    const itemToEdit = this.migrationQueue.splice(index, 1)[0];
+    this.previewingItemIndex = null;
+    this.showPreview = false;
+
+    this.selectedSheetName = itemToEdit.sheetName;
+    this.selectedObject = itemToEdit.targetObject;
+    this.csvHeaders = [...itemToEdit.csvHeaders];
+    this.mappings = [...itemToEdit.mappings];
+
+    this.currentStep = 3;
+    this.isLoadingFields = true;
+    this.cdr.detectChanges();
+
+    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+      next: (response: any) => {
+        const fieldsArray = response.fields ? response.fields : response;
+        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
+        this.isLoadingFields = false;
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.isLoadingFields = false;
+        this.toastr.error(`Failed to load fields for ${this.selectedObject}.`, 'API Error');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // --- PREVIEW METHODS ---
+
+  previewCurrentMapping() {
+    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
+      return;
+    }
+
+    const worksheet = this.workbook!.Sheets[this.selectedSheetName];
+    const rawData: any[] = utils.sheet_to_json(worksheet);
+
+    this.previewHeaders = activeMappings.map(m => m.sfField);
+    const limit = Math.min(rawData.length, 5);
+    const previewRows = [];
+
+    for (let i = 0; i < limit; i++) {
+      const rawRow = rawData[i];
+      const sfRecord: any = {};
+      activeMappings.forEach(mapping => {
+        sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
+      });
+      previewRows.push(sfRecord);
+    }
+
+    this.previewData = previewRows;
+    this.showPreview = true;
+    this.toastr.info('Preview generated for current mapping.', 'Preview Ready');
+  }
+
+  previewQueuedItem(index: number) {
+    if (this.previewingItemIndex === index) {
+      this.previewingItemIndex = null;
+      return;
+    }
+
+    const item = this.migrationQueue[index];
+    const activeMappings = item.mappings.filter(m => m.sfField !== '');
+
+    if (activeMappings.length === 0) {
+      this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
+      return;
+    }
+
+    const worksheet = this.workbook!.Sheets[item.sheetName];
+    const rawData: any[] = utils.sheet_to_json(worksheet);
+
+    this.previewItemHeaders = activeMappings.map(m => m.sfField);
+    const limit = Math.min(rawData.length, 5);
+    const previewRows = [];
+
+    for (let i = 0; i < limit; i++) {
+      const rawRow = rawData[i];
+      const sfRecord: any = {};
+      activeMappings.forEach(mapping => {
+        sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
+      });
+      previewRows.push(sfRecord);
+    }
+
+    this.previewItemData = previewRows;
+    this.previewingItemIndex = index;
+  }
+
+  // --- REVIEW & MIGRATE ---
+>>>>>>> Stashed changes
 
   goToReview() {
     // Filter only the fields that were actually mapped
@@ -215,14 +429,36 @@ export class DefaultComponent implements OnInit {
 
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
 
+<<<<<<< Updated upstream
     if (activeMappings.length === 0) {
+=======
+  startMigration() {
+    this.showPreview = false;
+    this.previewingItemIndex = null;
+
+    if (this.confirmedMappings.length > 0) {
+      this.migrationQueue.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        mappings: [...this.confirmedMappings],
+        csvHeaders: [...this.csvHeaders]
+      });
+      this.confirmedMappings = [];
+    }
+
+    if (this.migrationQueue.length === 0) {
+>>>>>>> Stashed changes
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
     }
 
     // 1. Instantly turn on the spinner
     this.isMigrating = true;
+<<<<<<< Updated upstream
     this.cdr.detectChanges(); // Tell Angular to draw the spinner right NOW
+=======
+    this.cdr.detectChanges();
+>>>>>>> Stashed changes
 
     // 2. Push the heavy Excel crunching to the background (next browser tick)
     // This stops the NG0100 error and prevents the browser from freezing!
@@ -302,7 +538,11 @@ export class DefaultComponent implements OnInit {
         this.toastr.error('Failed to read data from the file.', 'Parsing Error');
         this.cdr.detectChanges();
       }
+<<<<<<< Updated upstream
     }, 10); // 10ms delay is imperceptible to the user, but a lifetime for Angular!
+=======
+    }, 10);
+>>>>>>> Stashed changes
   }
  downloadSuccessLog() {
   const worksheet = utils.json_to_sheet(this.successfulRecords);
@@ -349,3 +589,19 @@ private autoNavigate() {
 }
 
 
+<<<<<<< Updated upstream
+=======
+  private autoNavigate() {
+    setTimeout(() => {
+      const element = document.querySelector('.row.mb-4:last-of-type');
+      if (element) {
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+    }, 100);
+  }
+}
+>>>>>>> Stashed changes
