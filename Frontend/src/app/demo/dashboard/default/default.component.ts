@@ -8,6 +8,24 @@ import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
 
+interface MappingMeta {
+  csvField: string;
+  sfField: string;
+  type?: string;
+  referenceTo?: string[];
+  relationshipName?: string;
+  relationalExtIdField?: string; 
+}
+
+interface JobQueueItem {
+  sheetName: string;
+  targetObject: string;
+  csvHeaders: string[];
+  mappings: MappingMeta[];
+  targetExtIdField: string;
+  operationMode: string;
+}
+
 @Component({
   selector: 'app-default',
   standalone: true,
@@ -20,17 +38,9 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
 
-  // --- MULTI-OBJECT QUEUE STATE ---
-  migrationQueue: { 
-    sheetName: string, 
-    targetObject: string, 
-    csvHeaders: string[],
-    mappings: { csvField: string, sfField: string }[] 
-  }[] = [];
-
+  migrationQueue: JobQueueItem[] = [];
   currentStep: number = 1;
   selectedCRM: string = '';
-
   selectedFile: File | null = null;
   selectedObject: string = '';
   csvHeaders: string[] = [];
@@ -42,22 +52,23 @@ export class DefaultComponent implements OnInit {
   selectedSheetName: string = '';
 
   sfFields: any[] = [];
-  mappings: { csvField: string, sfField: string }[] = [];
-  confirmedMappings: { csvField: string, sfField: string }[] = [];
+  mappings: MappingMeta[] = [];
+  confirmedMappings: MappingMeta[] = [];
+  targetExtIdField: string = ''; 
+
   isLoadingFields = false;
   isMigrating = false;
   migrationSummary: any = null;
   failedRecords: any[] = []; 
   successfulRecords: any[] = []; 
 
-  // --- PREVIEW STATE ---
   showPreview = false;
   previewData: any[] = [];
   previewHeaders: string[] = [];
-  
   previewingItemIndex: number | null = null;
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
+  operationMode: string = 'insert';
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -67,7 +78,6 @@ export class DefaultComponent implements OnInit {
         setTimeout(() => this.isLoadingObjects = false);
       },
       error: (err) => {
-        console.error('Failed to load objects:', err);
         setTimeout(() => this.isLoadingObjects = false);
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
@@ -85,27 +95,21 @@ export class DefaultComponent implements OnInit {
 
   onFileSelected(event: any) {
     const file = event.target.files[0];
-
     if (file) {
       this.selectedFile = file;
       const reader = new FileReader();
-
       reader.onload = (e: any) => {
         const data = new Uint8Array(e.target.result);
-
         this.workbook = read(data, { type: 'array' });
         this.availableSheets = this.workbook.SheetNames;
-
         if (this.availableSheets.length === 1) {
           this.onSheetSelect(this.availableSheets[0]);
         } else {
           this.selectedSheetName = '';
           this.csvHeaders = [];
         }
-
         setTimeout(() => this.cdr.detectChanges());
       };
-
       reader.readAsArrayBuffer(file);
     } else {
       this.selectedFile = null;
@@ -119,7 +123,6 @@ export class DefaultComponent implements OnInit {
     if (this.workbook) {
       const worksheet = this.workbook.Sheets[sheetName];
       const json: any[][] = utils.sheet_to_json(worksheet, { header: 1 });
-
       if (json.length > 0) {
         this.csvHeaders = json[0]
           .map((h: any) => h ? String(h).trim() : '')
@@ -131,108 +134,124 @@ export class DefaultComponent implements OnInit {
     }
   }
 
+  getSfFieldMeta(fieldName: string): any {
+    return this.sfFields.find(f => f.name === fieldName);
+  }
+
+  getMissingRequiredFields(): string[] {
+    if (!this.sfFields || this.sfFields.length === 0) return [];
+    const requiredSfFields = this.sfFields.filter(f => f.isRequired).map(f => f.name);
+    const currentlyMappedSfFields = this.mappings.map(m => m.sfField).filter(val => val !== '');
+    return requiredSfFields.filter(reqField => !currentlyMappedSfFields.includes(reqField));
+  }
+
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
-
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
       this.isLoadingFields = true;
       this.showPreview = false;
       this.previewingItemIndex = null;
+      this.targetExtIdField = ''; 
 
       this.mappings = this.csvHeaders.map(header => ({
         csvField: header,
-        sfField: ''
+        sfField: '',
+        relationalExtIdField: ''
       }));
 
-      this.migrationService.getObjectFields(this.selectedObject).subscribe({
-        next: (response: any) => {
-          const fieldsArray = response.fields ? response.fields : response;
-          this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
-          setTimeout(() => {
-            this.isLoadingFields = false;
-            this.cdr.detectChanges();
-          });
-        },
-        error: (err) => {
-          console.error('Failed to load fields:', err);
-          setTimeout(() => {
-            this.isLoadingFields = false;
-            this.cdr.detectChanges();
-            this.toastr.error('Failed to load object fields.', 'API Error');
-          });
-        }
-      }); 
+      this.fetchObjectFields(this.selectedObject);
     }
   }
 
-  // --- IN-STEP 3 CHANGE HANDLERS ---
-  
   onSheetChangeInMapping(newSheet: string) {
     this.onSheetSelect(newSheet);
     this.mappings = this.csvHeaders.map(header => ({
       csvField: header,
-      sfField: ''
+      sfField: '',
+      relationalExtIdField: ''
     }));
     this.showPreview = false;
   }
 
   onObjectChangeInMapping(newObject: string) {
     if (!newObject) return;
-    
     this.isLoadingFields = true;
     this.showPreview = false;
-    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+    this.targetExtIdField = '';
+    this.fetchObjectFields(this.selectedObject);
+  }
+
+  private fetchObjectFields(objectName: string) {
+    this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
         const fieldsArray = response.fields ? response.fields : response;
         this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
-        this.mappings.forEach(m => m.sfField = '');
+        this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
         setTimeout(() => {
           this.isLoadingFields = false;
           this.cdr.detectChanges();
         });
       },
       error: (err) => {
-        console.error('Failed to load fields:', err);
-        setTimeout(() => {
-          this.isLoadingFields = false;
-          this.cdr.detectChanges();
-          this.toastr.error('Failed to load object fields.', 'API Error');
-        });
+        this.isLoadingFields = false;
+        this.toastr.error('Failed to load object fields.', 'API Error');
       }
     });
   }
 
-  // --- MULTI-OBJECT QUEUE METHODS ---
-
-  getConfirmedCount(mappings: { csvField: string, sfField: string }[]): number {
+  getConfirmedCount(mappings: any[]): number {
     return mappings.filter(m => m.sfField && m.sfField !== '').length;
   }
 
-  queueAnotherObject() {
+ queueAnotherObject() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
-      this.toastr.warning('Please map at least one field before adding to the queue.', 'No Mappings');
+      this.toastr.warning('Please map at least one field.', 'No Mappings');
       return;
     }
+
+    const missingFields = this.getMissingRequiredFields();
+    if (missingFields.length > 0) {
+      this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+      return;
+    }
+
+    // --- NEW LOGIC: Only enforce External ID if Upsert is selected ---
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.error('Please select a Primary Upsert Key (External ID).', 'Missing Configuration');
+      return;
+    }
+
+    const enhancedMappings = activeMappings.map(mapping => {
+      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+      return {
+        ...mapping,
+        type: fieldMeta?.type,
+        referenceTo: fieldMeta?.referenceTo,
+        relationshipName: fieldMeta?.relationshipName 
+      };
+    });
 
     this.migrationQueue.push({
       sheetName: this.selectedSheetName,
       targetObject: this.selectedObject,
       csvHeaders: [...this.csvHeaders],
-      mappings: [...this.mappings] 
+      mappings: enhancedMappings,
+      operationMode: this.operationMode, // <-- Save the mode to the queue
+      targetExtIdField: this.targetExtIdField 
     });
 
     this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
 
+    // Reset for next object
     this.selectedObject = '';
     this.sfFields = [];
-    this.mappings = this.csvHeaders.map(header => ({
-      csvField: header,
-      sfField: ''
-    }));
+    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
     this.confirmedMappings = [];
+    this.targetExtIdField = '';
+    this.operationMode = 'insert'; // Reset to default
     this.showPreview = false;
     this.previewingItemIndex = null;
     
@@ -241,24 +260,15 @@ export class DefaultComponent implements OnInit {
   }
 
   removeFromQueue(index: number) {
-    if (this.previewingItemIndex === index) {
-      this.previewingItemIndex = null;
-    } else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) {
-      this.previewingItemIndex--;
-    }
+    if (this.previewingItemIndex === index) this.previewingItemIndex = null;
+    else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) this.previewingItemIndex--;
     const removed = this.migrationQueue.splice(index, 1)[0];
     this.toastr.info(`Removed ${removed.targetObject} from queue.`, 'Item Removed');
   }
 
   editQueuedItem(index: number) {
     if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
-      this.migrationQueue.push({
-        sheetName: this.selectedSheetName,
-        targetObject: this.selectedObject,
-        csvHeaders: [...this.csvHeaders],
-        mappings: [...this.mappings]
-      });
-      this.toastr.info(`Saved current ${this.selectedObject} mapping to queue.`);
+      this.queueAnotherObject(); 
     }
 
     const itemToEdit = this.migrationQueue.splice(index, 1)[0];
@@ -269,36 +279,17 @@ export class DefaultComponent implements OnInit {
     this.selectedObject = itemToEdit.targetObject;
     this.csvHeaders = [...itemToEdit.csvHeaders];
     this.mappings = [...itemToEdit.mappings];
+    this.targetExtIdField = itemToEdit.targetExtIdField || '';
     
     this.currentStep = 3;
     this.isLoadingFields = true;
     this.cdr.detectChanges();
-
-    this.migrationService.getObjectFields(this.selectedObject).subscribe({
-      next: (response: any) => {
-        const fieldsArray = response.fields ? response.fields : response;
-        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
-        this.isLoadingFields = false;
-        
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        this.cdr.detectChanges();
-      },
-      error: (err) => {
-        this.isLoadingFields = false;
-        this.toastr.error(`Failed to load fields for ${this.selectedObject}.`, 'API Error');
-        this.cdr.detectChanges();
-      }
-    });
+    this.fetchObjectFields(this.selectedObject);
   }
 
-  // --- PREVIEW METHODS ---
-  
   previewCurrentMapping() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
-    if (activeMappings.length === 0) {
-      this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
-      return;
-    }
+    if (activeMappings.length === 0) return;
 
     const worksheet = this.workbook!.Sheets[this.selectedSheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
@@ -315,10 +306,8 @@ export class DefaultComponent implements OnInit {
       });
       previewRows.push(sfRecord);
     }
-
     this.previewData = previewRows;
     this.showPreview = true;
-    this.toastr.info('Preview generated for current mapping.', 'Preview Ready');
   }
 
   previewQueuedItem(index: number) {
@@ -326,14 +315,9 @@ export class DefaultComponent implements OnInit {
       this.previewingItemIndex = null; 
       return;
     }
-
     const item = this.migrationQueue[index];
     const activeMappings = item.mappings.filter(m => m.sfField !== '');
-    
-    if (activeMappings.length === 0) {
-      this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
-      return;
-    }
+    if (activeMappings.length === 0) return;
 
     const worksheet = this.workbook!.Sheets[item.sheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
@@ -350,19 +334,43 @@ export class DefaultComponent implements OnInit {
       });
       previewRows.push(sfRecord);
     }
-
     this.previewItemData = previewRows;
     this.previewingItemIndex = index;
   }
 
-  // --- REVIEW & MIGRATE ---
-
   goToReview() {
     this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
-
+    
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-      this.toastr.warning('Please map at least one field or ensure you have queued objects before proceeding.', 'Mapping Required');
+      this.toastr.warning('Please map at least one field or ensure you have queued objects.', 'Mapping Required');
       return;
+    }
+    
+    if (this.confirmedMappings.length > 0 && this.targetExtIdField) {
+        const enhancedMappings = this.confirmedMappings.map(mapping => {
+            const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+            return {
+                ...mapping,
+                type: fieldMeta?.type,
+                referenceTo: fieldMeta?.referenceTo,
+                relationshipName: fieldMeta?.relationshipName
+            };
+        });
+
+        this.migrationQueue.push({
+            sheetName: this.selectedSheetName,
+            targetObject: this.selectedObject,
+            csvHeaders: [...this.csvHeaders],
+            mappings: enhancedMappings,
+            targetExtIdField: this.targetExtIdField,
+            operationMode: this.operationMode,
+        });
+        
+        this.confirmedMappings = [];
+        this.targetExtIdField = '';
+    } else if (this.confirmedMappings.length > 0 && !this.targetExtIdField) {
+        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+        return;
     }
 
     this.currentStep = 4;
@@ -370,21 +378,10 @@ export class DefaultComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
-  // HELPER: Combine the queue + the currently active mapping for the final Review Screen display
   getAllMigrationPlans() {
-    const plans = [...this.migrationQueue];
-    if (this.confirmedMappings.length > 0) {
-      plans.push({
-        sheetName: this.selectedSheetName,
-        targetObject: this.selectedObject,
-        csvHeaders: this.csvHeaders,
-        mappings: this.confirmedMappings
-      });
-    }
-    return plans;
+    return this.migrationQueue;
   }
 
-  // HELPER: Get only fields that were actually mapped for the Review Screen display
   getActiveMappings(mappings: any[]) {
     return mappings.filter(m => m.sfField && m.sfField !== '');
   }
@@ -392,16 +389,6 @@ export class DefaultComponent implements OnInit {
   startMigration() {
     this.showPreview = false; 
     this.previewingItemIndex = null;
-
-    if (this.confirmedMappings.length > 0) {
-      this.migrationQueue.push({
-        sheetName: this.selectedSheetName,
-        targetObject: this.selectedObject,
-        mappings: [...this.confirmedMappings],
-        csvHeaders: [...this.csvHeaders] 
-      });
-      this.confirmedMappings = [];
-    }
 
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
@@ -417,23 +404,30 @@ export class DefaultComponent implements OnInit {
 
         for (const job of this.migrationQueue) {
           const worksheet = this.workbook!.Sheets[job.sheetName];
-          const rawData: any[] = utils.sheet_to_json(worksheet);
-
-          const activeJobMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
-
-          const sfRecords = rawData.map(rawRow => {
-            const sfRecord: any = {};
-            activeJobMappings.forEach(mapping => {
-              if (rawRow[mapping.csvField] !== undefined && rawRow[mapping.csvField] !== null) {
-                sfRecord[mapping.sfField] = rawRow[mapping.csvField];
-              }
+          const rawData: any[] = utils.sheet_to_json(worksheet); 
+          
+          // --- NEW: PRE-SORT BY PARENT EXT ID TO PREVENT SALESFORCE ROW LOCKS ---
+          // Find if this specific job maps to a Parent Object using an External ID
+          const relationalMapping = job.mappings.find(m => m.type === 'reference' && m.relationalExtIdField !== '');
+          
+          if (relationalMapping) {
+            const parentCsvColumn = relationalMapping.csvField;
+            
+            // Sort alphabetically by the parent's external ID so chunks in SF go to the same parent
+            rawData.sort((a, b) => {
+              const valA = String(a[parentCsvColumn] || '');
+              const valB = String(b[parentCsvColumn] || '');
+              return valA.localeCompare(valB);
             });
-            return sfRecord;
-          });
-
+          }
+          // ---------------------------------------------------------------------
+          
           jobsPayload.push({
             targetObject: job.targetObject,
-            records: sfRecords
+            records: rawData, 
+            mappings: job.mappings,
+            targetExtIdField: job.targetExtIdField,
+            operationMode: job.operationMode,
           });
         }
 
@@ -445,14 +439,15 @@ export class DefaultComponent implements OnInit {
             this.migrationSummary = response.stats;
             this.failedRecords = response.failures || [];
             this.successfulRecords = response.successfulRecords || [];
-            const msg = `Successfully inserted ${successCount} records. Failed: ${failedCount}`;
+            
+            const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
 
             if (successCount > 0 && failedCount === 0) {
               this.toastr.success(msg, 'Migration Complete!');
             } else if (successCount > 0 && failedCount > 0) {
               this.toastr.warning(msg, 'Partial Migration');
             } else {
-              this.toastr.error(`${msg}. Check required fields!`, 'Migration Failed');
+              this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
             }
 
             this.currentStep = 5;
@@ -503,11 +498,7 @@ export class DefaultComponent implements OnInit {
     setTimeout(() => {
       const element = document.querySelector('.row.mb-4:last-of-type');
       if (element) {
-        element.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-          inline: 'nearest'
-        });
+        element.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
       }
     }, 100);
   }

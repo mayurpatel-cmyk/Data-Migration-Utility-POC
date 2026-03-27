@@ -3,7 +3,7 @@ const logger = require('../utils/logger')(__filename);
 
 exports.migrateData = async (req, res) => {
   const email = req.headers['user-email'];
-  const jobs = req.body; // Angular now sends an array of jobs directly as the body
+  const jobs = req.body; 
 
   try {
     const conn = req.sfConn;
@@ -15,7 +15,6 @@ exports.migrateData = async (req, res) => {
       });
     }
 
-    // Validate that jobs is an array and has at least one item
     if (!Array.isArray(jobs) || jobs.length === 0) {
       return res.status(400).json({
         success: false,
@@ -23,21 +22,18 @@ exports.migrateData = async (req, res) => {
       });
     }
 
-    logger.info(`Bulk Migration Batch started`, {
+    logger.info(`Bulk Upsert Batch started`, {
       userEmail: email,
       jobCount: jobs.length
     });
 
-    // We pass the Array of Jobs directly into the service. 
-    // We don't need a third parameter anymore.
-    const result = await migrationService.insertRecords(conn, jobs);
+    const result = await migrationService.executeUpsertBatch(conn, jobs);
 
-    logger.info(`Migration batch completed`, {
+    logger.info(`Upsert batch completed`, {
       success: result.stats.success,
       failed: result.stats.failed
     });
 
-    // Send the aggregated results straight back to Angular
     res.json({
       success: true,
       message: `Migration batch finished!`,

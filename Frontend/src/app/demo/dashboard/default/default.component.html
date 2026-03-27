@@ -6,9 +6,8 @@
         <span class="fw-bold text-primary small">Step {{ currentStep }} of 5</span>
       </div>
       <div class="progress" style="height: 8px;">
-        <div class="progress-bar progress-bar-striped progress-bar-animated"
-             role="progressbar"
-             [style.width.%]="(currentStep / 5) * 100">
+        <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
+          [style.width.%]="(currentStep / 5) * 100">
         </div>
       </div>
     </div>
@@ -27,30 +26,39 @@
       <p class="text-muted mb-4">Which CRM are you migrating from? Select an option to begin.</p>
       <div class="row g-4">
         <div class="col-md-4">
-          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all" [class.border-primary]="selectedCRM === 'Zoho'" [class.bg-primary-subtle]="selectedCRM === 'Zoho'" (click)="onCRMSelect('Zoho')">
+          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all"
+            [class.border-primary]="selectedCRM === 'Zoho'" [class.bg-primary-subtle]="selectedCRM === 'Zoho'"
+            (click)="onCRMSelect('Zoho')">
             <div class="tile-icon text-warning fs-1">
               <i class="feather icon-layers"></i>
             </div>
             <h5 class="mt-3 fw-bold">Zoho CRM</h5>
-            @if (selectedCRM === 'Zoho') { <div class="text-primary mt-2"><i class="feather icon-check-circle fs-4"></i></div> }
+            @if (selectedCRM === 'Zoho') { <div class="text-primary mt-2"><i class="feather icon-check-circle fs-4"></i>
+            </div> }
           </div>
         </div>
         <div class="col-md-4">
-          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all" [class.border-primary]="selectedCRM === 'HubSpot'" [class.bg-primary-subtle]="selectedCRM === 'HubSpot'" (click)="onCRMSelect('HubSpot')">
+          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all"
+            [class.border-primary]="selectedCRM === 'HubSpot'" [class.bg-primary-subtle]="selectedCRM === 'HubSpot'"
+            (click)="onCRMSelect('HubSpot')">
             <div class="tile-icon text-danger fs-1">
               <i class="feather icon-target"></i>
             </div>
             <h5 class="mt-3 fw-bold">HubSpot</h5>
-            @if (selectedCRM === 'HubSpot') { <div class="text-primary mt-2"><i class="feather icon-check-circle fs-4"></i></div> }
+            @if (selectedCRM === 'HubSpot') { <div class="text-primary mt-2"><i
+                class="feather icon-check-circle fs-4"></i></div> }
           </div>
         </div>
         <div class="col-md-4">
-          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all" [class.border-primary]="selectedCRM === 'MSDynamics'" [class.bg-primary-subtle]="selectedCRM === 'MSDynamics'" (click)="onCRMSelect('MSDynamics')">
+          <div class="crm-tile text-center p-4 border rounded shadow-sm cursor-pointer transition-all"
+            [class.border-primary]="selectedCRM === 'MSDynamics'"
+            [class.bg-primary-subtle]="selectedCRM === 'MSDynamics'" (click)="onCRMSelect('MSDynamics')">
             <div class="tile-icon text-primary fs-1">
               <i class="feather icon-monitor"></i>
             </div>
             <h5 class="mt-3 fw-bold">MS Dynamics 365</h5>
-            @if (selectedCRM === 'MSDynamics') { <div class="text-primary mt-2"><i class="feather icon-check-circle fs-4"></i></div> }
+            @if (selectedCRM === 'MSDynamics') { <div class="text-primary mt-2"><i
+                class="feather icon-check-circle fs-4"></i></div> }
           </div>
         </div>
       </div>
@@ -108,76 +116,138 @@
         </div>
       </div>
       <div class="d-flex justify-content-end mt-4 pt-3 border-top">
-        <button class="btn btn-primary d-flex align-items-center gap-2 shadow-sm" 
-                [disabled]="!selectedFile || !selectedObject || !selectedSheetName"
-                (click)="goToMapping()">
+        <button class="btn btn-primary d-flex align-items-center gap-2 shadow-sm"
+          [disabled]="!selectedFile || !selectedObject || !selectedSheetName" (click)="goToMapping()">
           Next: Map Fields <i class="feather icon-arrow-right"></i>
         </button>
       </div>
     </app-card>
   </div>
 </div>
-} 
+}
 
 @if (currentStep === 3) {
 <div class="row mb-4">
   <div class="col-sm-12">
-    <app-card cardTitle="Step 3: Map Your Fields">
+    <app-card cardTitle="Step 3: Map Your Fields & Setup Upsert">
 
       <div class="row mb-4 bg-light p-3 rounded border mx-0 g-3">
         @if (availableSheets.length > 1) {
-          <div class="col-md-6">
-             <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-file-text"></i> Current Sheet</label>
-             <select class="form-select border-secondary" [(ngModel)]="selectedSheetName" (ngModelChange)="onSheetChangeInMapping($event)">
-               @for (sheet of availableSheets; track sheet) {
-                 <option [value]="sheet">{{ sheet }}</option>
-               }
-             </select>
-          </div>
+        <div class="col-md-6">
+          <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i
+              class="feather icon-file-text"></i> Current Sheet</label>
+          <select class="form-select border-secondary" [(ngModel)]="selectedSheetName"
+            (ngModelChange)="onSheetChangeInMapping($event)">
+            @for (sheet of availableSheets; track sheet) {
+            <option [value]="sheet">{{ sheet }}</option>
+            }
+          </select>
+        </div>
         }
         <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'">
-           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i> Target Salesforce Object</label>
-           <select class="form-select border-secondary" [(ngModel)]="selectedObject" (ngModelChange)="onObjectChangeInMapping($event)" [disabled]="isLoadingObjects">
-             <option value="" disabled selected>-- Select Target Object --</option>
-             @for (obj of sfObjects; track obj.name) {
-               <option [value]="obj.name">{{ obj.label }}</option>
-             }
-           </select>
+          <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
+            Target Salesforce Object</label>
+          <select class="form-select border-secondary" [(ngModel)]="selectedObject"
+            (ngModelChange)="onObjectChangeInMapping($event)" [disabled]="isLoadingObjects">
+            <option value="" disabled selected>-- Select Target Object --</option>
+            @for (obj of sfObjects; track obj.name) {
+            <option [value]="obj.name">{{ obj.label }}</option>
+            }
+          </select>
         </div>
       </div>
 
       @if (selectedObject) {
-      <div class="alert alert-info mb-3 d-flex align-items-center gap-2">
-        <i class="feather icon-info fs-5"></i>
-        <div>Match your uploaded CSV/xlsx columns to the correct Salesforce fields. Leave the dropdown blank to ignore a column.</div>
+      
+      <div class="card border border-primary-subtle shadow-sm mb-4">
+        <div class="card-header bg-light py-2">
+          <h6 class="m-0 fw-bold text-primary"><i class="feather icon-settings"></i> Migration Mode</h6>
+        </div>
+        <div class="card-body p-3">
+          <div class="d-flex gap-4 mb-3">
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert" [(ngModel)]="operationMode">
+              <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
+                Insert Only (New Records)
+              </label>
+              <div class="text-muted small">Creates new records. External IDs are not required.</div>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert" [(ngModel)]="operationMode">
+              <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
+                Upsert (Update & Insert)
+              </label>
+              <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
+            </div>
+          </div>
+
+          @if (operationMode === 'upsert') {
+            <div class="bg-primary-subtle p-3 rounded border border-primary-subtle">
+              <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> Primary Upsert Key</label>
+              <select class="form-select w-50 border-primary-subtle" [(ngModel)]="targetExtIdField">
+                <option value="" disabled selected>-- Select External ID Field --</option>
+                @for (field of sfFields; track field.name) {
+                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+                }
+              </select>
+            </div>
+          }
+        </div>
       </div>
+
+      @if (sfFields.length > 0 && getMissingRequiredFields().length > 0) {
+      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle">
+        <i class="feather icon-alert-triangle text-warning fs-5"></i>
+        <div>
+          <strong class="text-dark">Missing Required Fields:</strong> You must map columns to the following fields:
+          <span class="text-danger fw-bold ms-1">{{ getMissingRequiredFields().join(', ') }}</span>
+        </div>
+      </div>
+      }
 
       <div class="table-responsive border rounded mb-3 shadow-sm">
         <table class="table table-hover table-bordered align-middle mb-0">
           <thead class="table-light">
             <tr>
-              <th width="50%" class="py-3">CSV Column ({{ selectedCRM }})</th>
-              <th width="50%" class="py-3">Salesforce Field ({{ selectedObject }})</th>
+              <th width="45%" class="py-3 ps-4">CSV Column ({{ selectedCRM }})</th>
+              <th width="55%" class="py-3">Salesforce Field Mapping</th>
             </tr>
           </thead>
           <tbody>
             @for (mapping of mappings; track mapping.csvField) {
             <tr>
-              <td class="fw-bold text-primary">
+              <td class="fw-bold text-primary ps-4">
                 <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
               </td>
               <td>
-                <select class="form-select bg-light" [(ngModel)]="mapping.sfField" [disabled]="isLoadingFields">
-                  <option value="">-- Ignore this column --</option>
+                <select class="form-select form-select-sm mb-2" [(ngModel)]="mapping.sfField" [disabled]="isLoadingFields">
+                  <option value="" class="text-muted">-- Ignore this column --</option>
                   @if (isLoadingFields) {
-                  <option value="" disabled>Loading fields...</option>
+                    <option value="" disabled>Loading fields...</option>
                   }
                   @for (field of sfFields; track $index) {
-                  <option [value]="field.name">
-                    {{ field.label }} ({{ field.type }})
-                  </option>
+                    <option [value]="field.name" 
+                            [class.text-danger]="field.isRequired"
+                            [class.fw-bold]="field.isRequired"
+                            [class.text-primary]="field.type === 'reference' && !field.isRequired">
+                      {{ field.label }}
+                      {{ field.isRequired ? '* (Required)' : '' }}
+                      {{ field.type === 'reference' ? '🔗 (Lookup)' : '' }}
+                    </option>
                   }
                 </select>
+
+                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference') {
+                  <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
+                    <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
+                      <i class="feather icon-link"></i> Parent Ext ID Field:
+                    </label>
+                    <input type="text" class="form-control form-control-sm" 
+                           placeholder="e.g. Legacy_CRM_ID__c" 
+                           [(ngModel)]="mapping.relationalExtIdField"
+                           title="The exact API name of the External ID field on the Parent object">
+                  </div>
+                }
               </td>
             </tr>
             }
@@ -205,7 +275,8 @@
       @if (showPreview) {
       <div class="mb-5 border border-info rounded shadow-sm">
         <div class="bg-info-subtle p-3 border-bottom d-flex justify-content-between align-items-center">
-          <h6 class="text-info-emphasis m-0 fw-bold d-flex align-items-center gap-2"><i class="feather icon-database"></i>Previewing: {{ selectedObject }} (Top 5 Rows)</h6>
+          <h6 class="text-info-emphasis m-0 fw-bold d-flex align-items-center gap-2"><i
+              class="feather icon-database"></i>Previewing: {{ selectedObject }} (Top 5 Rows)</h6>
           <button class="btn btn-sm btn-close" (click)="showPreview = false"></button>
         </div>
         <div class="table-responsive">
@@ -213,17 +284,17 @@
             <thead class="table-light text-muted small">
               <tr>
                 @for (header of previewHeaders; track $index) {
-                  <th class="py-2">{{ header }}</th>
+                <th class="py-2">{{ header }}</th>
                 }
               </tr>
             </thead>
             <tbody class="small">
               @for (row of previewData; track $index) {
-                <tr>
-                  @for (header of previewHeaders; track $index) {
-                    <td class="py-2">{{ row[header] }}</td>
-                  }
-                </tr>
+              <tr>
+                @for (header of previewHeaders; track $index) {
+                <td class="py-2">{{ row[header] }}</td>
+                }
+              </tr>
               }
             </tbody>
           </table>
@@ -232,10 +303,10 @@
       }
 
       } @else {
-        <div class="text-center p-5 border rounded bg-light border-dashed mb-4">
-          <i class="feather icon-mouse-pointer text-primary opacity-50" style="font-size: 3rem;"></i>
-          <h5 class="mt-3 text-muted fw-normal">Select a Target Salesforce Object from the dropdown above to continue mapping.</h5>
-        </div>
+      <div class="text-center p-5 border rounded bg-light border-dashed mb-4">
+        <i class="feather icon-mouse-pointer text-primary opacity-50" style="font-size: 3rem;"></i>
+        <h5 class="mt-3 text-muted fw-normal">Select a Target Salesforce Object from the dropdown above to continue mapping.</h5>
+      </div>
       }
 
       @if (migrationQueue.length > 0) {
@@ -243,32 +314,28 @@
         <h5 class="mb-3 text-secondary d-flex align-items-center gap-2">
           <i class="feather icon-layers text-primary"></i> Queued Objects Waiting for Migration ({{ migrationQueue.length }})
         </h5>
-        
+
         <div class="table-responsive border rounded shadow-sm">
           <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
               <tr>
-                <th width="25%" class="py-3">Excel Sheet</th>
+                <th width="20%" class="py-3 ps-3">Excel Sheet</th>
                 <th width="25%" class="py-3">Salesforce Object</th>
-                <th width="20%" class="py-3">Mapped Fields</th>
-                <th width="30%" class="text-end py-3">Actions</th>
+                <th width="25%" class="py-3">Primary Upsert Key</th>
+                <th width="30%" class="text-end py-3 pe-3">Actions</th>
               </tr>
             </thead>
             <tbody>
               @for (item of migrationQueue; track $index) {
               <tr [class.table-active]="previewingItemIndex === $index">
-                <td class="fw-bold">
-                  <i class="feather icon-file-text me-2 text-muted"></i> {{ item.sheetName }}
-                </td>
+                <td class="fw-bold ps-3"><i class="feather icon-file-text me-2 text-muted"></i> {{ item.sheetName }}</td>
                 <td>
                   <span class="badge bg-primary-subtle text-primary border border-primary-subtle py-2 px-3 rounded-pill d-inline-flex align-items-center gap-1">
                     <i class="feather icon-box"></i> {{ item.targetObject }}
                   </span>
                 </td>
-                <td class="text-muted">
-                  <strong class="text-dark">{{ getConfirmedCount(item.mappings) }}</strong> fields mapped
-                </td>
-                <td>
+                <td><code class="text-dark bg-light px-2 py-1 rounded border">{{ item.targetExtIdField }}</code></td>
+                <td class="pe-3">
                   <div class="d-flex justify-content-end gap-2">
                     <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-1" (click)="previewQueuedItem($index)" title="Preview Data">
                       <i class="feather icon-eye"></i> Preview
@@ -293,17 +360,17 @@
                         <thead class="table-light text-muted small">
                           <tr>
                             @for (header of previewItemHeaders; track $index) {
-                              <th class="py-2">{{ header }}</th>
+                            <th class="py-2">{{ header }}</th>
                             }
                           </tr>
                         </thead>
                         <tbody class="small">
                           @for (row of previewItemData; track $index) {
-                            <tr>
-                              @for (header of previewItemHeaders; track $index) {
-                                <td class="py-2">{{ row[header] }}</td>
-                              }
-                            </tr>
+                          <tr>
+                            @for (header of previewItemHeaders; track $index) {
+                            <td class="py-2">{{ row[header] }}</td>
+                            }
+                          </tr>
                           }
                         </tbody>
                       </table>
@@ -316,17 +383,16 @@
             </tbody>
           </table>
         </div>
-        
+
         @if (!selectedObject) {
-          <div class="d-flex justify-content-end mt-4">
-            <button class="btn btn-primary shadow-sm d-flex align-items-center gap-2" (click)="goToReview()">
-              Review Queued Objects <i class="feather icon-arrow-right"></i>
-            </button>
-          </div>
+        <div class="d-flex justify-content-end mt-4">
+          <button class="btn btn-primary shadow-sm d-flex align-items-center gap-2" (click)="goToReview()">
+            Review Queued Objects <i class="feather icon-arrow-right"></i>
+          </button>
+        </div>
         }
       </div>
       }
-
     </app-card>
   </div>
 </div>
@@ -336,7 +402,7 @@
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 4: Review Final Migration Plan">
-      
+
       <div class="alert alert-info mb-4 d-flex align-items-center gap-3">
         <i class="feather icon-info fs-3"></i>
         <div>
@@ -345,47 +411,56 @@
       </div>
 
       @for (plan of getAllMigrationPlans(); track $index) {
-        <div class="card border border-primary-subtle shadow-sm mb-4">
-          <div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center py-3">
-            <h6 class="m-0 text-primary-emphasis fw-bold d-flex align-items-center gap-2">
-              <i class="feather icon-box"></i> Target Object: {{ plan.targetObject }}
-            </h6>
-            <span class="badge bg-secondary px-3 py-2 d-flex align-items-center gap-1"><i class="feather icon-file-text"></i> Data Source: {{ plan.sheetName }}</span>
-          </div>
-          <div class="card-body p-0">
-            <div class="table-responsive">
-              <table class="table table-hover align-middle mb-0 border-0">
-                <thead class="table-light text-muted small">
-                  <tr>
-                    <th width="45%" class="ps-4 border-0 py-3">Source Column ({{ selectedCRM }})</th>
-                    <th width="10%" class="text-center border-0 py-3"></th>
-                    <th width="45%" class="border-0 py-3">Destination Field (Salesforce)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (m of getActiveMappings(plan.mappings); track m.csvField) {
-                  <tr>
-                    <td class="ps-4"><span class="text-dark">{{ m.csvField }}</span></td>
-                    <td class="text-center text-primary fw-bold fs-5">➔</td>
-                    <td><span class="fw-bold text-success">{{ m.sfField }}</span></td>
-                  </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
+      <div class="card border border-primary-subtle shadow-sm mb-4">
+        <div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center py-3">
+          <h6 class="m-0 text-primary-emphasis fw-bold d-flex align-items-center gap-2">
+            <i class="feather icon-box"></i> Target Object: {{ plan.targetObject }} 
+            <span class="ms-2 text-muted fw-normal">(Upsert Key: <code class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField }}</code>)</span>
+          </h6>
+          <span class="badge bg-secondary px-3 py-2 d-flex align-items-center gap-1"><i
+              class="feather icon-file-text"></i> Data Source: {{ plan.sheetName }}</span>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 border-0">
+              <thead class="table-light text-muted small">
+                <tr>
+                  <th width="45%" class="ps-4 border-0 py-3">Source Column ({{ selectedCRM }})</th>
+                  <th width="10%" class="text-center border-0 py-3"></th>
+                  <th width="45%" class="border-0 py-3">Destination Field (Salesforce)</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (m of getActiveMappings(plan.mappings); track m.csvField) {
+                <tr>
+                  <td class="ps-4"><span class="text-dark">{{ m.csvField }}</span></td>
+                  <td class="text-center text-primary fw-bold fs-5">➔</td>
+                  <td>
+                    <span class="fw-bold text-success">{{ m.sfField }}</span>
+                    @if (m.type === 'reference' && m.relationalExtIdField) {
+                      <div class="small text-muted mt-1"><i class="feather icon-link"></i> Linked via <code>{{ m.relationalExtIdField }}</code></div>
+                    }
+                  </td>
+                </tr>
+                }
+              </tbody>
+            </table>
           </div>
         </div>
+      </div>
       }
 
       <div class="d-flex flex-wrap justify-content-end align-items-center gap-3 mt-4 pt-3 border-top">
-        <button class="btn btn-outline-secondary d-flex align-items-center gap-2" [disabled]="isMigrating" (click)="currentStep = 3">
+        <button class="btn btn-outline-secondary d-flex align-items-center gap-2" [disabled]="isMigrating"
+          (click)="currentStep = 3">
           <i class="feather icon-arrow-left"></i> Back to Mapping
         </button>
-        <button class="btn btn-success shadow d-flex align-items-center gap-2" [disabled]="isMigrating" (click)="startMigration()">
+        <button class="btn btn-success shadow d-flex align-items-center gap-2" [disabled]="isMigrating"
+          (click)="startMigration()">
           @if (isMigrating) {
-            <span class="spinner-border spinner-border-sm"></span> Executing Full Migration...
+          <span class="spinner-border spinner-border-sm"></span> Executing Full Migration...
           } @else {
-            <i class="feather icon-check-circle"></i> Confirm & Start Migration Batch
+          <i class="feather icon-check-circle"></i> Confirm & Start Migration Batch
           }
         </button>
       </div>
@@ -402,27 +477,29 @@
       <div class="text-center mb-5 pb-4 border-bottom">
 
         @if (migrationSummary?.success > 0 && migrationSummary?.failed === 0) {
-          <div class="animation-container py-3">
-            <i class="feather icon-check-circle text-success" style="font-size: 5rem;"></i>
-            <h2 class="text-success mt-3 fw-bold">Migration Successful!</h2>
-            <p class="text-muted fs-5 mt-2">Excellent! All batches pushed to Salesforce without any issues.</p>
-          </div>
+        <div class="animation-container py-3">
+          <i class="feather icon-check-circle text-success" style="font-size: 5rem;"></i>
+          <h2 class="text-success mt-3 fw-bold">Migration Successful!</h2>
+          <p class="text-muted fs-5 mt-2">Excellent! All batches pushed to Salesforce without any issues.</p>
+        </div>
         }
 
         @else if (migrationSummary?.success > 0 && migrationSummary?.failed > 0) {
-          <div class="animation-container py-3">
-            <i class="feather icon-alert-circle text-warning" style="font-size: 5rem;"></i>
-            <h2 class="text-warning mt-3 fw-bold">Partial Migration Complete</h2>
-            <p class="text-muted fs-5 mt-2">Some records were imported, but <strong>{{ migrationSummary.failed }}</strong> records encountered errors.</p>
-          </div>
+        <div class="animation-container py-3">
+          <i class="feather icon-alert-circle text-warning" style="font-size: 5rem;"></i>
+          <h2 class="text-warning mt-3 fw-bold">Partial Migration Complete</h2>
+          <p class="text-muted fs-5 mt-2">Some records were imported, but <strong>{{ migrationSummary.failed }}</strong>
+            records encountered errors.</p>
+        </div>
         }
 
         @else if (migrationSummary?.failed > 0 && migrationSummary?.success === 0) {
-          <div class="animation-container py-3">
-            <i class="feather icon-x-circle text-danger" style="font-size: 5rem;"></i>
-            <h2 class="text-danger mt-3 fw-bold">Migration Failed</h2>
-            <p class="text-muted fs-5 mt-2">None of the records could be imported. Please review the error log below to fix your data.</p>
-          </div>
+        <div class="animation-container py-3">
+          <i class="feather icon-x-circle text-danger" style="font-size: 5rem;"></i>
+          <h2 class="text-danger mt-3 fw-bold">Migration Failed</h2>
+          <p class="text-muted fs-5 mt-2">None of the records could be imported. Please review the error log below to
+            fix your data.</p>
+        </div>
         }
       </div>
 
@@ -430,17 +507,20 @@
         <div class="col-md-4">
           <div class="p-4 border rounded bg-light shadow-sm h-100 d-flex flex-column justify-content-center">
             <h6 class="text-muted mb-2 text-uppercase small fw-bold tracking-wide">Processed</h6>
-            <h2 class="fw-bold mb-0 text-dark display-6">{{ (migrationSummary?.success || 0) + (migrationSummary?.failed || 0) }}</h2>
+            <h2 class="fw-bold mb-0 text-dark display-6">{{ (migrationSummary?.success || 0) + (migrationSummary?.failed
+              || 0) }}</h2>
           </div>
         </div>
         <div class="col-md-4">
-          <div class="p-4 border border-success-subtle rounded bg-success-subtle shadow-sm h-100 d-flex flex-column justify-content-center">
+          <div
+            class="p-4 border border-success-subtle rounded bg-success-subtle shadow-sm h-100 d-flex flex-column justify-content-center">
             <h6 class="text-success-emphasis mb-2 text-uppercase small fw-bold tracking-wide">Success</h6>
             <h2 class="text-success fw-bold mb-0 display-6">{{ migrationSummary?.success || 0 }}</h2>
           </div>
         </div>
         <div class="col-md-4">
-          <div class="p-4 border border-danger-subtle rounded bg-danger-subtle shadow-sm h-100 d-flex flex-column justify-content-center">
+          <div
+            class="p-4 border border-danger-subtle rounded bg-danger-subtle shadow-sm h-100 d-flex flex-column justify-content-center">
             <h6 class="text-danger-emphasis mb-2 text-uppercase small fw-bold tracking-wide">Failed</h6>
             <h2 class="text-danger fw-bold mb-0 display-6">{{ migrationSummary?.failed || 0 }}</h2>
           </div>
@@ -461,7 +541,8 @@
               @for (fail of failedRecords; track $index) {
               <tr>
                 <td class="p-3 fw-bold text-dark border-end bg-white">
-                  {{ fail.record.Name || fail.record['Account Name'] || fail.record.LastName || 'Record #' + ($index + 1) }}
+                  {{ fail.record.Name || fail.record['Account Name'] || fail.record.LastName || 'Record #' + ($index +
+                  1) }}
                 </td>
                 <td class="p-3 text-danger small bg-danger-subtle bg-opacity-10">
                   <div class="d-flex align-items-start gap-2">
@@ -477,18 +558,19 @@
       </div>
       }
 
-     <div class="d-flex flex-wrap justify-content-center align-items-center gap-3 mt-5 border-top pt-4">
+      <div class="d-flex flex-wrap justify-content-center align-items-center gap-3 mt-5 border-top pt-4">
 
         @if (successfulRecords && successfulRecords.length > 0) {
-          <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2" (click)="downloadSuccessLog()">
-            <i class="feather icon-download-cloud"></i> Download Success Log ({{ successfulRecords.length }})
-          </button>
+        <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2"
+          (click)="downloadSuccessLog()">
+          <i class="feather icon-download-cloud"></i> Download Success Log ({{ successfulRecords.length }})
+        </button>
         }
 
         @if (failedRecords && failedRecords.length > 0) {
-          <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
-            <i class="feather icon-alert-octagon"></i> Download Error Log ({{ failedRecords.length }})
-          </button>
+        <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
+          <i class="feather icon-alert-octagon"></i> Download Error Log ({{ failedRecords.length }})
+        </button>
         }
 
         <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="currentStep = 1">
