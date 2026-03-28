@@ -220,7 +220,7 @@
                 <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
               </td>
               <td>
-                <select class="form-select form-select-sm mb-2" [(ngModel)]="mapping.sfField" [disabled]="isLoadingFields">
+                <select class="form-select form-select-sm mb-2" [(ngModel)]="mapping.sfField" [disabled]="isLoadingFields" (change)="onSfFieldChange(mapping)">
                   <option value="" class="text-muted">-- Ignore this column --</option>
                   @if (isLoadingFields) {
                     <option value="" disabled>Loading fields...</option>
@@ -237,15 +237,24 @@
                   }
                 </select>
 
-                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference') {
+                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
                   <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
                     <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
-                      <i class="feather icon-link"></i> Parent Ext ID Field:
+                      <i class="feather icon-link"></i> Parent Ext ID ({{ mapping.parentObjectName }}):
                     </label>
-                    <input type="text" class="form-control form-control-sm" 
-                           placeholder="e.g. Legacy_CRM_ID__c" 
-                           [(ngModel)]="mapping.relationalExtIdField"
-                           title="The exact API name of the External ID field on the Parent object">
+                    
+                    @if (mapping.isLoadingParentFields) {
+                      <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                    } @else {
+                      <select class="form-select form-select-sm" [(ngModel)]="mapping.relationalExtIdField">
+                        <option value="" disabled selected>-- Select External ID --</option>
+                        <option value="Id" class="fw-bold">Id (Standard Salesforce ID)</option>
+                        
+                        @for (pField of parentObjectFieldsCache[mapping.parentObjectName]; track pField.name) {
+                          <option [value]="pField.name">{{ pField.label }} ({{ pField.name }})</option>
+                        }
+                      </select>
+                    }
                   </div>
                 }
               </td>

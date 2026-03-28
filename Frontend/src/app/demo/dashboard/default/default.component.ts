@@ -14,7 +14,9 @@ interface MappingMeta {
   type?: string;
   referenceTo?: string[];
   relationshipName?: string;
-  relationalExtIdField?: string; 
+  relationalExtIdField?: string;
+  parentObjectName?: string;
+  isLoadingParentFields?: boolean;
 }
 
 interface JobQueueItem {
@@ -69,6 +71,7 @@ export class DefaultComponent implements OnInit {
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
   operationMode: string = 'insert';
+  parentObjectFieldsCache: { [objectName: string]: any[] } = {};
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -205,6 +208,41 @@ export class DefaultComponent implements OnInit {
     return mappings.filter(m => m.sfField && m.sfField !== '').length;
   }
 
+  onSfFieldChange(mapping: MappingMeta) {
+    const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+    
+    // Check if the selected field is a lookup/reference
+    if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
+      
+      // Grab the name of the Parent Object (e.g., 'Account' for AccountId)
+      const parentObj = fieldMeta.referenceTo[0]; 
+      mapping.parentObjectName = parentObj;
+
+      // If we haven't fetched the fields for this parent object yet, fetch them
+      if (!this.parentObjectFieldsCache[parentObj]) {
+        mapping.isLoadingParentFields = true;
+        
+        this.migrationService.getObjectFields(parentObj).subscribe({
+          next: (response: any) => {
+            const fieldsArray = response.fields ? response.fields : response;
+            this.parentObjectFieldsCache[parentObj] = Array.isArray(fieldsArray) ? fieldsArray : [];
+            mapping.isLoadingParentFields = false;
+            this.cdr.detectChanges();
+          },
+          error: (err) => {
+            mapping.isLoadingParentFields = false;
+            this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
+            this.cdr.detectChanges();
+          }
+        });
+      }
+    } else {
+      // Reset if they change their mind and select a normal string/date field
+      mapping.parentObjectName = undefined;
+      mapping.relationalExtIdField = '';
+    }
+  }
+
  queueAnotherObject() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -219,10 +257,11 @@ export class DefaultComponent implements OnInit {
     }
 
     // --- NEW LOGIC: Only enforce External ID if Upsert is selected ---
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.error('Please select a Primary Upsert Key (External ID).', 'Missing Configuration');
-      return;
-    }
+ // Only enforce External ID if Upsert is selected
+if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+  this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
+  return;
+}
 
     const enhancedMappings = activeMappings.map(mapping => {
       const fieldMeta = this.getSfFieldMeta(mapping.sfField);
@@ -338,45 +377,50 @@ export class DefaultComponent implements OnInit {
     this.previewingItemIndex = index;
   }
 
-  goToReview() {
-    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
-    
-    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-      this.toastr.warning('Please map at least one field or ensure you have queued objects.', 'Mapping Required');
+ goToReview() {
+  this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
+  
+  if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+    this.toastr.warning('Please map at least one field.', 'Mapping Required');
+    return;
+  }
+  
+  // Logic Fix: Check if we can proceed based on mode
+  const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
+
+  if (this.confirmedMappings.length > 0) {
+    if (isUpsertMissingKey) {
+      this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
       return;
     }
+
+    // Process and add to queue...
+    const enhancedMappings = this.confirmedMappings.map(mapping => {
+        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+        return {
+            ...mapping,
+            type: fieldMeta?.type,
+            referenceTo: fieldMeta?.referenceTo,
+            relationshipName: fieldMeta?.relationshipName
+        };
+    });
+
+    this.migrationQueue.push({
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        csvHeaders: [...this.csvHeaders],
+        mappings: enhancedMappings,
+        targetExtIdField: this.targetExtIdField, // Will be empty string for Inserts, which is fine
+        operationMode: this.operationMode,
+    });
     
-    if (this.confirmedMappings.length > 0 && this.targetExtIdField) {
-        const enhancedMappings = this.confirmedMappings.map(mapping => {
-            const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-            return {
-                ...mapping,
-                type: fieldMeta?.type,
-                referenceTo: fieldMeta?.referenceTo,
-                relationshipName: fieldMeta?.relationshipName
-            };
-        });
-
-        this.migrationQueue.push({
-            sheetName: this.selectedSheetName,
-            targetObject: this.selectedObject,
-            csvHeaders: [...this.csvHeaders],
-            mappings: enhancedMappings,
-            targetExtIdField: this.targetExtIdField,
-            operationMode: this.operationMode,
-        });
-        
-        this.confirmedMappings = [];
-        this.targetExtIdField = '';
-    } else if (this.confirmedMappings.length > 0 && !this.targetExtIdField) {
-        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
-        return;
-    }
-
-    this.currentStep = 4;
-    this.autoNavigate();
-    this.cdr.detectChanges();
+    this.confirmedMappings = [];
+    this.targetExtIdField = '';
   }
+
+  this.currentStep = 4;
+  this.cdr.detectChanges();
+}
 
   getAllMigrationPlans() {
     return this.migrationQueue;
