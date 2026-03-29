@@ -148,23 +148,33 @@ export class DefaultComponent implements OnInit {
     return requiredSfFields.filter(reqField => !currentlyMappedSfFields.includes(reqField));
   }
 
+  onStep2ObjectChange(newObject: string) {
+    if (!newObject) return;
+    this.selectedObject = newObject;
+    this.isLoadingFields = true;
+    this.targetExtIdField = ''; // Reset the key if they change objects
+    this.fetchObjectFields(newObject);
+  }
+
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
+    
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.warning('Please select a Primary Upsert Key before mapping.', 'Missing Configuration');
+      return;
+    }
+
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
-      this.isLoadingFields = true;
       this.showPreview = false;
       this.previewingItemIndex = null;
-      this.targetExtIdField = ''; 
 
       this.mappings = this.csvHeaders.map(header => ({
         csvField: header,
         sfField: '',
         relationalExtIdField: ''
       }));
-
-      this.fetchObjectFields(this.selectedObject);
     }
   }
 
@@ -186,12 +196,32 @@ export class DefaultComponent implements OnInit {
     this.fetchObjectFields(this.selectedObject);
   }
 
-  private fetchObjectFields(objectName: string) {
+ private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
         const fieldsArray = response.fields ? response.fields : response;
         this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
-        this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+        
+        // BUG FIX: Only wipe the mappings clean if we are NOT editing an existing queue item
+        if (!isEditMode) {
+          this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+        } else {
+          // If we ARE editing, we need to ensure any Parent Relationship dropdowns are loaded!
+          this.mappings.forEach(m => {
+            if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
+              m.isLoadingParentFields = true;
+              this.migrationService.getObjectFields(m.parentObjectName).subscribe({
+                next: (pRes: any) => {
+                  const pFieldsArray = pRes.fields ? pRes.fields : pRes;
+                  this.parentObjectFieldsCache[m.parentObjectName!] = Array.isArray(pFieldsArray) ? pFieldsArray : [];
+                  m.isLoadingParentFields = false;
+                  this.cdr.detectChanges();
+                }
+              });
+            }
+          });
+        }
+
         setTimeout(() => {
           this.isLoadingFields = false;
           this.cdr.detectChanges();
@@ -256,12 +286,11 @@ export class DefaultComponent implements OnInit {
       return;
     }
 
-    // --- NEW LOGIC: Only enforce External ID if Upsert is selected ---
- // Only enforce External ID if Upsert is selected
-if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-  this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
-  return;
-}
+   // Only enforce External ID if Upsert is selected
+   if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+     this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
+     return;
+   }
 
     const enhancedMappings = activeMappings.map(mapping => {
       const fieldMeta = this.getSfFieldMeta(mapping.sfField);
@@ -317,13 +346,19 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
     this.selectedSheetName = itemToEdit.sheetName;
     this.selectedObject = itemToEdit.targetObject;
     this.csvHeaders = [...itemToEdit.csvHeaders];
-    this.mappings = [...itemToEdit.mappings];
+    
+    // BUG FIX: Use deep copy so the nested mapping objects don't lose their state
+    this.mappings = itemToEdit.mappings.map(m => ({...m})); 
+    
     this.targetExtIdField = itemToEdit.targetExtIdField || '';
+    this.operationMode = itemToEdit.operationMode || 'insert';
     
     this.currentStep = 3;
     this.isLoadingFields = true;
     this.cdr.detectChanges();
-    this.fetchObjectFields(this.selectedObject);
+    
+    // BUG FIX: Pass 'true' to trigger Edit Mode so it doesn't wipe your fields!
+    this.fetchObjectFields(this.selectedObject, true);
   }
 
   previewCurrentMapping() {
@@ -385,7 +420,6 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
     return;
   }
   
-  // Logic Fix: Check if we can proceed based on mode
   const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
 
   if (this.confirmedMappings.length > 0) {
@@ -394,7 +428,6 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
       return;
     }
 
-    // Process and add to queue...
     const enhancedMappings = this.confirmedMappings.map(mapping => {
         const fieldMeta = this.getSfFieldMeta(mapping.sfField);
         return {
@@ -410,7 +443,7 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
         targetObject: this.selectedObject,
         csvHeaders: [...this.csvHeaders],
         mappings: enhancedMappings,
-        targetExtIdField: this.targetExtIdField, // Will be empty string for Inserts, which is fine
+        targetExtIdField: this.targetExtIdField,
         operationMode: this.operationMode,
     });
     
@@ -450,21 +483,17 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
           const worksheet = this.workbook!.Sheets[job.sheetName];
           const rawData: any[] = utils.sheet_to_json(worksheet); 
           
-          // --- NEW: PRE-SORT BY PARENT EXT ID TO PREVENT SALESFORCE ROW LOCKS ---
-          // Find if this specific job maps to a Parent Object using an External ID
           const relationalMapping = job.mappings.find(m => m.type === 'reference' && m.relationalExtIdField !== '');
           
           if (relationalMapping) {
             const parentCsvColumn = relationalMapping.csvField;
             
-            // Sort alphabetically by the parent's external ID so chunks in SF go to the same parent
             rawData.sort((a, b) => {
               const valA = String(a[parentCsvColumn] || '');
               const valB = String(b[parentCsvColumn] || '');
               return valA.localeCompare(valB);
             });
           }
-          // ---------------------------------------------------------------------
           
           jobsPayload.push({
             targetObject: job.targetObject,
@@ -545,5 +574,43 @@ if (this.operationMode === 'upsert' && !this.targetExtIdField) {
         element.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
       }
     }, 100);
+  }
+
+  // Completely wipe the memory to start a fresh session
+  resetMigrationSession() {
+    this.migrationQueue = [];
+    this.selectedCRM = '';
+    this.selectedFile = null;
+    this.selectedObject = '';
+    this.csvHeaders = [];
+    
+    // Clear out the workbook and sheets
+    this.workbook = null;
+    this.availableSheets = [];
+    this.selectedSheetName = '';
+
+    // Clear mapping configs
+    this.sfFields = [];
+    this.mappings = [];
+    this.confirmedMappings = [];
+    this.targetExtIdField = ''; 
+    this.operationMode = 'insert';
+    this.parentObjectFieldsCache = {};
+
+    // Clear final logs and previews
+    this.migrationSummary = null;
+    this.failedRecords = []; 
+    this.successfulRecords = []; 
+    this.showPreview = false;
+    this.previewData = [];
+    this.previewHeaders = [];
+    this.previewingItemIndex = null;
+    
+    // Go back to the first screen
+    this.currentStep = 1;
+    
+    // Scroll to the top of the page smoothly
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.cdr.detectChanges();
   }
 }

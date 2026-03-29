@@ -1,42 +1,54 @@
-// config/mappings.js
-
 const COUNTRY_MAP = {
-  'usa': 'United States',
-  'u.s.a.': 'United States',
-  'us': 'United States',
-  'united states of america': 'United States',
-  'uk': 'United Kingdom',
-  'u.k.': 'United Kingdom',
-  'great britain': 'United Kingdom',
-  'can': 'Canada',
+  // United States -> 'US'
+  'usa': 'US',
+  'u.s.a.': 'US',
+  'us': 'US',
+  'united states of america': 'US',
+  'united states': 'US',
+  
+  // United Kingdom -> 'GB' (Salesforce standard ISO for UK is usually GB)
+  'uk': 'GB',
+  'u.k.': 'GB',
+  'great britain': 'GB',
+  'united kingdom': 'GB',
+  
+  // Canada -> 'CA'
+  'can': 'CA',
+  'canada': 'CA'
   // Add as many as your organization needs
 };
 
 const STATE_MAP = {
+  // California -> 'CA'
   'california': 'CA',
   'calif': 'CA',
   'calif.': 'CA',
+  
+  // New York -> 'NY'
   'new york': 'NY',
+  'ny': 'NY',
+  
+  // Texas -> 'TX'
   'texas': 'TX',
-  'florida': 'FL',
-  'fl.': 'FL',
-  'ontario': 'ON',
-  // Add as many as your organization needs
+  'tx': 'TX',
+  
+  // London -> 'ENG' (Salesforce typically uses ENG for England, or leaves UK states blank)
+  'london': 'ENG',
 };
 
 const RECORD_TYPE_MAP = {
   'Account': {
-    'B2B Customer': '01250000000XXXXAAA',
-    'Partner': '01250000000YYYYAAA',
-    'Vendor': '01250000000ZZZZAAA'
+    'B2B Customer': '012gL000001quLhQAI',
+    'Partner': '012gL000001quLhQAI',
+    'Vendor': '012gL000001quLiQAI'
   },
   'Contact': {
-    'Standard': '01250000000AAAAAAA',
-    'Executive': '01250000000BBBBAAA'
+    'Standard': '012gL000001quLhQAI',
+    'Executive': '012gL000001quLiQAI'
   },
   'Opportunity': {
-    'New Business': '01250000000CCCCAAA',
-    'Renewal': '01250000000DDDDAAA'
+    'New Business': '012gL000001quLhQAI',
+    'Renewal': '012gL000001quLiQAI'
   }
 };
 

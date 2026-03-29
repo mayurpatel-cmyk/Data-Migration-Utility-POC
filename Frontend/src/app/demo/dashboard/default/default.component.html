@@ -103,7 +103,7 @@
         <div class="col-md-6">
           <div class="form-group mb-0">
             <label for="objectSelect" class="form-label fw-bold">2. Select Target Salesforce Object</label>
-            <select id="objectSelect" class="form-select" [(ngModel)]="selectedObject">
+            <select id="objectSelect" class="form-select" [(ngModel)]="selectedObject" (ngModelChange)="onStep2ObjectChange($event)">
               <option value="" disabled selected>-- Choose an Object --</option>
               @if (isLoadingObjects) {
               <option value="" disabled>Loading objects...</option>
@@ -115,6 +115,47 @@
           </div>
         </div>
       </div>
+
+      @if (selectedObject) {
+      <div class="mt-4 pt-4 border-top">
+        <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i>Migration Mode</h6>
+        
+        <div class="d-flex gap-4 mb-3">
+          <div class="form-check">
+            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert" [(ngModel)]="operationMode">
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
+              Insert Only (New Records)
+            </label>
+            <div class="text-muted small">Creates new records. External IDs are not required.</div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert" [(ngModel)]="operationMode">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
+              Upsert (Update & Insert)
+            </label>
+            <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
+          </div>
+        </div>
+
+        @if (operationMode === 'upsert') {
+          <div class="bg-primary-subtle p-3 rounded border border-primary-subtle">
+            <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> Primary Upsert Key</label>
+            
+            @if (isLoadingFields) {
+              <div class="text-primary small mt-1"><span class="spinner-border spinner-border-sm me-2"></span>Loading fields...</div>
+            } @else {
+              <select class="form-select w-50 border-primary-subtle" [(ngModel)]="targetExtIdField">
+                <option value="" disabled selected>-- Select External ID Field --</option>
+                @for (field of sfFields; track field.name) {
+                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+                }
+              </select>
+            }
+          </div>
+        }
+      </div>
+      }
+
       <div class="d-flex justify-content-end mt-4 pt-3 border-top">
         <button class="btn btn-primary d-flex align-items-center gap-2 shadow-sm"
           [disabled]="!selectedFile || !selectedObject || !selectedSheetName" (click)="goToMapping()">
@@ -130,6 +171,18 @@
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 3: Map Your Fields & Setup Upsert">
+
+      <div class="alert alert-primary py-2 mb-4 d-flex justify-content-between align-items-center shadow-sm border-primary-subtle">
+        <div>
+          <strong>Migration Mode:</strong> <span class="badge bg-primary ms-1 text-uppercase">{{ operationMode }}</span>
+          @if (operationMode === 'upsert') {
+            <span class="ms-4"><strong>Primary Upsert Key:</strong> <code class="bg-white text-dark px-2 py-1 rounded ms-1 border">{{ targetExtIdField }}</code></span>
+          }
+        </div>
+        <button class="btn btn-sm btn-outline-primary bg-white" (click)="currentStep = 2">
+          <i class="feather icon-edit-2"></i> Change Mode
+        </button>
+      </div>
 
       <div class="row mb-4 bg-light p-3 rounded border mx-0 g-3">
         @if (availableSheets.length > 1) {
@@ -159,42 +212,6 @@
 
       @if (selectedObject) {
       
-      <div class="card border border-primary-subtle shadow-sm mb-4">
-        <div class="card-header bg-light py-2">
-          <h6 class="m-0 fw-bold text-primary"><i class="feather icon-settings"></i> Migration Mode</h6>
-        </div>
-        <div class="card-body p-3">
-          <div class="d-flex gap-4 mb-3">
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert" [(ngModel)]="operationMode">
-              <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
-                Insert Only (New Records)
-              </label>
-              <div class="text-muted small">Creates new records. External IDs are not required.</div>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert" [(ngModel)]="operationMode">
-              <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
-                Upsert (Update & Insert)
-              </label>
-              <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
-            </div>
-          </div>
-
-          @if (operationMode === 'upsert') {
-            <div class="bg-primary-subtle p-3 rounded border border-primary-subtle">
-              <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> Primary Upsert Key</label>
-              <select class="form-select w-50 border-primary-subtle" [(ngModel)]="targetExtIdField">
-                <option value="" disabled selected>-- Select External ID Field --</option>
-                @for (field of sfFields; track field.name) {
-                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
-                }
-              </select>
-            </div>
-          }
-        </div>
-      </div>
-
       @if (sfFields.length > 0 && getMissingRequiredFields().length > 0) {
       <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle">
         <i class="feather icon-alert-triangle text-warning fs-5"></i>
@@ -343,7 +360,7 @@
                     <i class="feather icon-box"></i> {{ item.targetObject }}
                   </span>
                 </td>
-                <td><code class="text-dark bg-light px-2 py-1 rounded border">{{ item.targetExtIdField }}</code></td>
+                <td><code class="text-dark bg-light px-2 py-1 rounded border">{{ item.targetExtIdField || 'N/A (Insert)' }}</code></td>
                 <td class="pe-3">
                   <div class="d-flex justify-content-end gap-2">
                     <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-1" (click)="previewQueuedItem($index)" title="Preview Data">
@@ -424,7 +441,7 @@
         <div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center py-3">
           <h6 class="m-0 text-primary-emphasis fw-bold d-flex align-items-center gap-2">
             <i class="feather icon-box"></i> Target Object: {{ plan.targetObject }} 
-            <span class="ms-2 text-muted fw-normal">(Upsert Key: <code class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField }}</code>)</span>
+            <span class="ms-2 text-muted fw-normal">(Upsert Key: <code class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField || 'None' }}</code>)</span>
           </h6>
           <span class="badge bg-secondary px-3 py-2 d-flex align-items-center gap-1"><i
               class="feather icon-file-text"></i> Data Source: {{ plan.sheetName }}</span>
@@ -582,7 +599,7 @@
         </button>
         }
 
-        <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="currentStep = 1">
+        <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="resetMigrationSession()">
           <i class="feather icon-plus-circle"></i> New Migration
         </button>
 

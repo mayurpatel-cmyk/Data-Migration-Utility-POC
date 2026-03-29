@@ -58,7 +58,7 @@ class MigrationService {
   }
 
   // 2: Data Cleanser (Dates, Booleans, Picklists)
-  cleanseData(value, sfType) {
+  cleanseData(value, sfType, fieldName, targetObject) {
     if (value === undefined || value === null || value === '') return null;
     if (String(value).trim() === '#N/A') return '#N/A';
 
@@ -67,11 +67,10 @@ class MigrationService {
         const strVal = String(value).trim().toLowerCase();
         return ['true', '1', 'yes', 'y', 'active'].includes(strVal);
 
-      case 'date':
+      // --- NUMBERS ---
       case 'currency':
       case 'double':
       case 'percent':
-        
       case 'int':
         if (typeof value === 'number') return value;
         // Remove commas, currency symbols, and spaces (e.g., "$ 1,234.56" -> "1234.56")
@@ -79,12 +78,16 @@ class MigrationService {
         const parsedNum = sfType === 'int' ? parseInt(numericString, 10) : parseFloat(numericString);
         return isNaN(parsedNum) ? null : parsedNum;
 
+      // --- STRINGS ---
       case 'string':
         // Prevent SF "Data too large" errors (default standard is often 255)
-        // Note: Ideally, pass the `length` property from your SF field metadata into this function.
         return String(value).trim().substring(0, 255);
+
+      // --- DATES (Fixed grouping!) ---
+      case 'date':
       case 'datetime':
         if (typeof value === 'number') {
+          // Converts Excel serial number (e.g., 45565) to standard date
           const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
           return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
         }
@@ -150,7 +153,7 @@ class MigrationService {
   }
 
   //3: Payload Builder
- buildPayload(rawRecords, mappings, options = {}) {
+  buildPayload(rawRecords, mappings, options = {}) {
     const { 
       skipSelfReferencing = false, 
       onlySelfReferencing = false, 
@@ -178,10 +181,9 @@ class MigrationService {
       Object.entries(rawRow).forEach(([csvKey, csvValue]) => {
         const cleanKey = csvKey.trim();
         const mappingMeta = mappings.find(m => m.csvField === cleanKey);
+         if (!mappingMeta || !mappingMeta.sfField) return;
         const isAuditField = ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById'].includes(mappingMeta.sfField);
         
-        if (!mappingMeta || !mappingMeta.sfField) return;
-
         if (isPatchMode && isAuditField) return; 
 
        const cleansedValue = this.cleanseData(csvValue, mappingMeta.type, mappingMeta.sfField, targetObject);
@@ -200,8 +202,19 @@ class MigrationService {
         if (isExcludedCross) return; // Skip deferred lookups in Pass 1
         if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return; // Skip everything else in Pass 3
 
-        if (mappingMeta.type === 'reference' && mappingMeta.relationalExtIdField && mappingMeta.relationshipName) {
-          const relationalKey = `${mappingMeta.relationshipName}.${mappingMeta.relationalExtIdField}`;
+        // --- NEW FIX: Fallback for missing Relationship Names ---
+        let relName = mappingMeta.relationshipName;
+        if (!relName && mappingMeta.sfField) {
+            if (mappingMeta.sfField.endsWith('Id')) {
+                relName = mappingMeta.sfField.slice(0, -2); // e.g., 'AccountId' -> 'Account'
+            } else if (mappingMeta.sfField.endsWith('__c')) {
+                relName = mappingMeta.sfField.replace('__c', '__r'); // e.g., 'Custom__c' -> 'Custom__r'
+            }
+        }
+        // --------------------------------------------------------
+
+        if (mappingMeta.type === 'reference' && mappingMeta.relationalExtIdField && relName) {
+          const relationalKey = `${relName}.${mappingMeta.relationalExtIdField}`;
           sfRecord[relationalKey] = cleansedValue;
           if (isPatchMode) hasPatchData = true;
         } else {
@@ -217,6 +230,7 @@ class MigrationService {
 
     return payload;
   }
+
   // CORE EXECUTION 
  async executeUpsertBatch(conn, targetObjectOrJobs, records) {
     try {
