@@ -27,19 +27,78 @@ exports.migrateData = async (req, res) => {
       jobCount: jobs.length
     });
 
+    // Execute the batch migration
     const result = await migrationService.executeUpsertBatch(conn, jobs);
 
+    // ----------------------------------------------------------------------
+    // NEW LOGIC: Format successful and failed records for the frontend
+    // Note: This expects migrationService to return { results, sentRecords }
+    // If your service already formats this data, you can remove this block.
+    // ----------------------------------------------------------------------
+    const rawResults = result.results || [];
+    const sentRecords = result.sentRecords || [];
+    
+    let successfulRecords = result.successfulRecords || [];
+    let failures = result.failures || [];
+    let stats = result.stats || { success: 0, failed: 0 };
+
+    // Apply the formatting if raw results were returned
+    if (rawResults.length > 0 && sentRecords.length > 0) {
+      successfulRecords = rawResults
+        .map((resItem, index) => {
+          if (resItem.success) {
+            return {
+              SalesforceId: resItem.id, // The new Salesforce ID
+              ...sentRecords[index]
+            };
+          }
+          return null;
+        })
+        .filter(record => record !== null);
+
+      failures = rawResults
+        .map((resItem, index) => {
+          if (!resItem.success) {
+            let errorMessage = 'Unknown Error';
+            
+            if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
+              // If it's an array of strings, we just join them.
+              // If they are objects, we grab the message.
+              errorMessage = resItem.errors
+                .map(e => (typeof e === 'string' ? e : (e.message || JSON.stringify(e))))
+                .join(', ');
+            } else if (resItem.error) {
+              errorMessage = resItem.error;
+            }
+
+            return {
+              record: sentRecords[index], // Original data for the first column
+              error: errorMessage         // Cleaned up string for the second column
+            };
+          }
+          return null;
+        })
+        .filter(record => record !== null);
+
+      // Recalculate stats based on formatted data
+      stats = {
+        success: successfulRecords.length,
+        failed: failures.length
+      };
+    }
+    // ----------------------------------------------------------------------
+
     logger.info(`Upsert batch completed`, {
-      success: result.stats.success,
-      failed: result.stats.failed
+      success: stats.success,
+      failed: stats.failed
     });
 
     res.json({
       success: true,
       message: `Migration batch finished!`,
-      stats: result.stats,
-      failures: result.failures,
-      successfulRecords: result.successfulRecords
+      stats: stats,
+      failures: failures,
+      successfulRecords: successfulRecords
     });
 
   } catch (error) {

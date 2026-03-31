@@ -40,7 +40,9 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
 
+  // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
+
   currentStep: number = 1;
   selectedCRM: string = '';
   selectedFile: File | null = null;
@@ -64,6 +66,7 @@ export class DefaultComponent implements OnInit {
   failedRecords: any[] = [];
   successfulRecords: any[] = [];
 
+  // --- PREVIEW STATE ---
   showPreview = false;
   previewData: any[] = [];
   previewHeaders: string[] = [];
@@ -152,7 +155,7 @@ export class DefaultComponent implements OnInit {
     if (!newObject) return;
     this.selectedObject = newObject;
     this.isLoadingFields = true;
-    this.targetExtIdField = ''; // Reset the key if they change objects
+    this.targetExtIdField = ''; 
     this.fetchObjectFields(newObject);
   }
 
@@ -202,11 +205,9 @@ export class DefaultComponent implements OnInit {
         const fieldsArray = response.fields ? response.fields : response;
         this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
 
-        // BUG FIX: Only wipe the mappings clean if we are NOT editing an existing queue item
         if (!isEditMode) {
           this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
         } else {
-          // If we ARE editing, we need to ensure any Parent Relationship dropdowns are loaded!
           this.mappings.forEach(m => {
             if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
               m.isLoadingParentFields = true;
@@ -241,14 +242,10 @@ export class DefaultComponent implements OnInit {
   onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-    // Check if the selected field is a lookup/reference
     if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
-
-      // Grab the name of the Parent Object (e.g., 'Account' for AccountId)
       const parentObj = fieldMeta.referenceTo[0];
       mapping.parentObjectName = parentObj;
 
-      // If we haven't fetched the fields for this parent object yet, fetch them
       if (!this.parentObjectFieldsCache[parentObj]) {
         mapping.isLoadingParentFields = true;
 
@@ -267,18 +264,16 @@ export class DefaultComponent implements OnInit {
         });
       }
     } else {
-      // Reset if they change their mind and select a normal string/date field
       mapping.parentObjectName = undefined;
       mapping.relationalExtIdField = '';
     }
   }
 
- queueAnotherObject() {
-
+  queueAnotherObject() {
     if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-    this.toastr.error("Cannot queue. Please resolve the sequence error first.", "Sequence Blocked");
-    return;
-  }
+      this.toastr.error("Cannot queue. Please resolve the sequence error first.", "Sequence Blocked");
+      return;
+    }
 
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -292,11 +287,10 @@ export class DefaultComponent implements OnInit {
       return;
     }
 
-   // Only enforce External ID if Upsert is selected
-   if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-     this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
-     return;
-   }
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
+      return;
+    }
 
     const enhancedMappings = activeMappings.map(mapping => {
       const fieldMeta = this.getSfFieldMeta(mapping.sfField);
@@ -313,19 +307,18 @@ export class DefaultComponent implements OnInit {
       targetObject: this.selectedObject,
       csvHeaders: [...this.csvHeaders],
       mappings: enhancedMappings,
-      operationMode: this.operationMode, // <-- Save the mode to the queue
+      operationMode: this.operationMode, 
       targetExtIdField: this.targetExtIdField
     });
 
     this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
 
-    // Reset for next object
     this.selectedObject = '';
     this.sfFields = [];
     this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
     this.confirmedMappings = [];
     this.targetExtIdField = '';
-    this.operationMode = 'insert'; // Reset to default
+    this.operationMode = 'insert'; 
     this.showPreview = false;
     this.previewingItemIndex = null;
 
@@ -334,8 +327,11 @@ export class DefaultComponent implements OnInit {
   }
 
   removeFromQueue(index: number) {
-    if (this.previewingItemIndex === index) this.previewingItemIndex = null;
-    else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) this.previewingItemIndex--;
+    if (this.previewingItemIndex === index) {
+      this.previewingItemIndex = null;
+    } else if (this.previewingItemIndex !== null && this.previewingItemIndex > index) {
+      this.previewingItemIndex--;
+    }
     const removed = this.migrationQueue.splice(index, 1)[0];
     this.toastr.info(`Removed ${removed.targetObject} from queue.`, 'Item Removed');
   }
@@ -343,6 +339,7 @@ export class DefaultComponent implements OnInit {
   editQueuedItem(index: number) {
     if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
       this.queueAnotherObject();
+      this.toastr.info(`Saved current mapping to queue before editing.`, 'Queue Updated');
     }
 
     const itemToEdit = this.migrationQueue.splice(index, 1)[0];
@@ -352,10 +349,7 @@ export class DefaultComponent implements OnInit {
     this.selectedSheetName = itemToEdit.sheetName;
     this.selectedObject = itemToEdit.targetObject;
     this.csvHeaders = [...itemToEdit.csvHeaders];
-
-    // BUG FIX: Use deep copy so the nested mapping objects don't lose their state
     this.mappings = itemToEdit.mappings.map(m => ({...m}));
-
     this.targetExtIdField = itemToEdit.targetExtIdField || '';
     this.operationMode = itemToEdit.operationMode || 'insert';
 
@@ -363,13 +357,15 @@ export class DefaultComponent implements OnInit {
     this.isLoadingFields = true;
     this.cdr.detectChanges();
 
-    // BUG FIX: Pass 'true' to trigger Edit Mode so it doesn't wipe your fields!
     this.fetchObjectFields(this.selectedObject, true);
   }
 
   previewCurrentMapping() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
-    if (activeMappings.length === 0) return;
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
+      return;
+    }
 
     const worksheet = this.workbook!.Sheets[this.selectedSheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
@@ -388,6 +384,7 @@ export class DefaultComponent implements OnInit {
     }
     this.previewData = previewRows;
     this.showPreview = true;
+    this.toastr.info('Preview generated! Check below the mapping table.', 'Preview Ready');
   }
 
   previewQueuedItem(index: number) {
@@ -397,7 +394,11 @@ export class DefaultComponent implements OnInit {
     }
     const item = this.migrationQueue[index];
     const activeMappings = item.mappings.filter(m => m.sfField !== '');
-    if (activeMappings.length === 0) return;
+    
+    if (activeMappings.length === 0) {
+      this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
+      return;
+    }
 
     const worksheet = this.workbook!.Sheets[item.sheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
@@ -418,44 +419,15 @@ export class DefaultComponent implements OnInit {
     this.previewingItemIndex = index;
   }
 
- goToReview() {
-  this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
+  goToReview() {
+    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
 
-  if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-    this.toastr.warning('Please map at least one field.', 'Mapping Required');
-    return;
-  }
-
-  const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-
-  if (this.confirmedMappings.length > 0) {
-    if (isUpsertMissingKey) {
-      this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
     }
 
-    const enhancedMappings = this.confirmedMappings.map(mapping => {
-        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-        return {
-            ...mapping,
-            type: fieldMeta?.type,
-            referenceTo: fieldMeta?.referenceTo,
-            relationshipName: fieldMeta?.relationshipName
-        };
-    });
-
-    this.migrationQueue.push({
-        sheetName: this.selectedSheetName,
-        targetObject: this.selectedObject,
-        csvHeaders: [...this.csvHeaders],
-        mappings: enhancedMappings,
-        targetExtIdField: this.targetExtIdField,
-        operationMode: this.operationMode,
-    });
-
-    this.confirmedMappings = [];
-    this.targetExtIdField = '';
-  }
+    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
 
     if (this.confirmedMappings.length > 0) {
       if (isUpsertMissingKey) {
@@ -464,29 +436,30 @@ export class DefaultComponent implements OnInit {
       }
 
       const enhancedMappings = this.confirmedMappings.map(mapping => {
-          const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-          return {
-              ...mapping,
-              type: fieldMeta?.type,
-              referenceTo: fieldMeta?.referenceTo,
-              relationshipName: fieldMeta?.relationshipName
-          };
+        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+        return {
+          ...mapping,
+          type: fieldMeta?.type,
+          referenceTo: fieldMeta?.referenceTo,
+          relationshipName: fieldMeta?.relationshipName
+        };
       });
 
       this.migrationQueue.push({
-          sheetName: this.selectedSheetName,
-          targetObject: this.selectedObject,
-          csvHeaders: [...this.csvHeaders],
-          mappings: enhancedMappings,
-          targetExtIdField: this.targetExtIdField,
-          operationMode: this.operationMode,
+        sheetName: this.selectedSheetName,
+        targetObject: this.selectedObject,
+        csvHeaders: [...this.csvHeaders],
+        mappings: enhancedMappings,
+        targetExtIdField: this.targetExtIdField,
+        operationMode: this.operationMode,
       });
-      
+
       this.confirmedMappings = [];
       this.targetExtIdField = '';
     }
 
     this.currentStep = 4;
+    this.autoNavigate();
     this.cdr.detectChanges();
   }
 
@@ -517,12 +490,10 @@ export class DefaultComponent implements OnInit {
         for (const job of this.migrationQueue) {
           const worksheet = this.workbook!.Sheets[job.sheetName];
           const rawData: any[] = utils.sheet_to_json(worksheet);
-
           const relationalMapping = job.mappings.find(m => m.type === 'reference' && m.relationalExtIdField !== '');
 
           if (relationalMapping) {
             const parentCsvColumn = relationalMapping.csvField;
-
             rawData.sort((a, b) => {
               const valA = String(a[parentCsvColumn] || '');
               const valB = String(b[parentCsvColumn] || '');
@@ -541,7 +512,9 @@ export class DefaultComponent implements OnInit {
 
         this.migrationService.migrateData(jobsPayload).subscribe({
           next: (response) => {
+            console.log('Migration response from server:', response);
             this.isMigrating = false;
+            
             const successCount = response.stats?.success || 0;
             const failedCount = response.stats?.failed || 0;
             this.migrationSummary = response.stats;
@@ -611,7 +584,6 @@ export class DefaultComponent implements OnInit {
     }, 100);
   }
 
-  // Completely wipe the memory to start a fresh session
   resetMigrationSession() {
     this.migrationQueue = [];
     this.selectedCRM = '';
@@ -619,12 +591,10 @@ export class DefaultComponent implements OnInit {
     this.selectedObject = '';
     this.csvHeaders = [];
 
-    // Clear out the workbook and sheets
     this.workbook = null;
     this.availableSheets = [];
     this.selectedSheetName = '';
 
-    // Clear mapping configs
     this.sfFields = [];
     this.mappings = [];
     this.confirmedMappings = [];
@@ -632,7 +602,6 @@ export class DefaultComponent implements OnInit {
     this.operationMode = 'insert';
     this.parentObjectFieldsCache = {};
 
-    // Clear final logs and previews
     this.migrationSummary = null;
     this.failedRecords = [];
     this.successfulRecords = [];
@@ -641,77 +610,64 @@ export class DefaultComponent implements OnInit {
     this.previewHeaders = [];
     this.previewingItemIndex = null;
 
-    // Go back to the first screen
     this.currentStep = 1;
-
-    // Scroll to the top of the page smoothly
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
 
- getDynamicSequenceError(): string | null {
-  // RULE 1: Only enforce this for UPSERT. Insert mode is ignored.
-  if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+  getDynamicSequenceError(): string | null {
+    if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
-  // RULE 2: Look through current mappings for any Lookup (Reference) fields
-  const activeLookupMappings = this.mappings.filter(m => {
-    const meta = this.getSfFieldMeta(m.sfField);
-    return m.sfField && meta?.type === 'reference';
-  });
+    const activeLookupMappings = this.mappings.filter(m => {
+      const meta = this.getSfFieldMeta(m.sfField);
+      return m.sfField && meta?.type === 'reference';
+    });
 
-  for (const mapping of activeLookupMappings) {
-    const meta = this.getSfFieldMeta(mapping.sfField);
-    const parentObjects: string[] = meta.referenceTo || [];
+    for (const mapping of activeLookupMappings) {
+      const meta = this.getSfFieldMeta(mapping.sfField);
+      const parentObjects: string[] = meta.referenceTo || [];
+      const externalParents = parentObjects.filter(p => p !== this.selectedObject);
 
-    // Filter out self-references (e.g., Account pointing to Parent Account)
-    const externalParents = parentObjects.filter(p => p !== this.selectedObject);
+      if (externalParents.length > 0) {
+        const isParentQueued = externalParents.some(parentName =>
+          this.migrationQueue.some(q => q.targetObject === parentName)
+        );
 
-    if (externalParents.length > 0) {
-      // RULE 3: Check if ANY of the potential parent objects are already in the queue
-      const isParentQueued = externalParents.some(parentName =>
-        this.migrationQueue.some(q => q.targetObject === parentName)
-      );
-
-      // If no parent is found in the queue, we have a sequence violation
-      if (!isParentQueued) {
-        const parentName = externalParents[0]; // Get the first parent name (e.g., 'Account')
-        return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
-      }
-    }
-  }
-
-  return null;
-}
-
-// Check if the current queue has items in the wrong order (Child above Parent)
-hasOrderingIssue(): boolean {
-  let issueFound = false;
-  this.migrationQueue.forEach((job, index) => {
-    job.mappings.forEach(m => {
-      if (m.relationalExtIdField && m.parentObjectName) {
-        const parentIndex = this.migrationQueue.findIndex(q => q.targetObject === m.parentObjectName);
-        // If parent exists but is AFTER the child, it's an issue
-        if (parentIndex !== -1 && parentIndex > index) {
-          issueFound = true;
+        if (!isParentQueued) {
+          const parentName = externalParents[0];
+          return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
         }
       }
-    });
-  });
-  return issueFound;
-}
-
-// Modify your goToReview to prevent proceeding with errors
-overrideGoToReview() {
-  if (this.operationMode === 'upsert') {
-     if (this.getDynamicSequenceError()) {
-       this.toastr.error("Please resolve sequence errors before proceeding.", "Logic Error");
-       return;
-     }
-     if (this.hasOrderingIssue()) {
-       this.toastr.error("Please reorder the queue: Parents (like Accounts) must be above Children.", "Sequence Error");
-       return;
-     }
+    }
+    return null;
   }
-  this.goToReview(); // Call your existing logic
-}
+
+  hasOrderingIssue(): boolean {
+    let issueFound = false;
+    this.migrationQueue.forEach((job, index) => {
+      job.mappings.forEach(m => {
+        if (m.relationalExtIdField && m.parentObjectName) {
+          const parentIndex = this.migrationQueue.findIndex(q => q.targetObject === m.parentObjectName);
+          if (parentIndex !== -1 && parentIndex > index) {
+            issueFound = true;
+          }
+        }
+      });
+    });
+    return issueFound;
+  }
+
+  overrideGoToReview() {
+    if (this.operationMode === 'upsert') {
+       if (this.getDynamicSequenceError()) {
+         this.toastr.error("Please resolve sequence errors before proceeding.", "Logic Error");
+         return;
+       }
+       if (this.hasOrderingIssue()) {
+         this.toastr.error("Please reorder the queue: Parents (like Accounts) must be above Children.", "Sequence Error");
+         return;
+       }
+    }
+    this.goToReview(); 
+  }
 }
