@@ -27,7 +27,7 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Data-Migration',
         type: 'item',
         classes: 'nav-item',
-        url: '/migration',
+        url: '/default',
         icon: 'ti ti-dashboard',
         breadcrumbs: true
       }
