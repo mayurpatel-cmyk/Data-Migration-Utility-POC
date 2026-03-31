@@ -116,46 +116,6 @@
         </div>
       </div>
 
-      @if (selectedObject) {
-      <div class="mt-4 pt-4 border-top">
-        <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i>Migration Mode</h6>
-        
-        <div class="d-flex gap-4 mb-3">
-          <div class="form-check">
-            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
-              Insert Only (New Records)
-            </label>
-            <div class="text-muted small">Creates new records. External IDs are not required.</div>
-          </div>
-          <div class="form-check">
-            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
-              Upsert (Update & Insert)
-            </label>
-            <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
-          </div>
-        </div>
-
-        @if (operationMode === 'upsert') {
-          <div class="bg-primary-subtle p-3 rounded border border-primary-subtle">
-            <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> Primary Upsert Key</label>
-            
-            @if (isLoadingFields) {
-              <div class="text-primary small mt-1"><span class="spinner-border spinner-border-sm me-2"></span>Loading fields...</div>
-            } @else {
-              <select class="form-select w-50 border-primary-subtle" [(ngModel)]="targetExtIdField">
-                <option value="" disabled selected>-- Select External ID Field --</option>
-                @for (field of sfFields; track field.name) {
-                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
-                }
-              </select>
-            }
-          </div>
-        }
-      </div>
-      }
-
       <div class="d-flex justify-content-end mt-4 pt-3 border-top">
         <button class="btn btn-primary d-flex align-items-center gap-2 shadow-sm"
           [disabled]="!selectedFile || !selectedObject || !selectedSheetName" (click)="goToMapping()">
@@ -172,16 +132,43 @@
   <div class="col-sm-12">
     <app-card cardTitle="Step 3: Map Your Fields & Setup Upsert">
 
-      <div class="alert alert-primary py-2 mb-4 d-flex justify-content-between align-items-center shadow-sm border-primary-subtle">
-        <div>
-          <strong>Migration Mode:</strong> <span class="badge bg-primary ms-1 text-uppercase">{{ operationMode }}</span>
+      <div class="bg-light p-3 rounded border mb-4 shadow-sm border-primary-subtle">
+        <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Migration Mode</h6>
+        
+        <div class="d-flex flex-wrap gap-4 align-items-start">
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opInsertStep3" value="insert" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">
+              Insert Only (New Records)
+            </label>
+            <div class="text-muted small">Creates new records. External IDs are not required.</div>
+          </div>
+          
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3" value="upsert" [(ngModel)]="operationMode">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">
+              Upsert (Update & Insert)
+            </label>
+            <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
+          </div>
+
           @if (operationMode === 'upsert') {
-            <span class="ms-4"><strong>Primary Upsert Key:</strong> <code class="bg-white text-dark px-2 py-1 rounded ms-1 border">{{ targetExtIdField }}</code></span>
+            <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2">
+              <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> Primary Upsert Key:</label>
+              
+              @if (isLoadingFields) {
+                <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+              } @else {
+                <select class="form-select form-select-sm border-primary-subtle" [(ngModel)]="targetExtIdField" style="min-width: 220px;">
+                  <option value="" disabled selected>-- Select External ID --</option>
+                  @for (field of sfFields; track field.name) {
+                    <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+                  }
+                </select>
+              }
+            </div>
           }
         </div>
-        <button class="btn btn-sm btn-outline-primary bg-white" (click)="currentStep = 2">
-          <i class="feather icon-edit-2"></i> Change Mode
-        </button>
       </div>
 
       <div class="row mb-4 bg-light p-3 rounded border mx-0 g-3">

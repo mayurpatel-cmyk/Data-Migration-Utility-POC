@@ -6,7 +6,6 @@ const COUNTRY_MAP = {
   'united states of america': 'US',
   'united states': 'US',
   
-  // United Kingdom -> 'GB' (Salesforce standard ISO for UK is usually GB)
   'uk': 'GB',
   'u.k.': 'GB',
   'great britain': 'GB',
@@ -15,7 +14,6 @@ const COUNTRY_MAP = {
   // Canada -> 'CA'
   'can': 'CA',
   'canada': 'CA'
-  // Add as many as your organization needs
 };
 
 const STATE_MAP = {
@@ -32,7 +30,6 @@ const STATE_MAP = {
   'texas': 'TX',
   'tx': 'TX',
   
-  // London -> 'ENG' (Salesforce typically uses ENG for England, or leaves UK states blank)
   'london': 'ENG',
 };
 

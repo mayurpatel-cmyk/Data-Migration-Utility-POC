@@ -1,6 +1,6 @@
 const logger = require('../utils/logger')(__filename);
 // IMPORT YOUR MAPS HERE (Adjust the path to match your folder structure)
-const { COUNTRY_MAP, STATE_MAP,RECORD_TYPE_MAP } = require('../configs/mappings');
+//const { COUNTRY_MAP, STATE_MAP, RECORD_TYPE_MAP } = require('../configs/mappings');
 
 class MigrationService {
 
@@ -60,179 +60,118 @@ class MigrationService {
   // 2: Data Cleanser (Dates, Booleans, Picklists)
   cleanseData(value, sfType, fieldName, targetObject) {
     if (value === undefined || value === null || value === '') return null;
+    
+    // Kept your commented code intact in case you want to use it later
+    /*
     if (String(value).trim() === '#N/A') return '#N/A';
-
     switch (sfType) {
       case 'boolean':
-        const strVal = String(value).trim().toLowerCase();
-        return ['true', '1', 'yes', 'y', 'active'].includes(strVal);
-
-      // --- NUMBERS ---
-      case 'currency':
-      case 'double':
-      case 'percent':
-      case 'int':
-        if (typeof value === 'number') return value;
-        // Remove commas, currency symbols, and spaces (e.g., "$ 1,234.56" -> "1234.56")
-        const numericString = String(value).replace(/[^0-9.-]+/g, '');
-        const parsedNum = sfType === 'int' ? parseInt(numericString, 10) : parseFloat(numericString);
-        return isNaN(parsedNum) ? null : parsedNum;
-
-      // --- STRINGS ---
-      case 'string':
-        // Prevent SF "Data too large" errors (default standard is often 255)
-        return String(value).trim().substring(0, 255);
-
-      // --- DATES (Fixed grouping!) ---
-      case 'date':
-      case 'datetime':
-        if (typeof value === 'number') {
-          // Converts Excel serial number (e.g., 45565) to standard date
-          const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
-          return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
-        }
-        const parsedDate = new Date(value);
-        if (!isNaN(parsedDate.getTime())) {
-          return sfType === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
-        }
-        return value;
-
-      // --- NEW: Multi-Select Picklist Cleanser ---
-      case 'multipicklist':
-        // Takes "Apples,   Oranges , Bananas" 
-        // Returns "Apples;Oranges;Bananas"
-        return String(value)
-          .split(',')
-          .map(item => item.trim()) // Cleans the extra spaces off each item
-          .filter(item => item.length > 0) // Removes empty items if there was a trailing comma
-          .join(';');
-
-      case 'picklist':
-      case 'string':
-      case 'textarea':
-        let cleanStr = String(value).trim();
-
-        // --- NEW: RECORD TYPE RESOLUTION ---
-        // If the target field is exactly RecordTypeId, do the lookup
-        if (fieldName === 'RecordTypeId' && targetObject) {
-          const objectRecordTypes = RECORD_TYPE_MAP[targetObject];
-          
-          if (objectRecordTypes && objectRecordTypes[cleanStr]) {
-            return objectRecordTypes[cleanStr];
-          } else {
-            logger.warn(`Unmapped Record Type "${cleanStr}" for ${targetObject}.`);
-            // Optional: return a default ID here if you want to prevent failures
-            return cleanStr; 
-          }
-        }
-
-        // --- EXISTING: Address Resolution ---
-        if (fieldName) {
-          const lowerField = fieldName.toLowerCase();
-          const lowerVal = cleanStr.toLowerCase();
-
-          if (lowerField.includes('country') && COUNTRY_MAP[lowerVal]) {
-            return COUNTRY_MAP[lowerVal];
-          }
-          if ((lowerField.includes('state') || lowerField.includes('province')) && STATE_MAP[lowerVal]) {
-            return STATE_MAP[lowerVal];
-          }
-        }
-
-        // --- EXISTING: Truncation ---
-        if (sfType === 'string' && cleanStr.length > 255) {
-          logger.warn(`Truncating field [${fieldName || 'Unknown'}] - Exceeded 255 characters.`);
-          cleanStr = cleanStr.substring(0, 255);
-        }
-
-        return cleanStr;
-
+        // ... boolean logic ...
       default:
         return value;
     }
+    */
   }
 
-  //3: Payload Builder
+  // 3: Payload Builder
   buildPayload(rawRecords, mappings, options = {}) {
     const { 
       skipSelfReferencing = false, 
       onlySelfReferencing = false, 
-      excludeReferencesTo = [], // NEW: Hide these lookups in Pass 1
-      onlyReferencesTo = [],    // NEW: Isolate these lookups in Pass 3
+      excludeReferencesTo = [], 
+      onlyReferencesTo = [],    
       targetObject = '', 
       targetExtIdField = '' 
     } = options;
-
+  
     const payload = [];
     const isPatchMode = onlySelfReferencing || onlyReferencesTo.length > 0;
-
+  
     rawRecords.forEach((rawRow, originalIndex) => {
       const sfRecord = {};
       let hasPatchData = false;
       
-      // If we are patching, we MUST include the External ID so Salesforce knows what to update
-      if (isPatchMode && targetExtIdField) {
-        const primaryMapping = mappings.find(m => m.sfField === targetExtIdField);
-        if (primaryMapping && rawRow[primaryMapping.csvField]) {
-          sfRecord[targetExtIdField] = this.cleanseData(rawRow[primaryMapping.csvField], primaryMapping.type);
-        }
-      }
-
-      Object.entries(rawRow).forEach(([csvKey, csvValue]) => {
-        const cleanKey = csvKey.trim();
-        const mappingMeta = mappings.find(m => m.csvField === cleanKey);
-         if (!mappingMeta || !mappingMeta.sfField) return;
+      // MUST iterate over MAPPINGS, not rawRow, to catch completely empty Excel cells
+      mappings.forEach(mappingMeta => {
+        if (!mappingMeta || !mappingMeta.sfField) return;
+  
+        const csvKey = mappingMeta.csvField;
+        const csvValue = rawRow[csvKey];
+  
+        // 1. Skip Audit Fields in Patch Mode
         const isAuditField = ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById'].includes(mappingMeta.sfField);
-        
         if (isPatchMode && isAuditField) return; 
+  
+        // 2. Format Value (MUST BE 'let' so we can format dates below!)
+        let valueToUse = (csvValue === undefined || csvValue === '') ? null : csvValue;
+        
+        // --- EXCEL DATE FORMATTING ---
+        if (valueToUse !== null && (mappingMeta.type === 'date' || mappingMeta.type === 'datetime')) {
+          if (typeof valueToUse === 'number') {
+            const dateObj = new Date(Math.round((valueToUse - 25569) * 86400 * 1000));
+            valueToUse = mappingMeta.type === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
+          } else if (typeof valueToUse === 'string') {
+            const parsedDate = new Date(valueToUse);
+            if (!isNaN(parsedDate.getTime())) {
+              valueToUse = mappingMeta.type === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
+            }
+          }
+        }
+        // -----------------------------
 
-       const cleansedValue = this.cleanseData(csvValue, mappingMeta.type, mappingMeta.sfField, targetObject);
-        if (cleansedValue === null) return;
-
-        // Determine relationship targets
+        // Check if this field is our primary Upsert Key
+        const isPrimaryExtId = mappingMeta.sfField === targetExtIdField;
+  
+        // Drop the field to save payload size ONLY if it's null AND not our Upsert Key
+        if (valueToUse === null && !isPrimaryExtId) return;
+  
+        // 3. Dependency & Reference Logic
         const isSelfRef = mappingMeta.type === 'reference' && mappingMeta.referenceTo && mappingMeta.referenceTo.includes(targetObject);
         const referencesOther = mappingMeta.type === 'reference' && mappingMeta.referenceTo ? mappingMeta.referenceTo : [];
         
         const isExcludedCross = excludeReferencesTo.some(obj => referencesOther.includes(obj));
         const isOnlyTargetCross = onlyReferencesTo.length > 0 && onlyReferencesTo.some(obj => referencesOther.includes(obj));
-
-        // Skip logic based on current Pass
+  
         if (skipSelfReferencing && isSelfRef) return; 
         if (onlySelfReferencing && !isSelfRef) return; 
-        if (isExcludedCross) return; // Skip deferred lookups in Pass 1
-        if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return; // Skip everything else in Pass 3
-
-        // --- NEW FIX: Fallback for missing Relationship Names ---
+        if (isExcludedCross) return; 
+        if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return; 
+  
+        // 4. Relationship Name Resolution
         let relName = mappingMeta.relationshipName;
         if (!relName && mappingMeta.sfField) {
             if (mappingMeta.sfField.endsWith('Id')) {
-                relName = mappingMeta.sfField.slice(0, -2); // e.g., 'AccountId' -> 'Account'
+                relName = mappingMeta.sfField.slice(0, -2); 
             } else if (mappingMeta.sfField.endsWith('__c')) {
-                relName = mappingMeta.sfField.replace('__c', '__r'); // e.g., 'Custom__c' -> 'Custom__r'
+                relName = mappingMeta.sfField.replace('__c', '__r'); 
             }
         }
-        // --------------------------------------------------------
-
+  
+        // 5. Map to Salesforce Record Object
         if (mappingMeta.type === 'reference' && mappingMeta.relationalExtIdField && relName) {
           const relationalKey = `${relName}.${mappingMeta.relationalExtIdField}`;
-          sfRecord[relationalKey] = cleansedValue;
+          sfRecord[relationalKey] = valueToUse;
           if (isPatchMode) hasPatchData = true;
         } else {
-          sfRecord[mappingMeta.sfField] = cleansedValue;
+          sfRecord[mappingMeta.sfField] = valueToUse;
         }
       });
-
-      // Only add to payload if it's a normal run, or if it's a patch run that actually has relational data
+  
+      // Failsafe: Force the Upsert Key into the payload if it's completely missing
+      if (targetExtIdField && !sfRecord.hasOwnProperty(targetExtIdField)) {
+        sfRecord[targetExtIdField] = null;
+      }
+  
       if (!isPatchMode || (isPatchMode && hasPatchData)) {
         payload.push({ originalIndex, sfRecord });
       }
     });
-
+  
     return payload;
   }
 
-  // CORE EXECUTION 
- async executeUpsertBatch(conn, targetObjectOrJobs, records) {
+  // 4: CORE EXECUTION 
+  async executeUpsertBatch(conn, targetObjectOrJobs, records) {
     try {
       const rawJobs = Array.isArray(targetObjectOrJobs) 
         ? targetObjectOrJobs 

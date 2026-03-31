@@ -159,10 +159,7 @@ export class DefaultComponent implements OnInit {
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
     
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.warning('Please select a Primary Upsert Key before mapping.', 'Missing Configuration');
-      return;
-    }
+    // Removed the operationMode == 'upsert' check from here since it's now decided in Step 3
 
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
@@ -196,7 +193,7 @@ export class DefaultComponent implements OnInit {
     this.fetchObjectFields(this.selectedObject);
   }
 
- private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
+  private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
         const fieldsArray = response.fields ? response.fields : response;
@@ -273,7 +270,7 @@ export class DefaultComponent implements OnInit {
     }
   }
 
- queueAnotherObject() {
+  queueAnotherObject() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field.', 'No Mappings');
@@ -412,48 +409,48 @@ export class DefaultComponent implements OnInit {
     this.previewingItemIndex = index;
   }
 
- goToReview() {
-  this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
-  
-  if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-    this.toastr.warning('Please map at least one field.', 'Mapping Required');
-    return;
-  }
-  
-  const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-
-  if (this.confirmedMappings.length > 0) {
-    if (isUpsertMissingKey) {
-      this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+  goToReview() {
+    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
+    
+    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
     }
-
-    const enhancedMappings = this.confirmedMappings.map(mapping => {
-        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-        return {
-            ...mapping,
-            type: fieldMeta?.type,
-            referenceTo: fieldMeta?.referenceTo,
-            relationshipName: fieldMeta?.relationshipName
-        };
-    });
-
-    this.migrationQueue.push({
-        sheetName: this.selectedSheetName,
-        targetObject: this.selectedObject,
-        csvHeaders: [...this.csvHeaders],
-        mappings: enhancedMappings,
-        targetExtIdField: this.targetExtIdField,
-        operationMode: this.operationMode,
-    });
     
-    this.confirmedMappings = [];
-    this.targetExtIdField = '';
-  }
+    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
 
-  this.currentStep = 4;
-  this.cdr.detectChanges();
-}
+    if (this.confirmedMappings.length > 0) {
+      if (isUpsertMissingKey) {
+        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+        return;
+      }
+
+      const enhancedMappings = this.confirmedMappings.map(mapping => {
+          const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+          return {
+              ...mapping,
+              type: fieldMeta?.type,
+              referenceTo: fieldMeta?.referenceTo,
+              relationshipName: fieldMeta?.relationshipName
+          };
+      });
+
+      this.migrationQueue.push({
+          sheetName: this.selectedSheetName,
+          targetObject: this.selectedObject,
+          csvHeaders: [...this.csvHeaders],
+          mappings: enhancedMappings,
+          targetExtIdField: this.targetExtIdField,
+          operationMode: this.operationMode,
+      });
+      
+      this.confirmedMappings = [];
+      this.targetExtIdField = '';
+    }
+
+    this.currentStep = 4;
+    this.cdr.detectChanges();
+  }
 
   getAllMigrationPlans() {
     return this.migrationQueue;
