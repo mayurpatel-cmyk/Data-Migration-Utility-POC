@@ -8,7 +8,9 @@
       <div class="progress" style="height: 8px;">
         <div class="progress-bar progress-bar-striped progress-bar-animated"
              role="progressbar"
-             [style.width.%]="(currentStep / 4) * 100">
+             [style.width.%]="((currentStep - 1) / 4) * 100">
+             <!-- [style.width.%]="(currentStep / 4) * 100"> -->
+
         </div>
       </div>
     </div>
@@ -20,7 +22,7 @@
   </div>
 </div>
 
-@if (currentStep === 1) {
+<!-- @if (currentStep === 1) {
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 1: Select Source CRM">
@@ -60,7 +62,7 @@
     </app-card>
   </div>
 </div>
-}
+} -->
 
 @if (currentStep === 2) {
 <div class="row mb-4">
@@ -171,7 +173,7 @@
 
       <div class="bg-light p-3 rounded border mb-4 shadow-sm border-primary-subtle">
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Migration Mode</h6>
-        
+
         <div class="d-flex flex-wrap gap-4 align-items-start">
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opInsertStep3" value="insert" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
@@ -180,7 +182,7 @@
             </label>
             <div class="text-muted small">Creates new records. External IDs are not required.</div>
           </div>
-          
+
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3" value="upsert" [(ngModel)]="operationMode">
             <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">
@@ -192,7 +194,7 @@
           @if (operationMode === 'upsert') {
             <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2">
               <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> Primary Upsert Key:</label>
-              
+
               @if (isLoadingFields) {
                 <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
               } @else {
@@ -349,7 +351,8 @@
           <button class="btn btn-outline-primary d-flex align-items-center gap-2" (click)="queueAnotherObject()">
             <i class="feather icon-plus"></i> Save & Queue Another
           </button>
-          <button class="btn btn-primary d-flex align-items-center gap-2" (click)="goToReview()">
+          <!-- <button class="btn btn-primary d-flex align-items-center gap-2" (click)="goToReview()"> -->
+            <button class="btn btn-primary d-flex align-items-center gap-2" (click)="overrideGoToReview()">
             Review & Confirm <i class="feather icon-arrow-right"></i>
           </button>
         </div>
@@ -472,7 +475,8 @@
 
         @if (!selectedObject) {
           <div class="d-flex justify-content-end mt-4">
-            <button class="btn btn-primary shadow-sm d-flex align-items-center gap-2" (click)="goToReview()">
+            <!-- <button class="btn btn-primary shadow-sm d-flex align-items-center gap-2" (click)="goToReview()"> -->
+              <button class="btn btn-primary shadow-sm d-flex align-items-center gap-2" (click)="overrideGoToReview()">
               Review Queued Objects <i class="feather icon-arrow-right"></i>
             </button>
           </div>
@@ -628,8 +632,9 @@
               @for (fail of failedRecords; track $index) {
               <tr>
                 <td class="p-3 fw-bold text-dark border-end bg-white">
-                  {{ fail.record.Name || fail.record['Account Name'] || fail.record.LastName || 'Record #' + ($index +
-                  1) }}
+                  <!-- {{ fail.record.Name || fail.record['Account Name'] || fail.record.LastName || 'Record #' + ($index +
+                  1) }} -->
+                  {{ fail.record.Name || fail.record.LastName || fail.record.Email || 'Record #' + ($index + 1) }}
                 </td>
                 <td class="p-3 text-danger small bg-danger-subtle bg-opacity-10">
                   <div class="d-flex align-items-start gap-2">
@@ -647,7 +652,7 @@
 
       <div class="row mt-5 border-top pt-4">
         <div class="col-sm-12 text-center">
-          
+
           <div class="mb-4">
             @if (successfulRecords && successfulRecords.length > 0) {
               <button class="btn btn-outline-success mx-2 shadow-sm" (click)="downloadSuccessLog()">
@@ -663,7 +668,8 @@
           </div>
 
           <div class="mt-2">
-          <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="currentStep = 2">
+          <!-- <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="currentStep = 2"> -->
+            <button class="btn btn-primary shadow d-flex align-items-center gap-2" (click)="resetMigrationSession()">
           <i class="feather icon-plus-circle"></i> New Migration
         </button>
           </div>

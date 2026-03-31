@@ -56,30 +56,61 @@ exports.migrateData = async (req, res) => {
         })
         .filter(record => record !== null);
 
-      failures = rawResults
-        .map((resItem, index) => {
-          if (!resItem.success) {
-            let errorMessage = 'Unknown Error';
+      // failures = rawResults
+      //   .map((resItem, index) => {
+      //     if (!resItem.success) {
+      //       let errorMessage = 'Unknown Error';
             
-            if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
-              // If it's an array of strings, we just join them.
-              // If they are objects, we grab the message.
-              errorMessage = resItem.errors
-                .map(e => (typeof e === 'string' ? e : (e.message || JSON.stringify(e))))
-                .join(', ');
-            } else if (resItem.error) {
-              errorMessage = resItem.error;
-            }
+      //       if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
+      //         // If it's an array of strings, we just join them.
+      //         // If they are objects, we grab the message.
+      //         errorMessage = resItem.errors
+      //           .map(e => (typeof e === 'string' ? e : (e.message || JSON.stringify(e))))
+      //           .join(', ');
+      //       } else if (resItem.error) {
+      //         errorMessage = resItem.error;
+      //       }
 
-            return {
-              record: sentRecords[index], // Original data for the first column
-              error: errorMessage         // Cleaned up string for the second column
-            };
+      //       return {
+      //         record: sentRecords[index], // Original data for the first column
+      //         error: errorMessage         // Cleaned up string for the second column
+      //       };
+      //     }
+      //     return null;
+      //   })
+      //   .filter(record => record !== null);
+      failures = rawResults
+  .map((resItem, index) => {
+    if (!resItem.success) {
+      let errorMessage = 'Validation Error';
+
+      if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
+        // --- SMART ERROR PARSING ---
+        errorMessage = resItem.errors.map(e => {
+          // Check for Salesforce Duplicate Rule block
+          if (e.statusCode === 'DUPLICATES_DETECTED') {
+            return `Duplicate Found: This record already exists in Salesforce. (Rule: ${e.message})`;
           }
-          return null;
-        })
-        .filter(record => record !== null);
+          
+          // Check for standard validation or required fields
+          if (e.fields && e.fields.length > 0) {
+            return `${e.message} [Fields: ${e.fields.join(', ')}]`;
+          }
 
+          return e.message || JSON.stringify(e);
+        }).join(' | ');
+      } else if (resItem.error) {
+        errorMessage = resItem.error;
+      }
+
+      return {
+        record: sentRecords[index], // Keeps the original data for the table's left column
+        error: errorMessage        // Friendly error for the right column
+      };
+    }
+    return null;
+  })
+  .filter(record => record !== null);
       // Recalculate stats based on formatted data
       stats = {
         success: successfulRecords.length,

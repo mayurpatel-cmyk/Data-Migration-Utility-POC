@@ -43,8 +43,10 @@ export class DefaultComponent implements OnInit {
   // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
 
-  currentStep: number = 1;
-  selectedCRM: string = '';
+  // currentStep: number = 1;
+  // selectedCRM: string = '';
+  currentStep: number = 2;
+  selectedCRM: string = 'Zoho';
   selectedFile: File | null = null;
   selectedObject: string = '';
   csvHeaders: string[] = [];
@@ -75,7 +77,7 @@ export class DefaultComponent implements OnInit {
   previewItemHeaders: string[] = [];
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
-  
+
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -156,7 +158,7 @@ export class DefaultComponent implements OnInit {
     if (!newObject) return;
     this.selectedObject = newObject;
     this.isLoadingFields = true;
-    this.targetExtIdField = ''; 
+    this.targetExtIdField = '';
     this.fetchObjectFields(newObject);
   }
 
@@ -272,7 +274,7 @@ export class DefaultComponent implements OnInit {
 
   queueAnotherObject() {
     if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error("Cannot queue. Please resolve the sequence error first.", "Sequence Blocked");
+      this.toastr.error(this.getDynamicSequenceError()!, "Sequence Blocked");
       return;
     }
 
@@ -308,7 +310,7 @@ export class DefaultComponent implements OnInit {
       targetObject: this.selectedObject,
       csvHeaders: [...this.csvHeaders],
       mappings: enhancedMappings,
-      operationMode: this.operationMode, 
+      operationMode: this.operationMode,
       targetExtIdField: this.targetExtIdField
     });
 
@@ -319,7 +321,7 @@ export class DefaultComponent implements OnInit {
     this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
     this.confirmedMappings = [];
     this.targetExtIdField = '';
-    this.operationMode = 'insert'; 
+    this.operationMode = 'insert';
     this.showPreview = false;
     this.previewingItemIndex = null;
 
@@ -395,7 +397,7 @@ export class DefaultComponent implements OnInit {
     }
     const item = this.migrationQueue[index];
     const activeMappings = item.mappings.filter(m => m.sfField !== '');
-    
+
     if (activeMappings.length === 0) {
       this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
       return;
@@ -515,7 +517,7 @@ export class DefaultComponent implements OnInit {
           next: (response) => {
             console.log('Migration response from server:', response);
             this.isMigrating = false;
-            
+
             const successCount = response.stats?.success || 0;
             const failedCount = response.stats?.failed || 0;
             this.migrationSummary = response.stats;
@@ -617,7 +619,9 @@ export class DefaultComponent implements OnInit {
     this.previewHeaders = [];
     this.previewingItemIndex = null;
 
-    this.currentStep = 1;
+    // this.currentStep = 1;
+    this.currentStep = 2;
+    this.selectedCRM = 'Zoho';
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
@@ -675,6 +679,6 @@ export class DefaultComponent implements OnInit {
          return;
        }
     }
-    this.goToReview(); 
+    this.goToReview();
   }
 }
