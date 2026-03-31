@@ -75,6 +75,7 @@ export class DefaultComponent implements OnInit {
   previewItemHeaders: string[] = [];
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
+  
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -558,29 +559,35 @@ export class DefaultComponent implements OnInit {
   }
 
   downloadErrorLog() {
-    const report = this.failedRecords.map(f => ({
-      Error: f.error,
-      ...f.record
-    }));
-    const worksheet = utils.json_to_sheet(report);
-    const csvOutput = utils.sheet_to_csv(worksheet);
-    this.saveAsCsv(csvOutput, 'error_log');
-  }
+  // We transform the failedRecords array to make the CSV readable
+  const report = this.failedRecords.map(f => ({
+    Error: f.error,
+    ...f.record
+  }));
 
-  private saveAsCsv(buffer: string, fileName: string) {
-    const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = window.URL.createObjectURL(data);
-    link.download = `${fileName}_${new Date().getTime()}.csv`;
-    link.click();
-  }
+  const worksheet = utils.json_to_sheet(report);
+  const csvOutput = utils.sheet_to_csv(worksheet);
+  this.saveAsCsv(csvOutput, 'error_log');
+}
+
+ private saveAsCsv(buffer: string, fileName: string) {
+  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = window.URL.createObjectURL(data);
+  link.download = `${fileName}_${new Date().getTime()}.csv`;
+  link.click();
+}
 
   private autoNavigate() {
     setTimeout(() => {
-      const element = document.querySelector('.row.mb-4:last-of-type');
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
-      }
+       const element = document.querySelector('.row.mb-4:last-of-type');
+    if (element) {
+      element.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+        inline: 'nearest'
+      });
+    }
     }, 100);
   }
 
