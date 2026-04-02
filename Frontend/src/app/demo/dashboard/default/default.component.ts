@@ -7,6 +7,7 @@ import { CardComponent } from 'src/app/theme/shared/components/card/card.compone
 import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
+import Swal from 'sweetalert2';
 
 interface MappingMeta {
   csvField: string;
@@ -92,20 +93,28 @@ export class DefaultComponent implements OnInit {
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
 
-  ngOnInit() {
+ ngOnInit() {
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
         this.sfObjects = objects;
-        setTimeout(() => (this.isLoadingObjects = false));
+        
+        // ADDED: cdr.detectChanges() to force the UI to remove the loading spinner instantly
+        setTimeout(() => {
+          this.isLoadingObjects = false;
+          this.cdr.detectChanges(); 
+        });
       },
       error: (err) => {
-        setTimeout(() => (this.isLoadingObjects = false));
+        // ADDED: cdr.detectChanges() here as well
+        setTimeout(() => {
+          this.isLoadingObjects = false;
+          this.cdr.detectChanges(); 
+        });
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
     });
   }
-
   onCRMSelect(crm: string) {
     this.selectedCRM = crm;
     setTimeout(() => {
@@ -276,9 +285,7 @@ export class DefaultComponent implements OnInit {
 
   @HostListener('document:click', ['$event'])
   clickout(event: Event) {
-    if (!this.eRef.nativeElement.contains(event.target)) {
       this.closeAllDropdowns();
-    }
   }
 
   // --- CORE LOGIC METHODS ---
@@ -321,14 +328,18 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  onSheetChangeInMapping(newSheet: string) {
-    this.onSheetSelect(newSheet);
-    this.mappings = this.csvHeaders.map((header) => ({
-      csvField: header,
-      sfField: '',
-      relationalExtIdField: ''
-    }));
-    this.showPreview = false;
+onSheetChangeInMapping(newSheet: string) {
+    // ngModelChange fires during render. We MUST defer array recreation.
+    setTimeout(() => {
+      this.onSheetSelect(newSheet);
+      this.mappings = this.csvHeaders.map(header => ({
+        csvField: header,
+        sfField: '',
+        relationalExtIdField: ''
+      }));
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    });
   }
 
   onObjectChangeInMapping(newObject: string) {
@@ -339,82 +350,124 @@ export class DefaultComponent implements OnInit {
     this.fetchObjectFields(this.selectedObject);
   }
 
-  autoMapFields() {
+ autoMapFields() {
     if (!this.sfFields || this.sfFields.length === 0) {
       this.toastr.warning('Salesforce fields are not loaded yet. Please wait.', 'Not Ready');
       return;
     }
-    let matchCount = 0;
-    const normalizeString = (str: string) => {
-      return String(str)
-        .toLowerCase()
-        .replace(/__c$/g, '')
-        .replace(/id$/g, '')
-        .replace(/[^a-z0-9]/g, '');
-    };
 
-    const sfFieldDict: { [key: string]: any } = {};
-    this.sfFields.forEach((field) => {
-      sfFieldDict[normalizeString(field.name)] = field;
-      sfFieldDict[normalizeString(field.label)] = field;
-    });
+    // Wrap in setTimeout to defer the massive state update to the next tick
+    setTimeout(() => {
+      let matchCount = 0;
 
-    this.mappings.forEach((mapping) => {
-      if (!mapping.sfField) {
-        const normalCsv = normalizeString(mapping.csvField);
-        const matchedField = sfFieldDict[normalCsv];
-        if (matchedField) {
-          mapping.sfField = matchedField.name;
-          matchCount++;
-          this.onSfFieldChange(mapping);
+      const normalizeString = (str: string) => {
+        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, ''); 
+      };
+
+      const sfFieldDict: { [key: string]: any } = {};
+      this.sfFields.forEach(field => {
+        sfFieldDict[normalizeString(field.name)] = field;
+        sfFieldDict[normalizeString(field.label)] = field; 
+      });
+
+      this.mappings.forEach(mapping => {
+        if (!mapping.sfField) {
+          const normalCsv = normalizeString(mapping.csvField);
+          const matchedField = sfFieldDict[normalCsv];
+
+          if (matchedField) {
+            mapping.sfField = matchedField.name;
+            matchCount++;
+            this.onSfFieldChange(mapping);
+          }
         }
-      }
-    });
+      });
 
-    if (matchCount > 0) {
-      this.toastr.success(`Successfully auto-mapped ${matchCount} fields!`, 'Auto-Map Complete');
-    } else {
-      this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
-    }
-    this.cdr.detectChanges();
+      if (matchCount > 0) {
+        this.toastr.success(`Successfully auto-mapped ${matchCount} fields!`, 'Auto-Map Complete');
+      } else {
+        this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
+      }
+      
+      this.cdr.detectChanges();
+    });
   }
 
-  private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
+clearAllMappings() {
+    Swal.fire({
+      title: 'Are you sure?',
+      text: "You will lose all your currently mapped fields!",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc3545', // Matches Bootstrap danger red
+      cancelButtonColor: '#6c757d',  // Matches Bootstrap secondary grey
+      confirmButtonText: 'Yes, clear them!'
+    }).then((result) => {
+      // This block only runs if they clicked "Yes"
+      if (result.isConfirmed) {
+        this.mappings.forEach(m => {
+          m.sfField = '';
+          m.relationalExtIdField = '';
+          m.parentObjectName = undefined;
+        });
+        
+        this.toastr.info('All mappings have been reset.', 'Cleared');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+ private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
-        const fieldsArray = response.fields ? response.fields : response;
-        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
-
-        if (!isEditMode) {
-          this.mappings.forEach((m) => {
-            m.sfField = '';
-            m.relationalExtIdField = '';
-          });
-        } else {
-          this.mappings.forEach((m) => {
-            if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
-              m.isLoadingParentFields = true;
-              this.migrationService.getObjectFields(m.parentObjectName).subscribe({
-                next: (pRes: any) => {
-                  const pFieldsArray = pRes.fields ? pRes.fields : pRes;
-                  this.parentObjectFieldsCache[m.parentObjectName!] = Array.isArray(pFieldsArray) ? pFieldsArray : [];
-                  m.isLoadingParentFields = false;
-                  this.cdr.detectChanges();
-                }
-              });
-            }
-          });
-        }
-
+        // Move ALL state mutations inside setTimeout to prevent API race conditions
         setTimeout(() => {
+          const fieldsArray = response.fields ? response.fields : response;
+          // ADDED: Sort main object fields alphabetically
+          this.sfFields = this.sortFieldsAlphabetically(fieldsArray);
+
+          if (!isEditMode) {
+            this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+          } else {
+            this.mappings.forEach(m => {
+              if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
+                m.isLoadingParentFields = true;
+                this.migrationService.getObjectFields(m.parentObjectName).subscribe({
+                  next: (pRes: any) => {
+                    setTimeout(() => {
+                      const pFieldsArray = pRes.fields ? pRes.fields : pRes;
+                      // ADDED: Sort parent object fields alphabetically
+                      this.parentObjectFieldsCache[m.parentObjectName!] = this.sortFieldsAlphabetically(pFieldsArray);
+                      m.isLoadingParentFields = false;
+                      this.cdr.detectChanges();
+                    });
+                  }
+                });
+              }
+            });
+          }
+
           this.isLoadingFields = false;
           this.cdr.detectChanges();
         });
       },
       error: (err) => {
-        this.isLoadingFields = false;
-        this.toastr.error('Failed to load object fields.', 'API Error');
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.toastr.error('Failed to load object fields.', 'API Error');
+          this.cdr.detectChanges();
+        });
       }
+    });
+  }
+
+  private sortFieldsAlphabetically(fields: any[]): any[] {
+    if (!Array.isArray(fields)) return [];
+    return fields.sort((a, b) => {
+      // Sort by label, fallback to name if label doesn't exist
+      const valA = (a.label || a.name || '').toLowerCase();
+      const valB = (b.label || b.name || '').toLowerCase();
+      return valA.localeCompare(valB);
     });
   }
 
@@ -422,7 +475,7 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
-  onSfFieldChange(mapping: MappingMeta) {
+ onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
     if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
@@ -430,19 +483,25 @@ export class DefaultComponent implements OnInit {
       mapping.parentObjectName = parentObj;
 
       if (!this.parentObjectFieldsCache[parentObj]) {
-        mapping.isLoadingParentFields = true;
+        // Defer UI spinner activation
+        setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
 
         this.migrationService.getObjectFields(parentObj).subscribe({
           next: (response: any) => {
-            const fieldsArray = response.fields ? response.fields : response;
-            this.parentObjectFieldsCache[parentObj] = Array.isArray(fieldsArray) ? fieldsArray : [];
-            mapping.isLoadingParentFields = false;
-            this.cdr.detectChanges();
+            setTimeout(() => {
+              const fieldsArray = response.fields ? response.fields : response;
+              // ADDED: Sort the relational parent fields alphabetically
+              this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
+              mapping.isLoadingParentFields = false;
+              this.cdr.detectChanges();
+            });
           },
           error: (err) => {
-            mapping.isLoadingParentFields = false;
-            this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
-            this.cdr.detectChanges();
+            setTimeout(() => {
+              mapping.isLoadingParentFields = false;
+              this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
+              this.cdr.detectChanges();
+            });
           }
         });
       }
@@ -737,17 +796,21 @@ export class DefaultComponent implements OnInit {
     link.click();
   }
 
-  private autoNavigate() {
+ private autoNavigate() {
     setTimeout(() => {
-      const element = document.querySelector('.row.mb-4:last-of-type');
-      if (element) {
-        element.scrollIntoView({
+      // Find all rows
+      const rows = document.querySelectorAll('.row.mb-4');
+      // Grab the last one (which is the newly opened step)
+      const newStepElement = rows[rows.length - 1];
+      
+      if (newStepElement) {
+        // Scroll so the TOP of the new step is at the top of the screen
+        newStepElement.scrollIntoView({
           behavior: 'smooth',
-          block: 'start',
-          inline: 'nearest'
+          block: 'start' // Changed from 'nearest' to 'start'
         });
       }
-    }, 100);
+    }, 150); // Slightly increased delay to ensure Angular has rendered the DOM
   }
 
   resetMigrationSession() {
