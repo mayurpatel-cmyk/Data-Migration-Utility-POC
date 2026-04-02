@@ -83,7 +83,7 @@ export class DefaultComponent implements OnInit {
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
-        this.sfObjects = objects;
+        this.sfObjects = objects.sort((a: any, b: any) => a.label.localeCompare(b.label));
         setTimeout(() => this.isLoadingObjects = false);
       },
       error: (err) => {
@@ -206,7 +206,7 @@ export class DefaultComponent implements OnInit {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
         const fieldsArray = response.fields ? response.fields : response;
-        this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
+        this.sfFields = (Array.isArray(fieldsArray) ? fieldsArray : []).sort((a, b) => a.label.localeCompare(b.label));
 
         if (!isEditMode) {
           this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
@@ -236,7 +236,7 @@ export class DefaultComponent implements OnInit {
         this.toastr.error('Failed to load object fields.', 'API Error');
       }
     });
-  }
+}
 
   getConfirmedCount(mappings: any[]): number {
     return mappings.filter(m => m.sfField && m.sfField !== '').length;
@@ -680,5 +680,5 @@ export class DefaultComponent implements OnInit {
        }
     }
     this.goToReview();
-  }
+}
 }

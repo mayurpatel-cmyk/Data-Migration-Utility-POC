@@ -506,8 +506,10 @@
         <div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center py-3">
           <h6 class="m-0 text-primary-emphasis fw-bold d-flex align-items-center gap-2">
             <i class="feather icon-box"></i> Target Object: {{ plan.targetObject }}
-            <span class="ms-2 text-muted fw-normal">(Upsert Key: <code class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField || 'None' }}</code>)</span>
-          </h6>
+            @if (plan.operationMode === 'upsert'){<span class="ms-2 text-muted fw-normal">
+                  (Upsert Key: <code class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField || 'None' }}</code>)
+             </span>}
+            </h6>
           <span class="badge bg-secondary px-3 py-2 d-flex align-items-center gap-1"><i
               class="feather icon-file-text"></i> Data Source: {{ plan.sheetName }}</span>
         </div>
