@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Component, OnInit, inject, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
-import { CardComponent } from "src/app/theme/shared/components/card/card.component";
-import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
+import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
+import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
 
@@ -17,6 +17,14 @@ interface MappingMeta {
   relationalExtIdField?: string;
   parentObjectName?: string;
   isLoadingParentFields?: boolean;
+
+  // UI State for the Main Field Dropdown
+  isDropdownOpen?: boolean;
+  searchQuery?: string;
+
+  // NEW: UI State for the Parent Lookup Dropdown
+  isParentDropdownOpen?: boolean;
+  parentSearchQuery?: string;
 }
 
 interface JobQueueItem {
@@ -39,12 +47,11 @@ export class DefaultComponent implements OnInit {
   private migrationService = inject(MigrationService);
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
+  private eRef = inject(ElementRef);
 
   // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
 
-  // currentStep: number = 1;
-  // selectedCRM: string = '';
   currentStep: number = 2;
   selectedCRM: string = 'Zoho';
   selectedFile: File | null = null;
@@ -78,16 +85,22 @@ export class DefaultComponent implements OnInit {
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
 
+  // --- STANDALONE DROPDOWN STATES ---
+  isObjectDropdownOpen = false;
+  objectSearchQuery = '';
+
+  isUpsertKeyDropdownOpen = false;
+  upsertKeySearchQuery = '';
 
   ngOnInit() {
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
         this.sfObjects = objects;
-        setTimeout(() => this.isLoadingObjects = false);
+        setTimeout(() => (this.isLoadingObjects = false));
       },
       error: (err) => {
-        setTimeout(() => this.isLoadingObjects = false);
+        setTimeout(() => (this.isLoadingObjects = false));
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
     });
@@ -133,9 +146,7 @@ export class DefaultComponent implements OnInit {
       const worksheet = this.workbook.Sheets[sheetName];
       const json: any[][] = utils.sheet_to_json(worksheet, { header: 1 });
       if (json.length > 0) {
-        this.csvHeaders = json[0]
-          .map((h: any) => h ? String(h).trim() : '')
-          .filter((h: string) => h.length > 0);
+        this.csvHeaders = json[0].map((h: any) => (h ? String(h).trim() : '')).filter((h: string) => h.length > 0);
       } else {
         this.csvHeaders = [];
         this.toastr.warning(`Sheet "${sheetName}" appears to be empty.`, 'Empty Data');
@@ -143,15 +154,144 @@ export class DefaultComponent implements OnInit {
     }
   }
 
+  // --- SEARCHABLE DROPDOWN HELPERS ---
+
+  getSfObjectLabel(objName: string): string {
+    if (!objName) return '';
+    const obj = this.sfObjects.find((o) => o.name === objName);
+    return obj ? `${obj.label} (${obj.name})` : objName;
+  }
+
+  getFilteredSfObjects(): any[] {
+    if (!this.objectSearchQuery) return this.sfObjects;
+    const lowerQuery = this.objectSearchQuery.toLowerCase();
+    return this.sfObjects.filter((o) => o.label?.toLowerCase().includes(lowerQuery) || o.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getFilteredUpsertKeys(): any[] {
+    if (!this.upsertKeySearchQuery) return this.sfFields;
+    const lowerQuery = this.upsertKeySearchQuery.toLowerCase();
+    return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getSfFieldLabel(fieldName: string): string {
+    if (!fieldName) return '';
+    const field = this.getSfFieldMeta(fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  getFilteredSfFields(query?: string): any[] {
+    if (!query) return this.sfFields;
+    const lowerQuery = query.toLowerCase();
+    return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  // NEW: Helpers for Parent Ext ID Lookup
+  getParentFieldLabel(mapping: MappingMeta, fieldName?: string): string {
+    if (!fieldName) return '';
+    if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
+    if (!mapping.parentObjectName) return fieldName;
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+    const field = parentFields.find((f: any) => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  getFilteredParentFields(mapping: MappingMeta): any[] {
+    if (!mapping.parentObjectName) return [];
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+    if (!mapping.parentSearchQuery) return parentFields;
+    const lowerQuery = mapping.parentSearchQuery.toLowerCase();
+    return parentFields.filter((f: any) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  // --- DROPDOWN TOGGLES & SELECTORS ---
+
+  toggleObjectDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isObjectDropdownOpen;
+    this.closeAllDropdowns();
+    this.isObjectDropdownOpen = !wasOpen;
+    if (this.isObjectDropdownOpen) this.objectSearchQuery = '';
+  }
+
+  toggleUpsertKeyDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isUpsertKeyDropdownOpen;
+    this.closeAllDropdowns();
+    this.isUpsertKeyDropdownOpen = !wasOpen;
+    if (this.isUpsertKeyDropdownOpen) this.upsertKeySearchQuery = '';
+  }
+
+  toggleDropdown(mapping: MappingMeta, event: Event) {
+    event.stopPropagation();
+    const currentState = mapping.isDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isDropdownOpen = !currentState;
+    if (mapping.isDropdownOpen) mapping.searchQuery = '';
+  }
+
+  toggleParentDropdown(mapping: MappingMeta, event: Event) {
+    event.stopPropagation();
+    const currentState = mapping.isParentDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isParentDropdownOpen = !currentState;
+    if (mapping.isParentDropdownOpen) mapping.parentSearchQuery = '';
+  }
+
+  selectTargetObject(objName: string, stepContext: number) {
+    this.selectedObject = objName;
+    this.isObjectDropdownOpen = false;
+    if (stepContext === 2) {
+      this.onStep2ObjectChange(objName);
+    } else {
+      this.onObjectChangeInMapping(objName);
+    }
+  }
+
+  selectUpsertKey(fieldName: string) {
+    this.targetExtIdField = fieldName;
+    this.isUpsertKeyDropdownOpen = false;
+  }
+
+  selectField(mapping: MappingMeta, fieldName: string) {
+    mapping.sfField = fieldName;
+    mapping.isDropdownOpen = false;
+    this.onSfFieldChange(mapping);
+  }
+
+  selectParentField(mapping: MappingMeta, fieldName: string) {
+    mapping.relationalExtIdField = fieldName;
+    mapping.isParentDropdownOpen = false;
+  }
+
+  // Unified global close
+  closeAllDropdowns() {
+    this.mappings.forEach((m) => {
+      m.isDropdownOpen = false;
+      m.isParentDropdownOpen = false; // Close parent dropdowns too!
+    });
+    this.isObjectDropdownOpen = false;
+    this.isUpsertKeyDropdownOpen = false;
+  }
+
+  @HostListener('document:click', ['$event'])
+  clickout(event: Event) {
+    if (!this.eRef.nativeElement.contains(event.target)) {
+      this.closeAllDropdowns();
+    }
+  }
+
+  // --- CORE LOGIC METHODS ---
+
   getSfFieldMeta(fieldName: string): any {
-    return this.sfFields.find(f => f.name === fieldName);
+    return this.sfFields.find((f) => f.name === fieldName);
   }
 
   getMissingRequiredFields(): string[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    const requiredSfFields = this.sfFields.filter(f => f.isRequired).map(f => f.name);
-    const currentlyMappedSfFields = this.mappings.map(m => m.sfField).filter(val => val !== '');
-    return requiredSfFields.filter(reqField => !currentlyMappedSfFields.includes(reqField));
+    const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
+    const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
+    return requiredSfFields.filter((reqField) => !currentlyMappedSfFields.includes(reqField));
   }
 
   onStep2ObjectChange(newObject: string) {
@@ -164,19 +304,16 @@ export class DefaultComponent implements OnInit {
 
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
-
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
       this.toastr.warning('Please select a Primary Upsert Key before mapping.', 'Missing Configuration');
       return;
     }
-
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
       this.showPreview = false;
       this.previewingItemIndex = null;
-
-      this.mappings = this.csvHeaders.map(header => ({
+      this.mappings = this.csvHeaders.map((header) => ({
         csvField: header,
         sfField: '',
         relationalExtIdField: ''
@@ -186,7 +323,7 @@ export class DefaultComponent implements OnInit {
 
   onSheetChangeInMapping(newSheet: string) {
     this.onSheetSelect(newSheet);
-    this.mappings = this.csvHeaders.map(header => ({
+    this.mappings = this.csvHeaders.map((header) => ({
       csvField: header,
       sfField: '',
       relationalExtIdField: ''
@@ -202,6 +339,46 @@ export class DefaultComponent implements OnInit {
     this.fetchObjectFields(this.selectedObject);
   }
 
+  autoMapFields() {
+    if (!this.sfFields || this.sfFields.length === 0) {
+      this.toastr.warning('Salesforce fields are not loaded yet. Please wait.', 'Not Ready');
+      return;
+    }
+    let matchCount = 0;
+    const normalizeString = (str: string) => {
+      return String(str)
+        .toLowerCase()
+        .replace(/__c$/g, '')
+        .replace(/id$/g, '')
+        .replace(/[^a-z0-9]/g, '');
+    };
+
+    const sfFieldDict: { [key: string]: any } = {};
+    this.sfFields.forEach((field) => {
+      sfFieldDict[normalizeString(field.name)] = field;
+      sfFieldDict[normalizeString(field.label)] = field;
+    });
+
+    this.mappings.forEach((mapping) => {
+      if (!mapping.sfField) {
+        const normalCsv = normalizeString(mapping.csvField);
+        const matchedField = sfFieldDict[normalCsv];
+        if (matchedField) {
+          mapping.sfField = matchedField.name;
+          matchCount++;
+          this.onSfFieldChange(mapping);
+        }
+      }
+    });
+
+    if (matchCount > 0) {
+      this.toastr.success(`Successfully auto-mapped ${matchCount} fields!`, 'Auto-Map Complete');
+    } else {
+      this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
+    }
+    this.cdr.detectChanges();
+  }
+
   private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
@@ -209,9 +386,12 @@ export class DefaultComponent implements OnInit {
         this.sfFields = Array.isArray(fieldsArray) ? fieldsArray : [];
 
         if (!isEditMode) {
-          this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+          this.mappings.forEach((m) => {
+            m.sfField = '';
+            m.relationalExtIdField = '';
+          });
         } else {
-          this.mappings.forEach(m => {
+          this.mappings.forEach((m) => {
             if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
               m.isLoadingParentFields = true;
               this.migrationService.getObjectFields(m.parentObjectName).subscribe({
@@ -239,7 +419,7 @@ export class DefaultComponent implements OnInit {
   }
 
   getConfirmedCount(mappings: any[]): number {
-    return mappings.filter(m => m.sfField && m.sfField !== '').length;
+    return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
   onSfFieldChange(mapping: MappingMeta) {
@@ -274,28 +454,24 @@ export class DefaultComponent implements OnInit {
 
   queueAnotherObject() {
     if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error(this.getDynamicSequenceError()!, "Sequence Blocked");
+      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
       return;
     }
-
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field.', 'No Mappings');
       return;
     }
-
     const missingFields = this.getMissingRequiredFields();
     if (missingFields.length > 0) {
       this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
       return;
     }
-
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
       this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
       return;
     }
-
-    const enhancedMappings = activeMappings.map(mapping => {
+    const enhancedMappings = activeMappings.map((mapping) => {
       const fieldMeta = this.getSfFieldMeta(mapping.sfField);
       return {
         ...mapping,
@@ -315,16 +491,14 @@ export class DefaultComponent implements OnInit {
     });
 
     this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
-
     this.selectedObject = '';
     this.sfFields = [];
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
+    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
     this.confirmedMappings = [];
     this.targetExtIdField = '';
     this.operationMode = 'insert';
     this.showPreview = false;
     this.previewingItemIndex = null;
-
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
@@ -340,47 +514,40 @@ export class DefaultComponent implements OnInit {
   }
 
   editQueuedItem(index: number) {
-    if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
+    if (this.selectedObject && this.mappings.some((m) => m.sfField !== '')) {
       this.queueAnotherObject();
       this.toastr.info(`Saved current mapping to queue before editing.`, 'Queue Updated');
     }
-
     const itemToEdit = this.migrationQueue.splice(index, 1)[0];
     this.previewingItemIndex = null;
     this.showPreview = false;
-
     this.selectedSheetName = itemToEdit.sheetName;
     this.selectedObject = itemToEdit.targetObject;
     this.csvHeaders = [...itemToEdit.csvHeaders];
-    this.mappings = itemToEdit.mappings.map(m => ({...m}));
+    this.mappings = itemToEdit.mappings.map((m) => ({ ...m }));
     this.targetExtIdField = itemToEdit.targetExtIdField || '';
     this.operationMode = itemToEdit.operationMode || 'insert';
-
     this.currentStep = 3;
     this.isLoadingFields = true;
     this.cdr.detectChanges();
-
     this.fetchObjectFields(this.selectedObject, true);
   }
 
   previewCurrentMapping() {
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
       return;
     }
-
     const worksheet = this.workbook!.Sheets[this.selectedSheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
-
-    this.previewHeaders = activeMappings.map(m => m.sfField);
+    this.previewHeaders = activeMappings.map((m) => m.sfField);
     const limit = Math.min(rawData.length, 5);
     const previewRows = [];
-
     for (let i = 0; i < limit; i++) {
       const rawRow = rawData[i];
       const sfRecord: any = {};
-      activeMappings.forEach(mapping => {
+      activeMappings.forEach((mapping) => {
         sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
       });
       previewRows.push(sfRecord);
@@ -396,24 +563,20 @@ export class DefaultComponent implements OnInit {
       return;
     }
     const item = this.migrationQueue[index];
-    const activeMappings = item.mappings.filter(m => m.sfField !== '');
-
+    const activeMappings = item.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
       return;
     }
-
     const worksheet = this.workbook!.Sheets[item.sheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
-
-    this.previewItemHeaders = activeMappings.map(m => m.sfField);
+    this.previewItemHeaders = activeMappings.map((m) => m.sfField);
     const limit = Math.min(rawData.length, 5);
     const previewRows = [];
-
     for (let i = 0; i < limit; i++) {
       const rawRow = rawData[i];
       const sfRecord: any = {};
-      activeMappings.forEach(mapping => {
+      activeMappings.forEach((mapping) => {
         sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
       });
       previewRows.push(sfRecord);
@@ -423,22 +586,18 @@ export class DefaultComponent implements OnInit {
   }
 
   goToReview() {
-    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
-
+    this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
     }
-
     const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-
     if (this.confirmedMappings.length > 0) {
       if (isUpsertMissingKey) {
         this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
         return;
       }
-
-      const enhancedMappings = this.confirmedMappings.map(mapping => {
+      const enhancedMappings = this.confirmedMappings.map((mapping) => {
         const fieldMeta = this.getSfFieldMeta(mapping.sfField);
         return {
           ...mapping,
@@ -454,7 +613,7 @@ export class DefaultComponent implements OnInit {
         csvHeaders: [...this.csvHeaders],
         mappings: enhancedMappings,
         targetExtIdField: this.targetExtIdField,
-        operationMode: this.operationMode,
+        operationMode: this.operationMode
       });
 
       this.confirmedMappings = [];
@@ -471,7 +630,7 @@ export class DefaultComponent implements OnInit {
   }
 
   getActiveMappings(mappings: any[]) {
-    return mappings.filter(m => m.sfField && m.sfField !== '');
+    return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
   startMigration() {
@@ -493,7 +652,7 @@ export class DefaultComponent implements OnInit {
         for (const job of this.migrationQueue) {
           const worksheet = this.workbook!.Sheets[job.sheetName];
           const rawData: any[] = utils.sheet_to_json(worksheet);
-          const relationalMapping = job.mappings.find(m => m.type === 'reference' && m.relationalExtIdField !== '');
+          const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
 
           if (relationalMapping) {
             const parentCsvColumn = relationalMapping.csvField;
@@ -509,7 +668,7 @@ export class DefaultComponent implements OnInit {
             records: rawData,
             mappings: job.mappings,
             targetExtIdField: job.targetExtIdField,
-            operationMode: job.operationMode,
+            operationMode: job.operationMode
           });
         }
 
@@ -545,7 +704,6 @@ export class DefaultComponent implements OnInit {
             this.cdr.detectChanges();
           }
         });
-
       } catch (error) {
         this.isMigrating = false;
         this.toastr.error('Failed to read data from the file.', 'Parsing Error');
@@ -561,35 +719,34 @@ export class DefaultComponent implements OnInit {
   }
 
   downloadErrorLog() {
-  // We transform the failedRecords array to make the CSV readable
-  const report = this.failedRecords.map(f => ({
-    Error: f.error,
-    ...f.record
-  }));
+    const report = this.failedRecords.map((f) => ({
+      Error: f.error,
+      ...f.record
+    }));
 
-  const worksheet = utils.json_to_sheet(report);
-  const csvOutput = utils.sheet_to_csv(worksheet);
-  this.saveAsCsv(csvOutput, 'error_log');
-}
+    const worksheet = utils.json_to_sheet(report);
+    const csvOutput = utils.sheet_to_csv(worksheet);
+    this.saveAsCsv(csvOutput, 'error_log');
+  }
 
- private saveAsCsv(buffer: string, fileName: string) {
-  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = window.URL.createObjectURL(data);
-  link.download = `${fileName}_${new Date().getTime()}.csv`;
-  link.click();
-}
+  private saveAsCsv(buffer: string, fileName: string) {
+    const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(data);
+    link.download = `${fileName}_${new Date().getTime()}.csv`;
+    link.click();
+  }
 
   private autoNavigate() {
     setTimeout(() => {
-       const element = document.querySelector('.row.mb-4:last-of-type');
-    if (element) {
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-        inline: 'nearest'
-      });
-    }
+      const element = document.querySelector('.row.mb-4:last-of-type');
+      if (element) {
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
     }, 100);
   }
 
@@ -619,7 +776,6 @@ export class DefaultComponent implements OnInit {
     this.previewHeaders = [];
     this.previewingItemIndex = null;
 
-    // this.currentStep = 1;
     this.currentStep = 2;
     this.selectedCRM = 'Zoho';
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -629,7 +785,7 @@ export class DefaultComponent implements OnInit {
   getDynamicSequenceError(): string | null {
     if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
-    const activeLookupMappings = this.mappings.filter(m => {
+    const activeLookupMappings = this.mappings.filter((m) => {
       const meta = this.getSfFieldMeta(m.sfField);
       return m.sfField && meta?.type === 'reference';
     });
@@ -637,12 +793,10 @@ export class DefaultComponent implements OnInit {
     for (const mapping of activeLookupMappings) {
       const meta = this.getSfFieldMeta(mapping.sfField);
       const parentObjects: string[] = meta.referenceTo || [];
-      const externalParents = parentObjects.filter(p => p !== this.selectedObject);
+      const externalParents = parentObjects.filter((p) => p !== this.selectedObject);
 
       if (externalParents.length > 0) {
-        const isParentQueued = externalParents.some(parentName =>
-          this.migrationQueue.some(q => q.targetObject === parentName)
-        );
+        const isParentQueued = externalParents.some((parentName) => this.migrationQueue.some((q) => q.targetObject === parentName));
 
         if (!isParentQueued) {
           const parentName = externalParents[0];
@@ -656,9 +810,9 @@ export class DefaultComponent implements OnInit {
   hasOrderingIssue(): boolean {
     let issueFound = false;
     this.migrationQueue.forEach((job, index) => {
-      job.mappings.forEach(m => {
+      job.mappings.forEach((m) => {
         if (m.relationalExtIdField && m.parentObjectName) {
-          const parentIndex = this.migrationQueue.findIndex(q => q.targetObject === m.parentObjectName);
+          const parentIndex = this.migrationQueue.findIndex((q) => q.targetObject === m.parentObjectName);
           if (parentIndex !== -1 && parentIndex > index) {
             issueFound = true;
           }
@@ -670,14 +824,14 @@ export class DefaultComponent implements OnInit {
 
   overrideGoToReview() {
     if (this.operationMode === 'upsert') {
-       if (this.getDynamicSequenceError()) {
-         this.toastr.error("Please resolve sequence errors before proceeding.", "Logic Error");
-         return;
-       }
-       if (this.hasOrderingIssue()) {
-         this.toastr.error("Please reorder the queue: Parents (like Accounts) must be above Children.", "Sequence Error");
-         return;
-       }
+      if (this.getDynamicSequenceError()) {
+        this.toastr.error('Please resolve sequence errors before proceeding.', 'Logic Error');
+        return;
+      }
+      if (this.hasOrderingIssue()) {
+        this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
+        return;
+      }
     }
     this.goToReview();
   }

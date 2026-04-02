@@ -348,3 +348,21 @@ td .form-select {
 .row.mb-4 {
   scroll-margin-top: 50px; /* Gives space for the fixed progress bar if you have one */
 }
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.dropdown-item {
+  border-radius: 4px;
+  transition: background-color 0.15s ease-in-out;
+  
+  &:hover {
+    background-color: #1985f1; /* Light grey hover */
+  }
+}
+
+/* Ensure the sticky search bar doesn't look weird when scrolling */
+.position-sticky {
+  position: sticky;
+}

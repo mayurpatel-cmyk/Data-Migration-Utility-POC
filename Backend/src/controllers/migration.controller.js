@@ -3,7 +3,7 @@ const logger = require('../utils/logger')(__filename);
 
 exports.migrateData = async (req, res) => {
   const email = req.headers['user-email'];
-  const jobs = req.body; 
+  const jobs = req.body;
 
   try {
     const conn = req.sfConn;
@@ -30,14 +30,9 @@ exports.migrateData = async (req, res) => {
     // Execute the batch migration
     const result = await migrationService.executeUpsertBatch(conn, jobs);
 
-    // ----------------------------------------------------------------------
-    // NEW LOGIC: Format successful and failed records for the frontend
-    // Note: This expects migrationService to return { results, sentRecords }
-    // If your service already formats this data, you can remove this block.
-    // ----------------------------------------------------------------------
     const rawResults = result.results || [];
     const sentRecords = result.sentRecords || [];
-    
+
     let successfulRecords = result.successfulRecords || [];
     let failures = result.failures || [];
     let stats = result.stats || { success: 0, failed: 0 };
@@ -55,69 +50,44 @@ exports.migrateData = async (req, res) => {
           return null;
         })
         .filter(record => record !== null);
-
-      // failures = rawResults
-      //   .map((resItem, index) => {
-      //     if (!resItem.success) {
-      //       let errorMessage = 'Unknown Error';
-            
-      //       if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
-      //         // If it's an array of strings, we just join them.
-      //         // If they are objects, we grab the message.
-      //         errorMessage = resItem.errors
-      //           .map(e => (typeof e === 'string' ? e : (e.message || JSON.stringify(e))))
-      //           .join(', ');
-      //       } else if (resItem.error) {
-      //         errorMessage = resItem.error;
-      //       }
-
-      //       return {
-      //         record: sentRecords[index], // Original data for the first column
-      //         error: errorMessage         // Cleaned up string for the second column
-      //       };
-      //     }
-      //     return null;
-      //   })
-      //   .filter(record => record !== null);
       failures = rawResults
-  .map((resItem, index) => {
-    if (!resItem.success) {
-      let errorMessage = 'Validation Error';
+        .map((resItem, index) => {
+          if (!resItem.success) {
+            let errorMessage = 'Validation Error';
 
-      if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
-        // --- SMART ERROR PARSING ---
-        errorMessage = resItem.errors.map(e => {
-          // Check for Salesforce Duplicate Rule block
-          if (e.statusCode === 'DUPLICATES_DETECTED') {
-            return `Duplicate Found: This record already exists in Salesforce. (Rule: ${e.message})`;
+            if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
+              // --- SMART ERROR PARSING ---
+              errorMessage = resItem.errors.map(e => {
+                // Check for Salesforce Duplicate Rule block
+                if (e.statusCode === 'DUPLICATES_DETECTED') {
+                  return `Duplicate Found: This record already exists in Salesforce. (Rule: ${e.message})`;
+                }
+
+                // Check for standard validation or required fields
+                if (e.fields && e.fields.length > 0) {
+                  return `${e.message} [Fields: ${e.fields.join(', ')}]`;
+                }
+
+                return e.message || JSON.stringify(e);
+              }).join(' | ');
+            } else if (resItem.error) {
+              errorMessage = resItem.error;
+            }
+
+            return {
+              record: sentRecords[index], // Keeps the original data for the table's left column
+              error: errorMessage        // Friendly error for the right column
+            };
           }
-          
-          // Check for standard validation or required fields
-          if (e.fields && e.fields.length > 0) {
-            return `${e.message} [Fields: ${e.fields.join(', ')}]`;
-          }
-
-          return e.message || JSON.stringify(e);
-        }).join(' | ');
-      } else if (resItem.error) {
-        errorMessage = resItem.error;
-      }
-
-      return {
-        record: sentRecords[index], // Keeps the original data for the table's left column
-        error: errorMessage        // Friendly error for the right column
-      };
-    }
-    return null;
-  })
-  .filter(record => record !== null);
+          return null;
+        })
+        .filter(record => record !== null);
       // Recalculate stats based on formatted data
       stats = {
         success: successfulRecords.length,
         failed: failures.length
       };
     }
-    // ----------------------------------------------------------------------
 
     logger.info(`Upsert batch completed`, {
       success: stats.success,

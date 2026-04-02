@@ -1,31 +1,148 @@
 const logger = require('../utils/logger')(__filename);
+const { STATE_MAP, COUNTRY_MAP, RECORD_TYPE_MAP } = require('../configs/mappings');
 
 class MigrationService {
+
+  // --- UPGRADED: Data Cleanser with Cross-CRM Source Translation ---
+  cleanseData(value, sfType, fieldName, targetObject, sourceType = null) {
+    if (value === undefined || value === null || value === '') return null;
+    if (String(value).trim() === '#N/A') return '#N/A';
+
+    let processedValue = value;
+
+    // 1. SOURCE CRM PRE-PROCESSING
+    // Fix  from the origin CRM before formatting for SF
+    if (sourceType) {
+      switch (sourceType.toLowerCase()) {
+        case 'unix_timestamp':
+          // Convert Unix seconds to standard JS Date object
+          processedValue = new Date(Number(processedValue) * 1000);
+          break;
+        case 'unix_timestamp_ms':
+          // Convert Unix milliseconds to JS Date object
+          processedValue = new Date(Number(processedValue));
+          break;
+        case 'yes_no_string':
+          // Convert explicit Yes/No strings to actual booleans
+          processedValue = String(processedValue).trim().toLowerCase() === 'yes';
+          break;
+        case 'comma_separated_string':
+          // Specifically for turning messy source arrays into SF Multi-picklists
+          processedValue = String(processedValue).replace(/\|/g, ',');
+          break;
+        case 'html_text':
+          // Strip HTML tags if moving to a standard SF text field
+          if (sfType === 'string' || sfType === 'textarea') {
+            processedValue = String(processedValue).replace(/<[^>]*>?/gm, '').trim();
+          }
+          break;
+      }
+    }
+
+    // 2. SALESFORCE TARGET FORMATTING
+    switch (sfType) {
+      case 'boolean':
+        const strVal = String(processedValue).trim().toLowerCase();
+        return ['true', '1', 'yes', 'y', 'active'].includes(strVal);
+
+      // --- NUMBERS ---
+      case 'currency':
+      case 'double':
+      case 'percent':
+      case 'int':
+        if (typeof processedValue === 'number') return processedValue;
+        // Remove commas, currency symbols, and spaces (e.g., "$ 1,234.56" -> "1234.56")
+        const numericString = String(processedValue).replace(/[^0-9.-]+/g, '');
+        const parsedNum = sfType === 'int' ? parseInt(numericString, 10) : parseFloat(numericString);
+        return isNaN(parsedNum) ? null : parsedNum;
+
+      // --- DATES ---
+      case 'date':
+      case 'datetime':
+        if (typeof processedValue === 'number') {
+          // Converts Excel serial number (e.g., 45565) to standard date
+          const dateObj = new Date(Math.round((processedValue - 25569) * 86400 * 1000));
+          return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
+        }
+        const parsedDate = new Date(processedValue);
+        if (!isNaN(parsedDate.getTime())) {
+          return sfType === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
+        }
+        return null; // Fallback for invalid dates so SF doesn't crash
+
+      // --- Multi-Select Picklist Cleanser ---
+      case 'multipicklist':
+        return String(processedValue)
+          .split(',')
+          .map(item => item.trim())
+          .filter(item => item.length > 0)
+          .join(';');
+    }
+
+    // --- FALLTHROUGH FOR PICKLISTS, TEXTAREAS, AND REMAINING STRINGS ---
+    if (['picklist', 'string', 'textarea'].includes(sfType)) {
+      let cleanStr = String(processedValue).trim();
+
+      // --- RECORD TYPE RESOLUTION ---
+      if (fieldName === 'RecordTypeId' && targetObject) {
+        const objectRecordTypes = RECORD_TYPE_MAP[targetObject];
+
+        if (objectRecordTypes && objectRecordTypes[cleanStr]) {
+          return objectRecordTypes[cleanStr];
+        } else {
+          logger.warn(`Unmapped Record Type "${cleanStr}" for ${targetObject}.`);
+          return cleanStr;
+        }
+      }
+
+      // --- Address Resolution ---
+      if (fieldName) {
+        const lowerField = fieldName.toLowerCase();
+        const lowerVal = cleanStr.toLowerCase();
+
+        if (lowerField.includes('country') && COUNTRY_MAP[lowerVal]) {
+          return COUNTRY_MAP[lowerVal];
+        }
+        if ((lowerField.includes('state') || lowerField.includes('province')) && STATE_MAP[lowerVal]) {
+          return STATE_MAP[lowerVal];
+        }
+      }
+
+      // --- Truncation (Fallback) ---
+      if (sfType === 'string' && cleanStr.length > 255) {
+        logger.warn(`Truncating field [${fieldName || 'Unknown'}] - Exceeded 255 characters.`);
+        cleanStr = cleanStr.substring(0, 255);
+      }
+
+      return cleanStr;
+    }
+
+    // Default catch-all
+    return processedValue;
+  }
 
   // 1: Dependency Sorter (Parents First)
   sortJobsByDependency(jobs) {
     const sorted = [];
-    const pass3Jobs = []; // Holds the deferred linking jobs
+    const pass3Jobs = [];
     const visited = new Set();
     const visiting = new Set();
 
     function visit(job) {
       if (visited.has(job.targetObject)) return;
-      
+
       visiting.add(job.targetObject);
 
       const dependencies = job.mappings
         .filter(m => m.type === 'reference' && m.referenceTo)
-        .flatMap(m => m.referenceTo); 
+        .flatMap(m => m.referenceTo);
 
-      // Track dependencies that cause a cycle so we can defer them
       const deferReferencesTo = [];
 
       for (const dep of dependencies) {
         const parentJob = jobs.find(j => j.targetObject === dep);
         if (parentJob) {
           if (visiting.has(dep)) {
-            // CIRCULAR DEPENDENCY DETECTED (A <-> B)
             logger.warn(`Circular dependency: ${job.targetObject} <-> ${dep}. Deferring ${dep} link to Pass 3.`);
             deferReferencesTo.push(dep);
           } else {
@@ -36,16 +153,14 @@ class MigrationService {
 
       visiting.delete(job.targetObject);
       visited.add(job.targetObject);
-      
-      // Store what to skip on the main job
+
       job.deferReferencesTo = deferReferencesTo;
       sorted.push(job);
 
-      // If we deferred a relationship, schedule a Pass 3 Update for later
       if (deferReferencesTo.length > 0) {
         pass3Jobs.push({
           ...job,
-          isPass3Patch: true, 
+          isPass3Patch: true,
           onlyReferencesTo: deferReferencesTo
         });
       }
@@ -57,81 +172,67 @@ class MigrationService {
 
   // 2: Payload Builder
   buildPayload(rawRecords, mappings, options = {}) {
-    const { 
-      skipSelfReferencing = false, 
-      onlySelfReferencing = false, 
-      excludeReferencesTo = [], 
-      onlyReferencesTo = [],    
-      targetObject = '', 
-      targetExtIdField = '' 
+    const {
+      skipSelfReferencing = false,
+      onlySelfReferencing = false,
+      excludeReferencesTo = [],
+      onlyReferencesTo = [],
+      targetObject = '',
+      targetExtIdField = ''
     } = options;
-  
+
     const payload = [];
     const isPatchMode = onlySelfReferencing || onlyReferencesTo.length > 0;
-  
+
     rawRecords.forEach((rawRow, originalIndex) => {
       const sfRecord = {};
       let hasPatchData = false;
-      
-      // MUST iterate over MAPPINGS, not rawRow, to catch completely empty Excel cells
+
       mappings.forEach(mappingMeta => {
         if (!mappingMeta || !mappingMeta.sfField) return;
-  
+
         const csvKey = mappingMeta.csvField;
         const csvValue = rawRow[csvKey];
-  
+
         // 1. Skip Audit Fields in Patch Mode
         const isAuditField = ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById'].includes(mappingMeta.sfField);
-        if (isPatchMode && isAuditField) return; 
-  
-        // 2. Format Value
-        let valueToUse = (csvValue === undefined || csvValue === '') ? null : csvValue;
-        
-        // --- EXCEL DATE FORMATTING (with safety fallback for invalid dates) ---
-        if (valueToUse !== null && (mappingMeta.type === 'date' || mappingMeta.type === 'datetime')) {
-          if (typeof valueToUse === 'number') {
-            const dateObj = new Date(Math.round((valueToUse - 25569) * 86400 * 1000));
-            valueToUse = mappingMeta.type === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
-          } else if (typeof valueToUse === 'string') {
-            const parsedDate = new Date(valueToUse);
-            if (!isNaN(parsedDate.getTime())) {
-              valueToUse = mappingMeta.type === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
-            } else {
-              valueToUse = null; // Prevent "Invalid Date" string from crashing Salesforce
-            }
-          }
-        }
-        // -----------------------------
+        if (isPatchMode && isAuditField) return;
 
-        // Check if this field is our primary Upsert Key
+        // 2. Format Value using the new cleanseData method and sourceType!
+        const valueToUse = this.cleanseData(
+          csvValue,
+          mappingMeta.type,
+          mappingMeta.sfField,
+          targetObject,
+          mappingMeta.sourceType // Pulled from your mapping configuration
+        );
+
         const isPrimaryExtId = mappingMeta.sfField === targetExtIdField;
-  
-        // Drop the field to save payload size ONLY if it's null AND not our Upsert Key
-        // (We must keep the Upsert Key in the payload even if null, so SF knows to create a new record)
+
         if (valueToUse === null && !isPrimaryExtId) return;
-  
+
         // 3. Dependency & Reference Logic
         const isSelfRef = mappingMeta.type === 'reference' && mappingMeta.referenceTo && mappingMeta.referenceTo.includes(targetObject);
         const referencesOther = mappingMeta.type === 'reference' && mappingMeta.referenceTo ? mappingMeta.referenceTo : [];
-        
+
         const isExcludedCross = excludeReferencesTo.some(obj => referencesOther.includes(obj));
         const isOnlyTargetCross = onlyReferencesTo.length > 0 && onlyReferencesTo.some(obj => referencesOther.includes(obj));
-  
-        if (skipSelfReferencing && isSelfRef) return; 
-        if (onlySelfReferencing && !isSelfRef) return; 
-        if (isExcludedCross) return; 
-        if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return; 
-  
+
+        if (skipSelfReferencing && isSelfRef) return;
+        if (onlySelfReferencing && !isSelfRef) return;
+        if (isExcludedCross) return;
+        if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return;
+
         // 4. Relationship Name Resolution
         let relName = mappingMeta.relationshipName;
         if (!relName && mappingMeta.sfField) {
-            if (mappingMeta.sfField.endsWith('Id')) {
-                relName = mappingMeta.sfField.slice(0, -2); 
-            } else if (mappingMeta.sfField.endsWith('__c')) {
-                relName = mappingMeta.sfField.replace('__c', '__r'); 
-            }
+          if (mappingMeta.sfField.endsWith('Id')) {
+            relName = mappingMeta.sfField.slice(0, -2);
+          } else if (mappingMeta.sfField.endsWith('__c')) {
+            relName = mappingMeta.sfField.replace('__c', '__r');
+          }
         }
-  
+
         // 5. Map to Salesforce Record Object
         if (mappingMeta.type === 'reference' && mappingMeta.relationalExtIdField && relName) {
           const relationalKey = `${relName}.${mappingMeta.relationalExtIdField}`;
@@ -141,25 +242,24 @@ class MigrationService {
           sfRecord[mappingMeta.sfField] = valueToUse;
         }
       });
-  
-      // Failsafe: Force the Upsert Key into the payload if it's completely missing
+
       if (targetExtIdField && !sfRecord.hasOwnProperty(targetExtIdField)) {
         sfRecord[targetExtIdField] = null;
       }
-  
+
       if (!isPatchMode || (isPatchMode && hasPatchData)) {
         payload.push({ originalIndex, sfRecord });
       }
     });
-  
+
     return payload;
   }
 
   // 4: CORE EXECUTION 
   async executeUpsertBatch(conn, targetObjectOrJobs, records) {
     try {
-      const rawJobs = Array.isArray(targetObjectOrJobs) 
-        ? targetObjectOrJobs 
+      const rawJobs = Array.isArray(targetObjectOrJobs)
+        ? targetObjectOrJobs
         : [{ targetObject: targetObjectOrJobs, records: records }];
 
       const migrationJobs = this.sortJobsByDependency(rawJobs);
@@ -170,11 +270,10 @@ class MigrationService {
       for (const job of migrationJobs) {
         const { targetObject, targetExtIdField, records: rawJobRecords, mappings, operationMode = 'upsert', deferReferencesTo = [], isPass3Patch, onlyReferencesTo = [] } = job;
 
-        // --- NEW SCENARIO: PASS 3 PATCH (Cross-Object Link) ---
         if (isPass3Patch) {
           if (!targetExtIdField) {
-             logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
-             continue; 
+            logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
+            continue;
           }
 
           logger.info(`[${targetObject}] Starting Pass 3: Cross-Object Circular Patch (Linking to ${onlyReferencesTo.join(', ')})`);
@@ -184,22 +283,21 @@ class MigrationService {
           try {
             const patchRecords = patchPayload.map(p => p.sfRecord);
             const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, patchRecords);
-            
+
             patchResults.forEach((res, i) => {
-               if (!res.success) {
-                 const originalIndex = patchPayload[i].originalIndex;
-                 const originalRecord = rawJobRecords[originalIndex];
-                 const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                 allFailures.push({ error: `[${targetObject} - Circular Link Failed] ${errMsg}`, record: originalRecord });
-               }
+              if (!res.success) {
+                const originalIndex = patchPayload[i].originalIndex;
+                const originalRecord = rawJobRecords[originalIndex];
+                const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                allFailures.push({ error: `[${targetObject} - Circular Link Failed] ${errMsg}`, record: originalRecord });
+              }
             });
           } catch (err) {
             logger.error(`[${targetObject}] Pass 3 Fatal Error: ${err.message}`);
           }
-          continue; // Skip the rest of the loop for this specific job
+          continue;
         }
 
-        // SCENARIO 1: SIMPLE INSERT
         if (operationMode === 'insert') {
           const insertPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, excludeReferencesTo: deferReferencesTo });
           if (insertPayload.length === 0) continue;
@@ -207,12 +305,12 @@ class MigrationService {
           try {
             logger.info(`Starting Bulk INSERT: ${insertPayload.length} records into ${targetObject}`);
             const insertRecords = insertPayload.map(p => p.sfRecord);
-            
+
             const finalResults = await conn.bulk.load(targetObject, "insert", insertRecords);
-            
+
             finalResults.forEach((res, i) => {
               const originalIndex = insertPayload[i].originalIndex;
-              const originalRecord = rawJobRecords[originalIndex]; 
+              const originalRecord = rawJobRecords[originalIndex];
               if (res.success) {
                 totalSuccess++;
                 allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: 'Created', ...originalRecord });
@@ -227,9 +325,8 @@ class MigrationService {
             insertPayload.forEach(p => allFailures.push({ error: `[${targetObject} Fatal Error] ${err.message}`, record: rawJobRecords[p.originalIndex] }));
             totalFailed += insertPayload.length;
           }
-        } 
-        
-        // SCENARIO 2: COMPLEX UPSERT
+        }
+
         else if (operationMode === 'upsert') {
           if (!targetExtIdField) throw new Error(`Job for ${targetObject} is missing targetExtIdField for Upsert.`);
 
@@ -237,15 +334,13 @@ class MigrationService {
 
           if (hasSelfReferencing) {
             logger.info(`[${targetObject}] Detected Self-Referencing Lookup. Initiating Two-Pass Upsert.`);
-            
-            // PASS 1: Base Data (Also skipping cross-object deferred lookups)
-            // BUGFIX: targetExtIdField is now explicitly passed down so JSForce doesn't crash on new records
+
             const pass1Payload = this.buildPayload(rawJobRecords, mappings, { skipSelfReferencing: true, targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo });
             if (pass1Payload.length > 0) {
               try {
                 const pass1Records = pass1Payload.map(p => p.sfRecord);
                 const pass1Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, pass1Records);
-                
+
                 pass1Results.forEach((res, i) => {
                   const originalIndex = pass1Payload[i].originalIndex;
                   const originalRecord = rawJobRecords[originalIndex];
@@ -265,13 +360,12 @@ class MigrationService {
               }
             }
 
-            // PASS 2: Self-Referencing Links
             const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField });
             if (pass2Payload.length > 0) {
               try {
                 const pass2Records = pass2Payload.map(p => p.sfRecord);
                 const pass2Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, pass2Records);
-                
+
                 pass2Results.forEach((res, i) => {
                   if (!res.success) {
                     const originalIndex = pass2Payload[i].originalIndex;
@@ -286,8 +380,6 @@ class MigrationService {
             }
 
           } else {
-            // STANDARD 1-PASS UPSERT (Skipping deferred cross-object lookups)
-            // BUGFIX: Added targetExtIdField below to prevent blank External IDs from causing hard JSForce crashes
             const standardPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo });
             if (standardPayload.length === 0) continue;
 
@@ -295,10 +387,10 @@ class MigrationService {
               logger.info(`Starting Bulk UPSERT: ${standardPayload.length} records into ${targetObject}`);
               const standardRecords = standardPayload.map(p => p.sfRecord);
               const finalResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, standardRecords);
-              
+
               finalResults.forEach((res, i) => {
                 const originalIndex = standardPayload[i].originalIndex;
-                const originalRecord = rawJobRecords[originalIndex]; 
+                const originalRecord = rawJobRecords[originalIndex];
                 if (res.success) {
                   totalSuccess++;
                   allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Updated', ...originalRecord });
