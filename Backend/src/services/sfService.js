@@ -87,7 +87,10 @@ class SalesforceService {
         label: field.label,
         type: field.type,
         length: field.length,
-        custom: field.custom 
+        custom: field.custom,
+        isRequired: !field.nillable && field.createable && !field.defaultedOnCreate,
+        // NEW: Capture relationship targets (e.g., ['Account'])
+        referenceTo: field.referenceTo && field.referenceTo.length > 0 ? field.referenceTo : null
       }));
 
       logger.info(`Successfully fetched fields for object: ${objectName}`, { 
