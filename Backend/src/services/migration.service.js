@@ -253,15 +253,12 @@ class MigrationService {
       let totalSuccess = 0, totalFailed = 0;
       let allFailures = [], allSuccessfulRecords = [];
 
-      // Salesforce Bulk API recommends batches of 10,000 records
-      const BATCH_SIZE = 10000; 
 
       for (const job of migrationJobs) {
-        const { targetObject, targetExtIdField, records: rawJobRecords, mappings, operationMode = 'upsert', deferReferencesTo = [], isPass3Patch, onlyReferencesTo = [] } = job;
+        const { targetObject, targetExtIdField, records: rawJobRecords, mappings,batchSize = 10000, operationMode = 'upsert', deferReferencesTo = [], isPass3Patch, onlyReferencesTo = [] } = job;
 
-        // ==========================================
+        const BATCH_SIZE = parseInt(batchSize, 10) || 10000;
         // SCENARIO: PASS 3 PATCH (Cross-Object Link)
-        // ==========================================
         if (isPass3Patch) {
           if (!targetExtIdField) {
             logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
@@ -297,9 +294,7 @@ class MigrationService {
           continue;
         }
 
-        // ==========================================
         // SCENARIO 1: SIMPLE INSERT
-        // ==========================================
         if (operationMode === 'insert') {
           const insertPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, excludeReferencesTo: deferReferencesTo });
           if (insertPayload.length === 0) continue;
@@ -336,9 +331,7 @@ class MigrationService {
           }
         }
 
-        // ==========================================
         // SCENARIO 2: COMPLEX UPSERT
-        // ==========================================
         else if (operationMode === 'upsert') {
           if (!targetExtIdField) throw new Error(`Job for ${targetObject} is missing targetExtIdField for Upsert.`);
 

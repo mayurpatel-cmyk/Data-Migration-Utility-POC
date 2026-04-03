@@ -85,6 +85,7 @@ export class DefaultComponent implements OnInit {
   previewItemHeaders: string[] = [];
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
+  batchSize: number = 200;
 
   // --- STANDALONE DROPDOWN STATES ---
   isObjectDropdownOpen = false;
@@ -650,6 +651,13 @@ clearAllMappings() {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
     }
+    if (this.confirmedMappings.length > 0) {
+      const missingFields = this.getMissingRequiredFields();
+      if (missingFields.length > 0) {
+        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+        return; // Stops the process from moving forward
+      }
+    }
     const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
     if (this.confirmedMappings.length > 0) {
       if (isUpsertMissingKey) {
@@ -701,74 +709,143 @@ clearAllMappings() {
       return;
     }
 
-    this.isMigrating = true;
-    this.cdr.detectChanges();
+    // 1. Calculate total records across all queued sheets for the alert
+    let totalRows = 0;
+    if (this.workbook) {
+      this.migrationQueue.forEach(job => {
+        const worksheet = this.workbook!.Sheets[job.sheetName];
+        const rawData: any[] = utils.sheet_to_json(worksheet);
+        totalRows += rawData.length;
+      });
+    }
 
-    setTimeout(() => {
-      try {
-        const jobsPayload: any[] = [];
+    // 2. Calculate the estimated number of batches
+    const estimatedBatches = Math.ceil(totalRows / this.batchSize);
 
-        for (const job of this.migrationQueue) {
-          const worksheet = this.workbook!.Sheets[job.sheetName];
-          const rawData: any[] = utils.sheet_to_json(worksheet);
-          const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+    // 3. Show the SweetAlert Confirmation
+    Swal.fire({
+      title: '<strong>Ready for Data Migration ?</strong>',
+      // We inject a mini Bootstrap dashboard right into the alert!
+      html: `
+        <div class="p-3 bg-light rounded-4 border border-secondary-subtle text-start mb-2 mt-3 shadow-inner">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Total Records</span>
+            <span class="fs-4 fw-bold text-dark">${totalRows.toLocaleString()}</span>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Target Objects</span>
+            <span class="fs-5 fw-bold text-primary bg-primary-subtle px-3 py-1 rounded-pill">${this.migrationQueue.length}</span>
+          </div>
+          <hr class="border-secondary-subtle my-2">
+          <div class="d-flex justify-content-between align-items-center pt-2">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Execution Plan</span>
+            <span class="badge bg-dark text-white px-3 py-2 rounded-pill shadow-sm">
+              <i class="feather icon-layers me-1"></i> ~${estimatedBatches} Batches of ${this.batchSize.toLocaleString()}
+            </span>
+          </div>
+        </div>
+        <p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>
+      `,
+      icon: 'question',
+      iconColor: '#0d6efd', // Bootstrap Primary Blue
+      
+      // Styling the Backdrop (Adds an Apple-style glass blur behind the alert)
+      backdrop: `
+        rgba(0, 0, 0, 0.4)
+        backdrop-filter: blur(8px)
+        left top
+        no-repeat
+      `,
+      
+      // Button Configuration
+      showCancelButton: true,
+      buttonsStyling: false, // Turn off default styling so we can use Bootstrap classes
+      confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
+      cancelButtonText: 'Review Again',
+      
+      // Injecting custom CSS classes into the SweetAlert components
+      customClass: {
+        popup: 'rounded-4 shadow-lg border-0',
+        title: 'fs-3 fw-bold text-dark',
+        confirmButton: 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold',
+        cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
+      }
+    }).then((result) => {
+      
+      // This block ONLY runs if they click "Yes"
+      if (result.isConfirmed) {
+        
+        this.isMigrating = true;
+        this.cdr.detectChanges();
 
-          if (relationalMapping) {
-            const parentCsvColumn = relationalMapping.csvField;
-            rawData.sort((a, b) => {
-              const valA = String(a[parentCsvColumn] || '');
-              const valB = String(b[parentCsvColumn] || '');
-              return valA.localeCompare(valB);
-            });
-          }
+        setTimeout(() => {
+          try {
+            const jobsPayload: any[] = [];
 
-          jobsPayload.push({
-            targetObject: job.targetObject,
-            records: rawData,
-            mappings: job.mappings,
-            targetExtIdField: job.targetExtIdField,
-            operationMode: job.operationMode
-          });
-        }
+            for (const job of this.migrationQueue) {
+              const worksheet = this.workbook!.Sheets[job.sheetName];
+              const rawData: any[] = utils.sheet_to_json(worksheet);
+              const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
 
-        this.migrationService.migrateData(jobsPayload).subscribe({
-          next: (response) => {
-            console.log('Migration response from server:', response);
-            this.isMigrating = false;
+              if (relationalMapping) {
+                const parentCsvColumn = relationalMapping.csvField;
+                rawData.sort((a, b) => {
+                  const valA = String(a[parentCsvColumn] || '');
+                  const valB = String(b[parentCsvColumn] || '');
+                  return valA.localeCompare(valB);
+                });
+              }
 
-            const successCount = response.stats?.success || 0;
-            const failedCount = response.stats?.failed || 0;
-            this.migrationSummary = response.stats;
-            this.failedRecords = response.failures || [];
-            this.successfulRecords = response.successfulRecords || [];
-
-            const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
-
-            if (successCount > 0 && failedCount === 0) {
-              this.toastr.success(msg, 'Migration Complete!');
-            } else if (successCount > 0 && failedCount > 0) {
-              this.toastr.warning(msg, 'Partial Migration');
-            } else {
-              this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+              jobsPayload.push({
+                targetObject: job.targetObject,
+                records: rawData,
+                mappings: job.mappings,
+                targetExtIdField: job.targetExtIdField,
+                operationMode: job.operationMode,
+                batchSize: this.batchSize // Passing the batch size to the backend
+              });
             }
 
-            this.currentStep = 5;
-            this.autoNavigate();
-            this.cdr.detectChanges();
-          },
-          error: (err) => {
+            this.migrationService.migrateData(jobsPayload).subscribe({
+              next: (response) => {
+                console.log('Migration response from server:', response);
+                this.isMigrating = false;
+
+                const successCount = response.stats?.success || 0;
+                const failedCount = response.stats?.failed || 0;
+                this.migrationSummary = response.stats;
+                this.failedRecords = response.failures || [];
+                this.successfulRecords = response.successfulRecords || [];
+
+                const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
+
+                if (successCount > 0 && failedCount === 0) {
+                  this.toastr.success(msg, 'Migration Complete!');
+                } else if (successCount > 0 && failedCount > 0) {
+                  this.toastr.warning(msg, 'Partial Migration');
+                } else {
+                  this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+                }
+
+                this.currentStep = 5;
+                this.autoNavigate();
+                this.cdr.detectChanges();
+              },
+              error: (err) => {
+                this.isMigrating = false;
+                const errMsg = err.error?.message || 'Check console for details';
+                this.toastr.error(errMsg, 'Server Error');
+                this.cdr.detectChanges();
+              }
+            });
+          } catch (error) {
             this.isMigrating = false;
-            const errMsg = err.error?.message || 'Check console for details';
-            this.toastr.error(errMsg, 'Server Error');
+            this.toastr.error('Failed to read data from the file.', 'Parsing Error');
             this.cdr.detectChanges();
           }
-        });
-      } catch (error) {
-        this.isMigrating = false;
-        this.toastr.error('Failed to read data from the file.', 'Parsing Error');
-        this.cdr.detectChanges();
+        }, 10);
       }
-    }, 10);
+    });
   }
 
   downloadSuccessLog() {

@@ -689,6 +689,31 @@
         </div>
       </div>
 
+      <div class="d-flex flex-wrap justify-content-between align-items-center bg-primary-subtle p-3 rounded border border-primary shadow-sm mb-4">
+        <div class="d-flex align-items-center gap-3 mb-2 mb-md-0">
+          <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm" style="width: 40px; height: 40px;">
+            <i class="feather icon-sliders fs-5"></i>
+          </div>
+          <div>
+            <h6 class="mb-0 fw-bold text-primary-emphasis">Execution Settings</h6>
+            <div class="small text-muted">Adjust the chunk size to prevent API timeouts on massive datasets.</div>
+          </div>
+        </div>
+        
+        <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle">
+          <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Batch Size:</label>
+          <input type="number" 
+                 class="form-control form-control-sm border-primary border-2 fw-bold text-primary" 
+                 [(ngModel)]="batchSize" 
+                 [disabled]="isMigrating" 
+                 min="1" 
+                 max="10000" 
+                 step="100"
+                 style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
+          <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10k)</span></span>
+        </div>
+      </div>
+
       @for (plan of getAllMigrationPlans(); track $index) {
       <div class="card border border-primary-subtle shadow-sm mb-4">
         <div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center py-3">
@@ -738,6 +763,8 @@
         </div>
       </div>
       }
+
+   
 
       <div class="d-flex flex-wrap justify-content-end align-items-center gap-3 mt-4 pt-3 border-top">
         <button class="btn btn-outline-secondary d-flex align-items-center gap-2" [disabled]="isMigrating"
