@@ -243,6 +243,10 @@ class MigrationService {
 
   // 4: CORE EXECUTION 
   async executeUpsertBatch(conn, targetObjectOrJobs, records) {
+    // Global Polling Configuration (20 minutes timeout, 15 seconds interval)
+    conn.bulk.pollTimeout = 1200000; 
+    conn.bulk.pollInterval = 15000;
+
     try {
       const rawJobs = Array.isArray(targetObjectOrJobs)
         ? targetObjectOrJobs
@@ -253,11 +257,40 @@ class MigrationService {
       let totalSuccess = 0, totalFailed = 0;
       let allFailures = [], allSuccessfulRecords = [];
 
-
       for (const job of migrationJobs) {
-        const { targetObject, targetExtIdField, records: rawJobRecords, mappings,batchSize = 10000, operationMode = 'upsert', deferReferencesTo = [], isPass3Patch, onlyReferencesTo = [] } = job;
+        const { 
+            targetObject, 
+            targetExtIdField, 
+            records: rawJobRecords, 
+            mappings, 
+            batchSize = 10000, 
+            operationMode = 'upsert', 
+            deferReferencesTo = [], 
+            isPass3Patch, 
+            onlyReferencesTo = [],
+            concurrencyMode = 'Parallel' // Support for 'Serial' mode
+        } = job;
 
         const BATCH_SIZE = parseInt(batchSize, 10) || 10000;
+
+        // --- DRY Error Handler for all catch blocks ---
+        const handleBatchError = (err, chunk, stageName) => {
+            const isTimeout = err.name === 'JobTimeoutError' || err.message.includes('polling time out');
+            const prefix = isTimeout ? '[TIMEOUT]' : '[FATAL]';
+            
+            if (isTimeout) {
+                logger.error(`[${targetObject} - ${stageName}] TIMEOUT: Job is still processing in Salesforce. Check Bulk Data Load Jobs in Setup.`);
+            } else {
+                logger.error(`[${targetObject} - ${stageName}] Fatal Error: ${err.message}`);
+            }
+            
+            chunk.forEach(p => allFailures.push({ 
+                error: `${prefix} ${err.message}`, 
+                record: rawJobRecords[p.originalIndex] 
+            }));
+            totalFailed += chunk.length;
+        };
+
         // SCENARIO: PASS 3 PATCH (Cross-Object Link)
         if (isPass3Patch) {
           if (!targetExtIdField) {
@@ -276,18 +309,17 @@ class MigrationService {
             try {
               logger.info(`[${targetObject}] Pass 3 Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
               const patchRecords = chunk.map(p => p.sfRecord);
-              const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, patchRecords);
+              const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
 
               patchResults.forEach((res, i) => {
                 if (!res.success) {
-                  const originalIndex = chunk[i].originalIndex;
-                  const originalRecord = rawJobRecords[originalIndex];
+                  const originalRecord = rawJobRecords[chunk[i].originalIndex];
                   const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
                   allFailures.push({ error: `[${targetObject} - Circular Link Failed] ${errMsg}`, record: originalRecord });
                 }
               });
             } catch (err) {
-              logger.error(`[${targetObject}] Pass 3 Batch ${chunkCounter} Fatal Error: ${err.message}`);
+                handleBatchError(err, chunk, `Pass 3 Batch ${chunkCounter}`);
             }
             chunkCounter++;
           }
@@ -308,24 +340,21 @@ class MigrationService {
             try {
               logger.info(`[${targetObject}] Insert Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
               const insertRecords = chunk.map(p => p.sfRecord);
-              const finalResults = await conn.bulk.load(targetObject, "insert", insertRecords);
+              const finalResults = await conn.bulk.load(targetObject, "insert", { concurrencyMode }, insertRecords);
 
               finalResults.forEach((res, i) => {
-                const originalIndex = chunk[i].originalIndex;
-                const originalRecord = rawJobRecords[originalIndex];
+                const originalRecord = rawJobRecords[chunk[i].originalIndex];
                 if (res.success) {
                   totalSuccess++;
                   allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: 'Created', ...originalRecord });
                 } else {
                   totalFailed++;
                   const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                  allFailures.push({ error: `[${targetObject} Insert] ${errMsg}`, record: originalRecord });
+                  allFailures.push({ error: `[${targetObject} Insert Failed] ${errMsg}`, record: originalRecord });
                 }
               });
             } catch (err) {
-              logger.error(`[${targetObject}] Insert Batch ${chunkCounter} Fatal Error: ${err.message}`);
-              chunk.forEach(p => allFailures.push({ error: `[${targetObject} Batch Fatal Error] ${err.message}`, record: rawJobRecords[p.originalIndex] }));
-              totalFailed += chunk.length;
+                handleBatchError(err, chunk, `Insert Batch ${chunkCounter}`);
             }
             chunkCounter++;
           }
@@ -350,24 +379,21 @@ class MigrationService {
                 try {
                   logger.info(`[${targetObject}] Pass 1 Upsert Batch ${chunkCounter}/${pass1Chunks.length} (${chunk.length} records)`);
                   const pass1Records = chunk.map(p => p.sfRecord);
-                  const pass1Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, pass1Records);
+                  const pass1Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, pass1Records);
 
                   pass1Results.forEach((res, i) => {
-                    const originalIndex = chunk[i].originalIndex;
-                    const originalRecord = rawJobRecords[originalIndex];
+                    const originalRecord = rawJobRecords[chunk[i].originalIndex];
                     if (res.success) {
                       totalSuccess++;
                       allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Updated', ...originalRecord });
                     } else {
                       totalFailed++;
                       const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                      allFailures.push({ error: `[${targetObject} - Base Data] ${errMsg}`, record: originalRecord });
+                      allFailures.push({ error: `[${targetObject} - Base Data Failed] ${errMsg}`, record: originalRecord });
                     }
                   });
                 } catch (err) {
-                  logger.error(`[${targetObject}] Pass 1 Batch ${chunkCounter} Fatal Error: ${err.message}`);
-                  chunk.forEach(p => allFailures.push({ error: `[${targetObject} Pass 1 Batch Fatal Error] ${err.message}`, record: rawJobRecords[p.originalIndex] }));
-                  totalFailed += chunk.length;
+                    handleBatchError(err, chunk, `Pass 1 Batch ${chunkCounter}`);
                 }
                 chunkCounter++;
               }
@@ -383,18 +409,17 @@ class MigrationService {
                 try {
                   logger.info(`[${targetObject}] Pass 2 Upsert Batch ${chunkCounter}/${pass2Chunks.length} (${chunk.length} records)`);
                   const pass2Records = chunk.map(p => p.sfRecord);
-                  const pass2Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, pass2Records);
+                  const pass2Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, pass2Records);
 
                   pass2Results.forEach((res, i) => {
                     if (!res.success) {
-                      const originalIndex = chunk[i].originalIndex;
-                      const originalRecord = rawJobRecords[originalIndex];
+                      const originalRecord = rawJobRecords[chunk[i].originalIndex];
                       const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
                       allFailures.push({ error: `[${targetObject} - Relationship Link Failed] ${errMsg}`, record: originalRecord });
                     }
                   });
                 } catch (err) {
-                  logger.error(`[${targetObject}] Pass 2 Batch ${chunkCounter} Fatal Error: ${err.message}`);
+                    handleBatchError(err, chunk, `Pass 2 Batch ${chunkCounter}`);
                 }
                 chunkCounter++;
               }
@@ -414,24 +439,21 @@ class MigrationService {
               try {
                 logger.info(`[${targetObject}] Upsert Batch ${chunkCounter}/${standardChunks.length} (${chunk.length} records)`);
                 const standardRecords = chunk.map(p => p.sfRecord);
-                const finalResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField }, standardRecords);
+                const finalResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, standardRecords);
 
                 finalResults.forEach((res, i) => {
-                  const originalIndex = chunk[i].originalIndex;
-                  const originalRecord = rawJobRecords[originalIndex];
+                  const originalRecord = rawJobRecords[chunk[i].originalIndex];
                   if (res.success) {
                     totalSuccess++;
                     allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Updated', ...originalRecord });
                   } else {
                     totalFailed++;
                     const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                    allFailures.push({ error: `[${targetObject}] ${errMsg}`, record: originalRecord });
+                    allFailures.push({ error: `[${targetObject} Upsert Failed] ${errMsg}`, record: originalRecord });
                   }
                 });
               } catch (err) {
-                logger.error(`[${targetObject}] Standard Upsert Batch ${chunkCounter} Fatal Error: ${err.message}`);
-                chunk.forEach(p => allFailures.push({ error: `[${targetObject} Batch Fatal Error] ${err.message}`, record: rawJobRecords[p.originalIndex] }));
-                totalFailed += chunk.length;
+                  handleBatchError(err, chunk, `Standard Upsert Batch ${chunkCounter}`);
               }
               chunkCounter++;
             }

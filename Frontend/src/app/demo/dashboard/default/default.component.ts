@@ -512,56 +512,63 @@ clearAllMappings() {
     }
   }
 
-  queueAnotherObject() {
-    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
-      return;
-    }
-    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
-    if (activeMappings.length === 0) {
-      this.toastr.warning('Please map at least one field.', 'No Mappings');
-      return;
-    }
-    const missingFields = this.getMissingRequiredFields();
-    if (missingFields.length > 0) {
-      this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
-      return;
-    }
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
-      return;
-    }
-    const enhancedMappings = activeMappings.map((mapping) => {
-      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-      return {
-        ...mapping,
-        type: fieldMeta?.type,
-        referenceTo: fieldMeta?.referenceTo,
-        relationshipName: fieldMeta?.relationshipName
-      };
-    });
+ queueAnotherObject() {
+    // NEW: Check for duplicate target object in the queue
+    const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+    if (isDuplicate) {
+      this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
+      return;
+    }
 
-    this.migrationQueue.push({
-      sheetName: this.selectedSheetName,
-      targetObject: this.selectedObject,
-      csvHeaders: [...this.csvHeaders],
-      mappings: enhancedMappings,
-      operationMode: this.operationMode,
-      targetExtIdField: this.targetExtIdField
-    });
+    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
+      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
+      return;
+    }
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'No Mappings');
+      return;
+    }
+    const missingFields = this.getMissingRequiredFields();
+    if (missingFields.length > 0) {
+      this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+      return;
+    }
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
+      return;
+    }
+    const enhancedMappings = activeMappings.map((mapping) => {
+      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+      return {
+        ...mapping,
+        type: fieldMeta?.type,
+        referenceTo: fieldMeta?.referenceTo,
+        relationshipName: fieldMeta?.relationshipName
+      };
+    });
 
-    this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
-    this.selectedObject = '';
-    this.sfFields = [];
-    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
-    this.confirmedMappings = [];
-    this.targetExtIdField = '';
-    this.operationMode = 'insert';
-    this.showPreview = false;
-    this.previewingItemIndex = null;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    this.cdr.detectChanges();
-  }
+    this.migrationQueue.push({
+      sheetName: this.selectedSheetName,
+      targetObject: this.selectedObject,
+      csvHeaders: [...this.csvHeaders],
+      mappings: enhancedMappings,
+      operationMode: this.operationMode,
+      targetExtIdField: this.targetExtIdField
+    });
+
+    this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
+    this.selectedObject = '';
+    this.sfFields = [];
+    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
+    this.confirmedMappings = [];
+    this.targetExtIdField = '';
+    this.operationMode = 'insert';
+    this.showPreview = false;
+    this.previewingItemIndex = null;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.cdr.detectChanges();
+  }
 
   removeFromQueue(index: number) {
     if (this.previewingItemIndex === index) {
@@ -645,28 +652,36 @@ clearAllMappings() {
     this.previewingItemIndex = index;
   }
 
-  goToReview() {
+goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
-    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-      this.toastr.warning('Please map at least one field.', 'Mapping Required');
-      return;
-    }
-    if (this.confirmedMappings.length > 0) {
-      const missingFields = this.getMissingRequiredFields();
-      if (missingFields.length > 0) {
-        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
-        return; // Stops the process from moving forward
-      }
-    }
-    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-    if (this.confirmedMappings.length > 0) {
-      if (isUpsertMissingKey) {
-        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'Mapping Required');
+      return;
+    }
+    if (this.confirmedMappings.length > 0) {
+      const missingFields = this.getMissingRequiredFields();
+      if (missingFields.length > 0) {
+        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+        return; // Stops the process from moving forward
+      }
+    }
+    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
+    if (this.confirmedMappings.length > 0) {
+      if (isUpsertMissingKey) {
+        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+        return;
+      }
+
+      // NEW: Check for duplicate target object in the queue
+      const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+      if (isDuplicate) {
+        this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
         return;
       }
+
       const enhancedMappings = this.confirmedMappings.map((mapping) => {
-        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-        return {
+      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+       return {
           ...mapping,
           type: fieldMeta?.type,
           referenceTo: fieldMeta?.referenceTo,
