@@ -26,7 +26,7 @@ class MigrationService {
           processedValue = String(processedValue).replace(/\|/g, ',');
           break;
         case 'html_text':
-          if (sfType === 'string' || sfType === 'textarea') {
+          if (['string', 'textarea', 'email'].includes(sfType)) {
             processedValue = String(processedValue).replace(/<[^>]*>?/gm, '').trim();
           }
           break;
@@ -37,7 +37,14 @@ class MigrationService {
     switch (sfType) {
       case 'boolean':
         const strVal = String(processedValue).trim().toLowerCase();
-        return ['true', '1', 'yes', 'y', 'active'].includes(strVal);
+      if (['true', '1', 'yes', 'y', 'active'].includes(strVal)) {
+      return true;
+      }
+      if (['false', '0', 'no', 'n', 'inactive'].includes(strVal)) {
+      return false;
+      }
+      logger.warn(`Unrecognized boolean value: "${processedValue}" for field [${fieldName}]. Skipping.`);
+      return null;
 
       case 'currency':
       case 'double':
@@ -60,12 +67,52 @@ class MigrationService {
         }
         return null; 
 
+      case 'time':
+        if (processedValue instanceof Date) {
+          return processedValue.toISOString().split('T')[1];
+        }
+        // If it's already a string like "14:30:00", return it cleaned up
+        return String(processedValue).trim();
+
       case 'multipicklist':
         return String(processedValue)
           .split(',')
           .map(item => item.trim())
           .filter(item => item.length > 0)
           .join(';');
+
+      case 'email':
+        let emailStr = String(processedValue).trim().replace(/\s+/g, ''); // Remove spaces
+        if (emailStr.length > 80) {
+          logger.warn(`Truncating Email field [${fieldName}] - Exceeded 80 chars.`);
+          emailStr = emailStr.substring(0, 80);
+        }
+        return emailStr;
+
+      // NEW: Phone Validation & Truncation (Max 40 chars)
+      case 'phone':
+        let phoneStr = String(processedValue).trim();
+        if (phoneStr.length > 40) {
+          logger.warn(`Truncating Phone field [${fieldName}] - Exceeded 40 chars.`);
+          phoneStr = phoneStr.substring(0, 40);
+        }
+        return phoneStr;
+
+      // NEW: URL Formatting (Max 255 chars)
+      case 'url':
+        let urlStr = String(processedValue).trim();
+        if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+          urlStr = 'https://' + urlStr; // SF often rejects URLs without protocols
+        }
+        if (urlStr.length > 255) {
+          logger.warn(`Truncating URL field [${fieldName}] - Exceeded 255 chars.`);
+          urlStr = urlStr.substring(0, 255);
+        }
+        return urlStr;
+
+      case 'id':
+      case 'reference':
+        return String(processedValue).trim();
     }
 
     if (['picklist', 'string', 'textarea'].includes(sfType)) {
@@ -93,9 +140,23 @@ class MigrationService {
         }
       }
 
-      if (sfType === 'string' && cleanStr.length > 255) {
-        logger.warn(`Truncating field [${fieldName || 'Unknown'}] - Exceeded 255 characters.`);
-        cleanStr = cleanStr.substring(0, 255);
+     if (sfType === 'string') {
+        // Salesforce standard text fields CRASH if they contain line breaks
+        cleanStr = cleanStr.replace(/[\r\n]+/g, ' '); 
+        
+        // Max 255 chars
+        if (cleanStr.length > 255) {
+          logger.warn(`Truncating String field [${fieldName || 'Unknown'}] - Exceeded 255 chars.`);
+          cleanStr = cleanStr.substring(0, 255);
+        }
+      }
+
+     if (sfType === 'textarea') {
+        // Default Salesforce Long Text Area limit is often 32,768
+        if (cleanStr.length > 32768) {
+          logger.warn(`Truncating Textarea field [${fieldName || 'Unknown'}] - Exceeded 32,768 chars.`);
+          cleanStr = cleanStr.substring(0, 32768);
+        }
       }
 
       return cleanStr;
