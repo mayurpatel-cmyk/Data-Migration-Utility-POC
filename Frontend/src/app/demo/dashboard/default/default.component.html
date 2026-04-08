@@ -816,13 +816,20 @@
           (click)="currentStep = 3">
           <i class="feather icon-arrow-left"></i> Back to Mapping
         </button>
-        <button class="btn btn-success shadow d-flex align-items-center gap-2" [disabled]="isMigrating"
+        
+        <button class="btn shadow d-flex align-items-center gap-2" 
+          [class.btn-danger]="isDeleteOnlyBatch"
+          [class.btn-success]="!isDeleteOnlyBatch"
+          [disabled]="isMigrating"
           (click)="startMigration()">
+          
           @if (isMigrating) {
-          <span class="spinner-border spinner-border-sm"></span> Executing Full Migration...
+            <span class="spinner-border spinner-border-sm"></span> Executing {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }}...
           } @else {
-          <i class="feather icon-check-circle"></i> Confirm & Start Migration Batch
+            <i class="feather" [class.icon-trash-2]="isDeleteOnlyBatch" [class.icon-check-circle]="!isDeleteOnlyBatch"></i> 
+            Confirm & Start {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Batch
           }
+          
         </button>
       </div>
     </app-card>
@@ -840,15 +847,15 @@
         @if (migrationSummary?.success > 0 && migrationSummary?.failed === 0) {
         <div class="animation-container py-3">
           <i class="feather icon-check-circle text-success" style="font-size: 5rem;"></i>
-          <h2 class="text-success mt-3 fw-bold">Migration Successful!</h2>
-          <p class="text-muted fs-5 mt-2">Excellent! All batches pushed to Salesforce without any issues.</p>
+          <h2 class="text-success mt-3 fw-bold">{{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Successful!</h2>
+          <p class="text-muted fs-5 mt-2">Excellent! All batches processed in Salesforce without any issues.</p>
         </div>
         }
 
         @else if (migrationSummary?.success > 0 && migrationSummary?.failed > 0) {
         <div class="animation-container py-3">
           <i class="feather icon-alert-circle text-warning" style="font-size: 5rem;"></i>
-          <h2 class="text-warning mt-3 fw-bold">Partial Migration Complete</h2>
+          <h2 class="text-warning mt-3 fw-bold">Partial {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Complete</h2>
           <p class="text-muted fs-5 mt-2">Some records were processed, but <strong>{{ migrationSummary.failed }}</strong>
             records encountered errors.</p>
         </div>
@@ -857,7 +864,7 @@
         @else if (migrationSummary?.failed > 0 && migrationSummary?.success === 0) {
         <div class="animation-container py-3">
           <i class="feather icon-x-circle text-danger" style="font-size: 5rem;"></i>
-          <h2 class="text-danger mt-3 fw-bold">Migration Failed</h2>
+          <h2 class="text-danger mt-3 fw-bold">{{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Failed</h2>
           <p class="text-muted fs-5 mt-2">None of the records could be processed. Please review the error log below to
             fix your data.</p>
         </div>

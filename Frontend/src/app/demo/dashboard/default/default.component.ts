@@ -118,6 +118,14 @@ export class DefaultComponent implements OnInit {
     }, 300);
   }
 
+  get isDeleteOnlyBatch(): boolean {
+    return this.migrationQueue.length > 0 && this.migrationQueue.every(job => job.operationMode === 'delete');
+  }
+
+  get hasDeleteInBatch(): boolean {
+    return this.migrationQueue.some(job => job.operationMode === 'delete');
+  }
+
   onFileSelected(event: any) {
     const file = event.target.files[0];
     if (file) {
@@ -732,8 +740,28 @@ export class DefaultComponent implements OnInit {
 
     const estimatedBatches = Math.ceil(totalRows / this.batchSize);
 
+   // Dynamic UI Variables based on Operation Type
+    const isDeleteOnly = this.isDeleteOnlyBatch;
+    const hasDelete = this.hasDeleteInBatch;
+
+    const popupTitle = isDeleteOnly 
+      ? '<strong class="text-danger">Ready for Data Deletion?</strong>' 
+      : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
+      
+    const confirmBtnText = isDeleteOnly 
+      ? '<i class="feather icon-trash-2 me-1"></i> Execute Deletion' 
+      : '<i class="feather icon-zap me-1"></i> Execute ' + (hasDelete ? 'Batch' : 'Migration');
+      
+    const confirmBtnClass = isDeleteOnly 
+      ? 'btn btn-danger btn-lg rounded-pill shadow px-4 mx-2 fw-bold' 
+      : 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold';
+      
+    const warningText = isDeleteOnly
+      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the Salesforce Recycle Bin.</p>'
+      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>';
+
     Swal.fire({
-      title: '<strong>Ready for Data Migration ?</strong>',
+      title: popupTitle,
       html: `
         <div class="p-3 bg-light rounded-4 border border-secondary-subtle text-start mb-2 mt-3 shadow-inner">
           <div class="d-flex justify-content-between align-items-center mb-3">
@@ -752,10 +780,10 @@ export class DefaultComponent implements OnInit {
             </span>
           </div>
         </div>
-        <p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>
+        ${warningText}
       `,
-      icon: 'question',
-      iconColor: '#0d6efd', 
+      icon: isDeleteOnly ? 'warning' : 'question',
+      iconColor: isDeleteOnly ? '#dc3545' : '#0d6efd', 
       backdrop: `
         rgba(0, 0, 0, 0.4)
         backdrop-filter: blur(8px)
@@ -764,12 +792,12 @@ export class DefaultComponent implements OnInit {
       `,
       showCancelButton: true,
       buttonsStyling: false, 
-      confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
+      confirmButtonText: confirmBtnText,
       cancelButtonText: 'Review Again',
       customClass: {
         popup: 'rounded-4 shadow-lg border-0',
         title: 'fs-3 fw-bold text-dark',
-        confirmButton: 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold',
+        confirmButton: confirmBtnClass,
         cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
       }
     }).then((result) => {
