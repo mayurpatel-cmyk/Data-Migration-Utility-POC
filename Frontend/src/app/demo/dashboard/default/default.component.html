@@ -53,7 +53,8 @@
             }
           </div>
         </div>
-        <div class="col-md-6">
+        
+        <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <div class="form-group mb-0">
             <label class="form-label fw-bold">2. Select Target Salesforce Object</label>
 
@@ -70,8 +71,8 @@
               </div>
 
               @if (isObjectDropdownOpen) {
-              <div class="dropdown-menu show w-100 p-2 shadow border-secondary position-absolute start-0 mt-1"
-                style="max-height: 300px; overflow-y: auto; z-index: 1050; top: 100%;">
+              <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
+                style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
                 <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                   <div class="input-group input-group-sm">
@@ -104,33 +105,51 @@
       <div class="mt-4 pt-4 border-top">
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i>Migration Mode</h6>
 
-        <div class="d-flex gap-4 mb-3">
+        <div class="d-flex flex-wrap gap-4 mb-3">
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert"
               [(ngModel)]="operationMode">
             <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
-              Insert Only (New Records)
+              Insert
             </label>
-            <div class="text-muted small">Creates new records. External IDs are not required.</div>
+            <div class="text-muted small">Creates new records.</div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpdate" value="update"
+              [(ngModel)]="operationMode">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">
+              Update
+            </label>
+            <div class="text-muted small">Updates via SF Id or mapped Ext ID.</div>
           </div>
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert"
               [(ngModel)]="operationMode">
             <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
-              Upsert (Update & Insert)
+              Upsert
             </label>
-            <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
+            <div class="text-muted small">Prevents duplicates. Requires Ext ID.</div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opDelete" value="delete"
+              [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">
+              Delete
+            </label>
+            <div class="text-muted small">Removes mapped SF Id records.</div>
           </div>
         </div>
 
-        @if (operationMode === 'upsert') {
-        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle">
-          <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> Primary Upsert Key</label>
+        @if (['insert', 'update', 'upsert'].includes(operationMode)) {
+        
+        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
+          <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> External ID Key (Optional for Insert/Update, Required for Upsert)</label>
 
           @if (isLoadingFields) {
           <div class="text-primary small mt-1"><span class="spinner-border spinner-border-sm me-2"></span>Loading
             fields...</div>
           } @else {
+          
           <div class="position-relative w-50" (click)="$event.stopPropagation()">
             <div class="form-select cursor-pointer bg-white border-primary-subtle"
               (click)="!isLoadingFields && toggleUpsertKeyDropdown($event)" [class.text-muted]="!targetExtIdField">
@@ -138,14 +157,17 @@
             </div>
 
             @if (isUpsertKeyDropdownOpen) {
-            <div class="dropdown-menu show w-100 p-2 shadow border-primary-subtle position-absolute start-0 mt-1"
-              style="max-height: 250px; overflow-y: auto; z-index: 1050; top: 100%;">
+            <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+              style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
               <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                 <div class="input-group input-group-sm">
                   <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
                   <input type="text" class="form-control" placeholder="Search ID fields..."
                     [(ngModel)]="upsertKeySearchQuery" autofocus>
                 </div>
+              </div>
+              <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1" (click)="selectUpsertKey('')">
+                 <i class="feather icon-x-circle me-1"></i> -- No External ID --
               </div>
               @for (field of getFilteredUpsertKeys(); track field.name) {
               <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
@@ -185,30 +207,45 @@
         <div class="d-flex flex-wrap gap-4 align-items-start">
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opInsertStep3"
-              value="insert" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
+              value="insert" [(ngModel)]="operationMode">
             <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">
-              Insert Only (New Records)
+              Insert
             </label>
-            <div class="text-muted small">Creates new records. External IDs are not required.</div>
+          </div>
+
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpdateStep3"
+              value="update" [(ngModel)]="operationMode">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdateStep3">
+              Update
+            </label>
           </div>
 
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3"
               value="upsert" [(ngModel)]="operationMode">
             <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">
-              Upsert (Update & Insert)
+              Upsert
             </label>
-            <div class="text-muted small">Prevents duplicates and links relational data. Requires an External ID.</div>
           </div>
 
-          @if (operationMode === 'upsert') {
-          <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2">
-            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> Primary Upsert
-              Key:</label>
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opDeleteStep3"
+              value="delete" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDeleteStep3">
+              Delete
+            </label>
+          </div>
+
+          @if (['insert', 'update', 'upsert'].includes(operationMode)) {
+          
+          <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
+            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID Key:</label>
 
             @if (isLoadingFields) {
             <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
             } @else {
+
             <div class="position-relative" style="min-width: 220px;" (click)="$event.stopPropagation()">
               <div class="form-select form-select-sm cursor-pointer bg-white border-primary-subtle"
                 (click)="!isLoadingFields && toggleUpsertKeyDropdown($event)" [class.text-muted]="!targetExtIdField">
@@ -216,14 +253,17 @@
               </div>
 
               @if (isUpsertKeyDropdownOpen) {
-              <div class="dropdown-menu show w-100 p-2 shadow border-primary-subtle position-absolute end-0 mt-1"
-                style="max-height: 250px; overflow-y: auto; z-index: 1050; top: 100%;">
+              <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute end-0 mt-1 bg-white"
+                style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
                 <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                   <div class="input-group input-group-sm">
                     <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
                     <input type="text" class="form-control" placeholder="Search ID fields..."
                       [(ngModel)]="upsertKeySearchQuery" autofocus>
                   </div>
+                </div>
+                <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1" (click)="selectUpsertKey('')">
+                   <i class="feather icon-x-circle me-1"></i> -- No External ID --
                 </div>
                 @for (field of getFilteredUpsertKeys(); track field.name) {
                 <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
@@ -254,7 +294,8 @@
           </select>
         </div>
         }
-        <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'">
+        
+        <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
             Target Salesforce Object</label>
 
@@ -270,8 +311,8 @@
             </div>
 
             @if (isObjectDropdownOpen) {
-            <div class="dropdown-menu show w-100 p-2 shadow border-secondary position-absolute start-0 mt-1"
-              style="max-height: 300px; overflow-y: auto; z-index: 1050; top: 100%;">
+            <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
+              style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
               <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                 <div class="input-group input-group-sm">
@@ -335,7 +376,7 @@
       </div>
       }
 
-      @if (sfFields.length > 0 && getMissingRequiredFields().length > 0) {
+      @if (sfFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
       <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle">
         <i class="feather icon-alert-triangle text-warning fs-5"></i>
         <div>
@@ -365,23 +406,26 @@
         </div>
       </div>
 
-      <div class="table-responsive border rounded mb-3 shadow-sm" style="overflow: visible;">
+      <div class="border rounded mb-3 shadow-sm" style="overflow: visible !important;">
         <table class="table table-hover table-bordered align-middle mb-0" style="overflow: visible;">
           <thead class="table-light position-sticky top-0" style="z-index: 105;">
             <tr>
-              <th width="45%" class="py-3 ps-4">CSV Column ({{ selectedCRM }})</th>
+              <th width="45%" class="py-3 ps-4">CSV Column </th>
               <th width="55%" class="py-3">Salesforce Field Mapping</th>
             </tr>
           </thead>
           <tbody>
             @for (mapping of mappings; track mapping.csvField) {
-            <tr>
-              <td class="fw-bold text-primary ps-4">
+            <tr class="position-relative"
+                [style.z-index]="(mapping.isDropdownOpen || mapping.isParentDropdownOpen) ? '1060' : 'auto'">
+              
+              <td class="fw-bold text-primary ps-4 align-middle">
                 <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
               </td>
               <td>
 
                 <div class="position-relative" (click)="$event.stopPropagation()">
+                  
                   <div class="form-select form-select-sm mb-2 cursor-pointer bg-white"
                     (click)="!isLoadingFields && toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
 
@@ -393,8 +437,8 @@
                   </div>
 
                   @if (mapping.isDropdownOpen) {
-                  <div class="dropdown-menu show w-100 p-2 shadow border-primary-subtle position-absolute start-0 mt-1"
-                    style="max-height: 300px; overflow-y: auto; z-index: 1050; top: 100%;">
+                  <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                    style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
                     <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                       <div class="input-group input-group-sm">
@@ -450,6 +494,7 @@
                   } @else {
 
                   <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                    
                     <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
                       (click)="toggleParentDropdown(mapping, $event)"
                       [class.text-muted]="!mapping.relationalExtIdField">
@@ -458,8 +503,8 @@
 
                     @if (mapping.isParentDropdownOpen) {
                     <div
-                      class="dropdown-menu show w-100 p-2 shadow border-primary-subtle position-absolute start-0 mt-1"
-                      style="max-height: 250px; overflow-y: auto; z-index: 1060; top: 100%;">
+                      class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                      style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
 
                       <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                         <div class="input-group input-group-sm">
@@ -685,7 +730,7 @@
         <i class="feather icon-info fs-3"></i>
         <div>
           Review your entire migration batch below. You are about to migrate data into <strong>{{
-            getAllMigrationPlans().length }}</strong> object(s). They will be processed in the order shown below.
+          getAllMigrationPlans().length }}</strong> object(s). They will be processed in the order shown below.
         </div>
       </div>
 
@@ -720,13 +765,13 @@
           <h6 class="m-0 text-primary-emphasis fw-bold d-flex align-items-center gap-2">
             <i class="feather icon-box"></i> Target Object: {{ plan.targetObject }}
 
-            @if (plan.operationMode === 'upsert') {
-            <span class="ms-2 text-muted fw-normal">(Upsert Key: <code
-                class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField || 'None' }}</code>)</span>
-            }
-            @else {
-            <span class="ms-2 text-muted fw-normal">(Insert
-              Only)</span>
+            @if (plan.operationMode === 'upsert' || plan.operationMode === 'update') {
+            <span class="ms-2 text-muted fw-normal">({{ plan.operationMode | titlecase }} Key: <code
+                class="text-dark bg-white px-1 rounded">{{ plan.targetExtIdField || 'Id' }}</code>)</span>
+            } @else if (plan.operationMode === 'delete') {
+            <span class="ms-2 text-muted fw-normal text-danger">(Delete via ID)</span>
+            } @else {
+            <span class="ms-2 text-muted fw-normal">(Insert)</span>
             }
           </h6>
           <span class="badge bg-secondary px-3 py-2 d-flex align-items-center gap-1"><i
@@ -737,7 +782,7 @@
             <table class="table table-hover align-middle mb-0 border-0">
               <thead class="table-light text-muted small">
                 <tr>
-                  <th width="45%" class="ps-4 border-0 py-3">Source Column ({{ selectedCRM }})</th>
+                  <th width="45%" class="ps-4 border-0 py-3">Source Column </th>
                   <th width="10%" class="text-center border-0 py-3"></th>
                   <th width="45%" class="border-0 py-3">Destination Field (Salesforce)</th>
                 </tr>
@@ -804,7 +849,7 @@
         <div class="animation-container py-3">
           <i class="feather icon-alert-circle text-warning" style="font-size: 5rem;"></i>
           <h2 class="text-warning mt-3 fw-bold">Partial Migration Complete</h2>
-          <p class="text-muted fs-5 mt-2">Some records were imported, but <strong>{{ migrationSummary.failed }}</strong>
+          <p class="text-muted fs-5 mt-2">Some records were processed, but <strong>{{ migrationSummary.failed }}</strong>
             records encountered errors.</p>
         </div>
         }
@@ -813,7 +858,7 @@
         <div class="animation-container py-3">
           <i class="feather icon-x-circle text-danger" style="font-size: 5rem;"></i>
           <h2 class="text-danger mt-3 fw-bold">Migration Failed</h2>
-          <p class="text-muted fs-5 mt-2">None of the records could be imported. Please review the error log below to
+          <p class="text-muted fs-5 mt-2">None of the records could be processed. Please review the error log below to
             fix your data.</p>
         </div>
         }

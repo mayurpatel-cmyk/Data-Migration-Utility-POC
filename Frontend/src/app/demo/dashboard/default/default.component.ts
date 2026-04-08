@@ -19,11 +19,9 @@ interface MappingMeta {
   parentObjectName?: string;
   isLoadingParentFields?: boolean;
 
-  // UI State for the Main Field Dropdown
   isDropdownOpen?: boolean;
   searchQuery?: string;
 
-  // NEW: UI State for the Parent Lookup Dropdown
   isParentDropdownOpen?: boolean;
   parentSearchQuery?: string;
 }
@@ -50,11 +48,9 @@ export class DefaultComponent implements OnInit {
   private toastr = inject(ToastrService);
   private eRef = inject(ElementRef);
 
-  // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
 
   currentStep: number = 2;
-  selectedCRM: string = 'Zoho';
   selectedFile: File | null = null;
   selectedObject: string = '';
   csvHeaders: string[] = [];
@@ -76,38 +72,35 @@ export class DefaultComponent implements OnInit {
   failedRecords: any[] = [];
   successfulRecords: any[] = [];
 
-  // --- PREVIEW STATE ---
   showPreview = false;
   previewData: any[] = [];
   previewHeaders: string[] = [];
   previewingItemIndex: number | null = null;
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
-  operationMode: string = 'insert';
+  
+  // Default to insert
+  operationMode: string = 'insert'; 
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
   batchSize: number = 200;
 
-  // --- STANDALONE DROPDOWN STATES ---
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
 
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
 
- ngOnInit() {
+  ngOnInit() {
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
         this.sfObjects = objects;
-        
-        // ADDED: cdr.detectChanges() to force the UI to remove the loading spinner instantly
         setTimeout(() => {
           this.isLoadingObjects = false;
           this.cdr.detectChanges(); 
         });
       },
       error: (err) => {
-        // ADDED: cdr.detectChanges() here as well
         setTimeout(() => {
           this.isLoadingObjects = false;
           this.cdr.detectChanges(); 
@@ -116,8 +109,8 @@ export class DefaultComponent implements OnInit {
       }
     });
   }
+
   onCRMSelect(crm: string) {
-    this.selectedCRM = crm;
     setTimeout(() => {
       this.currentStep = 2;
       this.autoNavigate();
@@ -164,8 +157,6 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  // --- SEARCHABLE DROPDOWN HELPERS ---
-
   getSfObjectLabel(objName: string): string {
     if (!objName) return '';
     const obj = this.sfObjects.find((o) => o.name === objName);
@@ -196,7 +187,6 @@ export class DefaultComponent implements OnInit {
     return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
   }
 
-  // NEW: Helpers for Parent Ext ID Lookup
   getParentFieldLabel(mapping: MappingMeta, fieldName?: string): string {
     if (!fieldName) return '';
     if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
@@ -213,8 +203,6 @@ export class DefaultComponent implements OnInit {
     const lowerQuery = mapping.parentSearchQuery.toLowerCase();
     return parentFields.filter((f: any) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
   }
-
-  // --- DROPDOWN TOGGLES & SELECTORS ---
 
   toggleObjectDropdown(event: Event) {
     event.stopPropagation();
@@ -274,11 +262,10 @@ export class DefaultComponent implements OnInit {
     mapping.isParentDropdownOpen = false;
   }
 
-  // Unified global close
   closeAllDropdowns() {
     this.mappings.forEach((m) => {
       m.isDropdownOpen = false;
-      m.isParentDropdownOpen = false; // Close parent dropdowns too!
+      m.isParentDropdownOpen = false;
     });
     this.isObjectDropdownOpen = false;
     this.isUpsertKeyDropdownOpen = false;
@@ -289,13 +276,14 @@ export class DefaultComponent implements OnInit {
       this.closeAllDropdowns();
   }
 
-  // --- CORE LOGIC METHODS ---
-
   getSfFieldMeta(fieldName: string): any {
     return this.sfFields.find((f) => f.name === fieldName);
   }
 
   getMissingRequiredFields(): string[] {
+    // If it's a delete operation, standard required fields don't apply.
+    if (this.operationMode === 'delete') return [];
+    
     if (!this.sfFields || this.sfFields.length === 0) return [];
     const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
     const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
@@ -312,10 +300,6 @@ export class DefaultComponent implements OnInit {
 
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.warning('Please select a Primary Upsert Key before mapping.', 'Missing Configuration');
-      return;
-    }
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
@@ -329,8 +313,7 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-onSheetChangeInMapping(newSheet: string) {
-    // ngModelChange fires during render. We MUST defer array recreation.
+  onSheetChangeInMapping(newSheet: string) {
     setTimeout(() => {
       this.onSheetSelect(newSheet);
       this.mappings = this.csvHeaders.map(header => ({
@@ -351,13 +334,12 @@ onSheetChangeInMapping(newSheet: string) {
     this.fetchObjectFields(this.selectedObject);
   }
 
- autoMapFields() {
+  autoMapFields() {
     if (!this.sfFields || this.sfFields.length === 0) {
       this.toastr.warning('Salesforce fields are not loaded yet. Please wait.', 'Not Ready');
       return;
     }
 
-    // Wrap in setTimeout to defer the massive state update to the next tick
     setTimeout(() => {
       let matchCount = 0;
 
@@ -394,17 +376,16 @@ onSheetChangeInMapping(newSheet: string) {
     });
   }
 
-clearAllMappings() {
+  clearAllMappings() {
     Swal.fire({
       title: 'Are you sure?',
       text: "You will lose all your currently mapped fields!",
       icon: 'warning',
       showCancelButton: true,
-      confirmButtonColor: '#dc3545', // Matches Bootstrap danger red
-      cancelButtonColor: '#6c757d',  // Matches Bootstrap secondary grey
+      confirmButtonColor: '#dc3545',
+      cancelButtonColor: '#6c757d', 
       confirmButtonText: 'Yes, clear them!'
     }).then((result) => {
-      // This block only runs if they clicked "Yes"
       if (result.isConfirmed) {
         this.mappings.forEach(m => {
           m.sfField = '';
@@ -418,13 +399,11 @@ clearAllMappings() {
     });
   }
 
- private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
+  private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
     this.migrationService.getObjectFields(objectName).subscribe({
       next: (response: any) => {
-        // Move ALL state mutations inside setTimeout to prevent API race conditions
         setTimeout(() => {
           const fieldsArray = response.fields ? response.fields : response;
-          // ADDED: Sort main object fields alphabetically
           this.sfFields = this.sortFieldsAlphabetically(fieldsArray);
 
           if (!isEditMode) {
@@ -437,7 +416,6 @@ clearAllMappings() {
                   next: (pRes: any) => {
                     setTimeout(() => {
                       const pFieldsArray = pRes.fields ? pRes.fields : pRes;
-                      // ADDED: Sort parent object fields alphabetically
                       this.parentObjectFieldsCache[m.parentObjectName!] = this.sortFieldsAlphabetically(pFieldsArray);
                       m.isLoadingParentFields = false;
                       this.cdr.detectChanges();
@@ -465,7 +443,6 @@ clearAllMappings() {
   private sortFieldsAlphabetically(fields: any[]): any[] {
     if (!Array.isArray(fields)) return [];
     return fields.sort((a, b) => {
-      // Sort by label, fallback to name if label doesn't exist
       const valA = (a.label || a.name || '').toLowerCase();
       const valB = (b.label || b.name || '').toLowerCase();
       return valA.localeCompare(valB);
@@ -476,7 +453,7 @@ clearAllMappings() {
     return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
- onSfFieldChange(mapping: MappingMeta) {
+  onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
     if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
@@ -484,14 +461,12 @@ clearAllMappings() {
       mapping.parentObjectName = parentObj;
 
       if (!this.parentObjectFieldsCache[parentObj]) {
-        // Defer UI spinner activation
         setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
 
         this.migrationService.getObjectFields(parentObj).subscribe({
           next: (response: any) => {
             setTimeout(() => {
               const fieldsArray = response.fields ? response.fields : response;
-              // ADDED: Sort the relational parent fields alphabetically
               this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
               mapping.isLoadingParentFields = false;
               this.cdr.detectChanges();
@@ -512,63 +487,78 @@ clearAllMappings() {
     }
   }
 
- queueAnotherObject() {
-    // NEW: Check for duplicate target object in the queue
-    const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
-    if (isDuplicate) {
-      this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
-      return;
-    }
+  queueAnotherObject() {
+    const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+    if (isDuplicate) {
+      this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
+      return;
+    }
 
-    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
-      return;
-    }
-    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
-    if (activeMappings.length === 0) {
-      this.toastr.warning('Please map at least one field.', 'No Mappings');
-      return;
-    }
-    const missingFields = this.getMissingRequiredFields();
-    if (missingFields.length > 0) {
-      this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
-      return;
-    }
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
-      return;
-    }
-    const enhancedMappings = activeMappings.map((mapping) => {
-      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-      return {
-        ...mapping,
-        type: fieldMeta?.type,
-        referenceTo: fieldMeta?.referenceTo,
-        relationshipName: fieldMeta?.relationshipName
-      };
-    });
+    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
+      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
+      return;
+    }
 
-    this.migrationQueue.push({
-      sheetName: this.selectedSheetName,
-      targetObject: this.selectedObject,
-      csvHeaders: [...this.csvHeaders],
-      mappings: enhancedMappings,
-      operationMode: this.operationMode,
-      targetExtIdField: this.targetExtIdField
-    });
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'No Mappings');
+      return;
+    }
 
-    this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
-    this.selectedObject = '';
-    this.sfFields = [];
-    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
-    this.confirmedMappings = [];
-    this.targetExtIdField = '';
-    this.operationMode = 'insert';
-    this.showPreview = false;
-    this.previewingItemIndex = null;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    this.cdr.detectChanges();
-  }
+    // Validation for Operations
+    const hasSfId = activeMappings.some((m) => m.sfField === 'Id');
+    if (this.operationMode === 'delete' && !hasSfId) {
+      this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+      return;
+    }
+
+    if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
+      this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+      return;
+    }
+
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.error('Upsert requires a Primary Upsert Key (External ID).', 'Missing Configuration');
+      return;
+    }
+
+    const missingFields = this.getMissingRequiredFields();
+    if (missingFields.length > 0) {
+      this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+      return;
+    }
+
+    const enhancedMappings = activeMappings.map((mapping) => {
+      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+      return {
+        ...mapping,
+        type: fieldMeta?.type,
+        referenceTo: fieldMeta?.referenceTo,
+        relationshipName: fieldMeta?.relationshipName
+      };
+    });
+
+    this.migrationQueue.push({
+      sheetName: this.selectedSheetName,
+      targetObject: this.selectedObject,
+      csvHeaders: [...this.csvHeaders],
+      mappings: enhancedMappings,
+      operationMode: this.operationMode,
+      targetExtIdField: this.targetExtIdField
+    });
+
+    this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
+    this.selectedObject = '';
+    this.sfFields = [];
+    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
+    this.confirmedMappings = [];
+    this.targetExtIdField = '';
+    this.operationMode = 'insert';
+    this.showPreview = false;
+    this.previewingItemIndex = null;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.cdr.detectChanges();
+  }
 
   removeFromQueue(index: number) {
     if (this.previewingItemIndex === index) {
@@ -652,28 +642,35 @@ clearAllMappings() {
     this.previewingItemIndex = index;
   }
 
-goToReview() {
+  goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
-    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
-      this.toastr.warning('Please map at least one field.', 'Mapping Required');
-      return;
-    }
-    if (this.confirmedMappings.length > 0) {
-      const missingFields = this.getMissingRequiredFields();
-      if (missingFields.length > 0) {
-        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
-        return; // Stops the process from moving forward
-      }
-    }
-    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-    if (this.confirmedMappings.length > 0) {
-      if (isUpsertMissingKey) {
-        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
-        return;
-      }
+    if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
+      this.toastr.warning('Please map at least one field.', 'Mapping Required');
+      return;
+    }
 
-      // NEW: Check for duplicate target object in the queue
-      const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+    if (this.confirmedMappings.length > 0) {
+      const missingFields = this.getMissingRequiredFields();
+      if (missingFields.length > 0) {
+        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
+        return; 
+      }
+
+      const hasSfId = this.confirmedMappings.some((m) => m.sfField === 'Id');
+      if (this.operationMode === 'delete' && !hasSfId) {
+        this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+        return;
+      }
+      if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
+        this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+        return;
+      }
+      if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+        this.toastr.error('Upsert requires a Primary Upsert Key before proceeding.', 'Missing Configuration');
+        return;
+      }
+
+      const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
       if (isDuplicate) {
         this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
         return;
@@ -724,7 +721,6 @@ goToReview() {
       return;
     }
 
-    // 1. Calculate total records across all queued sheets for the alert
     let totalRows = 0;
     if (this.workbook) {
       this.migrationQueue.forEach(job => {
@@ -734,13 +730,10 @@ goToReview() {
       });
     }
 
-    // 2. Calculate the estimated number of batches
     const estimatedBatches = Math.ceil(totalRows / this.batchSize);
 
-    // 3. Show the SweetAlert Confirmation
     Swal.fire({
       title: '<strong>Ready for Data Migration ?</strong>',
-      // We inject a mini Bootstrap dashboard right into the alert!
       html: `
         <div class="p-3 bg-light rounded-4 border border-secondary-subtle text-start mb-2 mt-3 shadow-inner">
           <div class="d-flex justify-content-between align-items-center mb-3">
@@ -762,23 +755,17 @@ goToReview() {
         <p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>
       `,
       icon: 'question',
-      iconColor: '#0d6efd', // Bootstrap Primary Blue
-      
-      // Styling the Backdrop (Adds an Apple-style glass blur behind the alert)
+      iconColor: '#0d6efd', 
       backdrop: `
         rgba(0, 0, 0, 0.4)
         backdrop-filter: blur(8px)
         left top
         no-repeat
       `,
-      
-      // Button Configuration
       showCancelButton: true,
-      buttonsStyling: false, // Turn off default styling so we can use Bootstrap classes
+      buttonsStyling: false, 
       confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
       cancelButtonText: 'Review Again',
-      
-      // Injecting custom CSS classes into the SweetAlert components
       customClass: {
         popup: 'rounded-4 shadow-lg border-0',
         title: 'fs-3 fw-bold text-dark',
@@ -787,9 +774,7 @@ goToReview() {
       }
     }).then((result) => {
       
-      // This block ONLY runs if they click "Yes"
       if (result.isConfirmed) {
-        
         this.isMigrating = true;
         this.cdr.detectChanges();
 
@@ -817,13 +802,12 @@ goToReview() {
                 mappings: job.mappings,
                 targetExtIdField: job.targetExtIdField,
                 operationMode: job.operationMode,
-                batchSize: this.batchSize // Passing the batch size to the backend
+                batchSize: this.batchSize 
               });
             }
 
             this.migrationService.migrateData(jobsPayload).subscribe({
               next: (response) => {
-                console.log('Migration response from server:', response);
                 this.isMigrating = false;
 
                 const successCount = response.stats?.success || 0;
@@ -888,26 +872,22 @@ goToReview() {
     link.click();
   }
 
- private autoNavigate() {
+  private autoNavigate() {
     setTimeout(() => {
-      // Find all rows
       const rows = document.querySelectorAll('.row.mb-4');
-      // Grab the last one (which is the newly opened step)
       const newStepElement = rows[rows.length - 1];
       
       if (newStepElement) {
-        // Scroll so the TOP of the new step is at the top of the screen
         newStepElement.scrollIntoView({
           behavior: 'smooth',
-          block: 'start' // Changed from 'nearest' to 'start'
+          block: 'start'
         });
       }
-    }, 150); // Slightly increased delay to ensure Angular has rendered the DOM
+    }, 150); 
   }
 
   resetMigrationSession() {
     this.migrationQueue = [];
-    this.selectedCRM = '';
     this.selectedFile = null;
     this.selectedObject = '';
     this.csvHeaders = [];
@@ -932,7 +912,6 @@ goToReview() {
     this.previewingItemIndex = null;
 
     this.currentStep = 2;
-    this.selectedCRM = 'Zoho';
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }

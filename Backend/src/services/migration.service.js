@@ -71,7 +71,6 @@ class MigrationService {
         if (processedValue instanceof Date) {
           return processedValue.toISOString().split('T')[1];
         }
-        // If it's already a string like "14:30:00", return it cleaned up
         return String(processedValue).trim();
 
       case 'multipicklist':
@@ -82,14 +81,13 @@ class MigrationService {
           .join(';');
 
       case 'email':
-        let emailStr = String(processedValue).trim().replace(/\s+/g, ''); // Remove spaces
+        let emailStr = String(processedValue).trim().replace(/\s+/g, ''); 
         if (emailStr.length > 80) {
           logger.warn(`Truncating Email field [${fieldName}] - Exceeded 80 chars.`);
           emailStr = emailStr.substring(0, 80);
         }
         return emailStr;
 
-      // NEW: Phone Validation & Truncation (Max 40 chars)
       case 'phone':
         let phoneStr = String(processedValue).trim();
         if (phoneStr.length > 40) {
@@ -98,11 +96,10 @@ class MigrationService {
         }
         return phoneStr;
 
-      // NEW: URL Formatting (Max 255 chars)
       case 'url':
         let urlStr = String(processedValue).trim();
         if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-          urlStr = 'https://' + urlStr; // SF often rejects URLs without protocols
+          urlStr = 'https://' + urlStr; 
         }
         if (urlStr.length > 255) {
           logger.warn(`Truncating URL field [${fieldName}] - Exceeded 255 chars.`);
@@ -141,10 +138,7 @@ class MigrationService {
       }
 
      if (sfType === 'string') {
-        // Salesforce standard text fields CRASH if they contain line breaks
         cleanStr = cleanStr.replace(/[\r\n]+/g, ' '); 
-        
-        // Max 255 chars
         if (cleanStr.length > 255) {
           logger.warn(`Truncating String field [${fieldName || 'Unknown'}] - Exceeded 255 chars.`);
           cleanStr = cleanStr.substring(0, 255);
@@ -152,7 +146,6 @@ class MigrationService {
       }
 
      if (sfType === 'textarea') {
-        // Default Salesforce Long Text Area limit is often 32,768
         if (cleanStr.length > 32768) {
           logger.warn(`Truncating Textarea field [${fieldName || 'Unknown'}] - Exceeded 32,768 chars.`);
           cleanStr = cleanStr.substring(0, 32768);
@@ -222,14 +215,15 @@ class MigrationService {
       excludeReferencesTo = [],
       onlyReferencesTo = [],
       targetObject = '',
-      targetExtIdField = ''
+      targetExtIdField = '',
+      operationMode = 'insert' // passed down config
     } = options;
 
     const payload = [];
     const isPatchMode = onlySelfReferencing || onlyReferencesTo.length > 0;
 
     rawRecords.forEach((rawRow, originalIndex) => {
-      const sfRecord = {};
+      let sfRecord = {};
       let hasPatchData = false;
 
       mappings.forEach(mappingMeta => {
@@ -285,8 +279,16 @@ class MigrationService {
         sfRecord[targetExtIdField] = null;
       }
 
-      if (!isPatchMode || (isPatchMode && hasPatchData)) {
-        payload.push({ originalIndex, sfRecord });
+      // Explicit strip for Delete mode. SF only accepts "Id" field for bulk deletes.
+      if (operationMode === 'delete') {
+         sfRecord = sfRecord.Id ? { Id: sfRecord.Id } : {};
+      }
+
+      // Check if Object is not empty before pushing
+      if (Object.keys(sfRecord).length > 0) {
+        if (!isPatchMode || (isPatchMode && hasPatchData)) {
+          payload.push({ originalIndex, sfRecord });
+        }
       }
     });
 
@@ -325,11 +327,11 @@ class MigrationService {
             records: rawJobRecords, 
             mappings, 
             batchSize = 10000, 
-            operationMode = 'upsert', 
+            operationMode = 'insert', // Defaults to 'insert'
             deferReferencesTo = [], 
             isPass3Patch, 
             onlyReferencesTo = [],
-            concurrencyMode = 'Parallel' // Support for 'Serial' mode
+            concurrencyMode = 'Parallel'
         } = job;
 
         const BATCH_SIZE = parseInt(batchSize, 10) || 10000;
@@ -340,7 +342,7 @@ class MigrationService {
             const prefix = isTimeout ? '[TIMEOUT]' : '[FATAL]';
             
             if (isTimeout) {
-                logger.error(`[${targetObject} - ${stageName}] TIMEOUT: Job is still processing in Salesforce. Check Bulk Data Load Jobs in Setup.`);
+                logger.error(`[${targetObject} - ${stageName}] TIMEOUT: Job is still processing in Salesforce.`);
             } else {
                 logger.error(`[${targetObject} - ${stageName}] Fatal Error: ${err.message}`);
             }
@@ -352,7 +354,9 @@ class MigrationService {
             totalFailed += chunk.length;
         };
 
-        // SCENARIO: PASS 3 PATCH (Cross-Object Link)
+        // -------------------------------------------------------------
+        // SCENARIO 0: PASS 3 PATCH (Cross-Object Link)
+        // -------------------------------------------------------------
         if (isPass3Patch) {
           if (!targetExtIdField) {
             logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
@@ -360,7 +364,7 @@ class MigrationService {
           }
 
           logger.info(`[${targetObject}] Starting Pass 3: Cross-Object Circular Patch (Linking to ${onlyReferencesTo.join(', ')})`);
-          const patchPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, onlyReferencesTo });
+          const patchPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, onlyReferencesTo, operationMode: 'upsert' });
           if (patchPayload.length === 0) continue;
 
           const payloadChunks = this.chunkArray(patchPayload, BATCH_SIZE);
@@ -387,66 +391,84 @@ class MigrationService {
           continue;
         }
 
-        // SCENARIO 1: SIMPLE INSERT
-        if (operationMode === 'insert') {
-          const insertPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, excludeReferencesTo: deferReferencesTo });
-          if (insertPayload.length === 0) continue;
+        // -------------------------------------------------------------
+        // SCENARIO 1: DELETE OPERATION (Standalone process)
+        // -------------------------------------------------------------
+        if (operationMode === 'delete') {
+            const deletePayload = this.buildPayload(rawJobRecords, mappings, { targetObject, operationMode });
+            if (deletePayload.length === 0) continue;
+            
+            const payloadChunks = this.chunkArray(deletePayload, BATCH_SIZE);
+            let chunkCounter = 1;
 
-          const payloadChunks = this.chunkArray(insertPayload, BATCH_SIZE);
-          let chunkCounter = 1;
+            logger.info(`[${targetObject}] Starting Bulk DELETE: ${deletePayload.length} total records across ${payloadChunks.length} batches.`);
+            
+            for (const chunk of payloadChunks) {
+                try {
+                    logger.info(`[${targetObject}] Delete Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
+                    const deleteRecords = chunk.map(p => p.sfRecord);
+                    
+                    const finalResults = await conn.bulk.load(targetObject, "delete", { concurrencyMode }, deleteRecords);
 
-          logger.info(`[${targetObject}] Starting Bulk INSERT: ${insertPayload.length} total records across ${payloadChunks.length} batches.`);
-
-          for (const chunk of payloadChunks) {
-            try {
-              logger.info(`[${targetObject}] Insert Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
-              const insertRecords = chunk.map(p => p.sfRecord);
-              const finalResults = await conn.bulk.load(targetObject, "insert", { concurrencyMode }, insertRecords);
-
-              finalResults.forEach((res, i) => {
-                const originalRecord = rawJobRecords[chunk[i].originalIndex];
-                if (res.success) {
-                  totalSuccess++;
-                  allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: 'Created', ...originalRecord });
-                } else {
-                  totalFailed++;
-                  const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                  allFailures.push({ error: `[${targetObject} Insert Failed] ${errMsg}`, record: originalRecord });
+                    finalResults.forEach((res, i) => {
+                        const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                        if (res.success) {
+                            totalSuccess++;
+                            allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: 'Deleted', ...originalRecord });
+                        } else {
+                            totalFailed++;
+                            const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                            allFailures.push({ error: `[${targetObject} Delete Failed] ${errMsg}`, record: originalRecord });
+                        }
+                    });
+                } catch (err) {
+                    handleBatchError(err, chunk, `Delete Batch ${chunkCounter}`);
                 }
-              });
-            } catch (err) {
-                handleBatchError(err, chunk, `Insert Batch ${chunkCounter}`);
+                chunkCounter++;
             }
-            chunkCounter++;
-          }
+            continue; 
         }
 
-        // SCENARIO 2: COMPLEX UPSERT
-        else if (operationMode === 'upsert') {
-          if (!targetExtIdField) throw new Error(`Job for ${targetObject} is missing targetExtIdField for Upsert.`);
 
-          const hasSelfReferencing = mappings.some(m => m.type === 'reference' && m.referenceTo && m.referenceTo.includes(targetObject));
+        // -------------------------------------------------------------
+        // SCENARIO 2: INSERT / UPDATE / UPSERT
+        // -------------------------------------------------------------
 
-          if (hasSelfReferencing) {
-            logger.info(`[${targetObject}] Detected Self-Referencing Lookup. Initiating Two-Pass Upsert.`);
+        // Resolve Dynamic API Call type. (e.g. Updating via ExtID is handled via SF's "upsert" call)
+        let sfOperation = operationMode;
+        let bulkOptions = { concurrencyMode };
+
+        if (operationMode === 'update' && targetExtIdField && targetExtIdField !== 'Id') {
+            sfOperation = 'upsert';
+            bulkOptions.extIdField = targetExtIdField;
+            logger.info(`[${targetObject}] Using 'upsert' API for 'update' operation because External ID (${targetExtIdField}) was provided.`);
+        } else if (operationMode === 'upsert') {
+            sfOperation = 'upsert';
+            bulkOptions.extIdField = targetExtIdField;
+        }
+
+        const hasSelfReferencing = mappings.some(m => m.type === 'reference' && m.referenceTo && m.referenceTo.includes(targetObject));
+
+        if (hasSelfReferencing) {
+            logger.info(`[${targetObject}] Detected Self-Referencing Lookup. Initiating Two-Pass Processing.`);
 
             // PASS 1: Base Data
-            const pass1Payload = this.buildPayload(rawJobRecords, mappings, { skipSelfReferencing: true, targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo });
+            const pass1Payload = this.buildPayload(rawJobRecords, mappings, { skipSelfReferencing: true, targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
             if (pass1Payload.length > 0) {
               const pass1Chunks = this.chunkArray(pass1Payload, BATCH_SIZE);
               let chunkCounter = 1;
 
               for (const chunk of pass1Chunks) {
                 try {
-                  logger.info(`[${targetObject}] Pass 1 Upsert Batch ${chunkCounter}/${pass1Chunks.length} (${chunk.length} records)`);
+                  logger.info(`[${targetObject}] Pass 1 Batch ${chunkCounter}/${pass1Chunks.length} (${chunk.length} records) via API: ${sfOperation}`);
                   const pass1Records = chunk.map(p => p.sfRecord);
-                  const pass1Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, pass1Records);
+                  const pass1Results = await conn.bulk.load(targetObject, sfOperation, bulkOptions, pass1Records);
 
                   pass1Results.forEach((res, i) => {
                     const originalRecord = rawJobRecords[chunk[i].originalIndex];
                     if (res.success) {
                       totalSuccess++;
-                      allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Updated', ...originalRecord });
+                      allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Processed', ...originalRecord });
                     } else {
                       totalFailed++;
                       const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
@@ -461,16 +483,20 @@ class MigrationService {
             }
 
             // PASS 2: Self-Referencing Links
-            const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField });
+            const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField, operationMode: 'upsert' }); // Force Upsert for secondary patch pass
             if (pass2Payload.length > 0) {
               const pass2Chunks = this.chunkArray(pass2Payload, BATCH_SIZE);
               let chunkCounter = 1;
+              
+              // Secondary patch updates need an identifier. Either TargetExtId or Id. 
+              const patchOptions = { concurrencyMode };
+              if (targetExtIdField) patchOptions.extIdField = targetExtIdField;
 
               for (const chunk of pass2Chunks) {
                 try {
-                  logger.info(`[${targetObject}] Pass 2 Upsert Batch ${chunkCounter}/${pass2Chunks.length} (${chunk.length} records)`);
+                  logger.info(`[${targetObject}] Pass 2 Batch ${chunkCounter}/${pass2Chunks.length} (${chunk.length} records) via API: upsert`);
                   const pass2Records = chunk.map(p => p.sfRecord);
-                  const pass2Results = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, pass2Records);
+                  const pass2Results = await conn.bulk.load(targetObject, "upsert", patchOptions, pass2Records);
 
                   pass2Results.forEach((res, i) => {
                     if (!res.success) {
@@ -486,39 +512,38 @@ class MigrationService {
               }
             }
 
-          } else {
-            // STANDARD 1-PASS UPSERT
-            const standardPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo });
+        } else {
+            // STANDARD 1-PASS (Insert, Update, or Upsert)
+            const standardPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
             if (standardPayload.length === 0) continue;
 
             const standardChunks = this.chunkArray(standardPayload, BATCH_SIZE);
             let chunkCounter = 1;
 
-            logger.info(`[${targetObject}] Starting Bulk UPSERT: ${standardPayload.length} total records across ${standardChunks.length} batches.`);
+            logger.info(`[${targetObject}] Starting Bulk ${sfOperation.toUpperCase()}: ${standardPayload.length} total records across ${standardChunks.length} batches.`);
 
             for (const chunk of standardChunks) {
               try {
-                logger.info(`[${targetObject}] Upsert Batch ${chunkCounter}/${standardChunks.length} (${chunk.length} records)`);
+                logger.info(`[${targetObject}] ${sfOperation} Batch ${chunkCounter}/${standardChunks.length} (${chunk.length} records)`);
                 const standardRecords = chunk.map(p => p.sfRecord);
-                const finalResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, standardRecords);
+                const finalResults = await conn.bulk.load(targetObject, sfOperation, bulkOptions, standardRecords);
 
                 finalResults.forEach((res, i) => {
                   const originalRecord = rawJobRecords[chunk[i].originalIndex];
                   if (res.success) {
                     totalSuccess++;
-                    allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Updated', ...originalRecord });
+                    allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Processed', ...originalRecord });
                   } else {
                     totalFailed++;
                     const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
-                    allFailures.push({ error: `[${targetObject} Upsert Failed] ${errMsg}`, record: originalRecord });
+                    allFailures.push({ error: `[${targetObject} ${sfOperation} Failed] ${errMsg}`, record: originalRecord });
                   }
                 });
               } catch (err) {
-                  handleBatchError(err, chunk, `Standard Upsert Batch ${chunkCounter}`);
+                  handleBatchError(err, chunk, `Standard ${sfOperation} Batch ${chunkCounter}`);
               }
               chunkCounter++;
             }
-          }
         }
       }
 
