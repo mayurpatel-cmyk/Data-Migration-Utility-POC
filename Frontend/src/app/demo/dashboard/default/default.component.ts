@@ -78,9 +78,9 @@ export class DefaultComponent implements OnInit {
   previewingItemIndex: number | null = null;
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
-  
+
   // Default to insert
-  operationMode: string = 'insert'; 
+  operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
   batchSize: number = 200;
 
@@ -97,13 +97,13 @@ export class DefaultComponent implements OnInit {
         this.sfObjects = objects;
         setTimeout(() => {
           this.isLoadingObjects = false;
-          this.cdr.detectChanges(); 
+          this.cdr.detectChanges();
         });
       },
       error: (err) => {
         setTimeout(() => {
           this.isLoadingObjects = false;
-          this.cdr.detectChanges(); 
+          this.cdr.detectChanges();
         });
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
@@ -291,7 +291,7 @@ export class DefaultComponent implements OnInit {
   getMissingRequiredFields(): string[] {
     // If it's a delete operation, standard required fields don't apply.
     if (this.operationMode === 'delete') return [];
-    
+
     if (!this.sfFields || this.sfFields.length === 0) return [];
     const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
     const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
@@ -352,13 +352,13 @@ export class DefaultComponent implements OnInit {
       let matchCount = 0;
 
       const normalizeString = (str: string) => {
-        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, ''); 
+        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
       };
 
       const sfFieldDict: { [key: string]: any } = {};
       this.sfFields.forEach(field => {
         sfFieldDict[normalizeString(field.name)] = field;
-        sfFieldDict[normalizeString(field.label)] = field; 
+        sfFieldDict[normalizeString(field.label)] = field;
       });
 
       this.mappings.forEach(mapping => {
@@ -379,7 +379,7 @@ export class DefaultComponent implements OnInit {
       } else {
         this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
       }
-      
+
       this.cdr.detectChanges();
     });
   }
@@ -391,7 +391,7 @@ export class DefaultComponent implements OnInit {
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#dc3545',
-      cancelButtonColor: '#6c757d', 
+      cancelButtonColor: '#6c757d',
       confirmButtonText: 'Yes, clear them!'
     }).then((result) => {
       if (result.isConfirmed) {
@@ -400,7 +400,7 @@ export class DefaultComponent implements OnInit {
           m.relationalExtIdField = '';
           m.parentObjectName = undefined;
         });
-        
+
         this.toastr.info('All mappings have been reset.', 'Cleared');
         this.cdr.detectChanges();
       }
@@ -661,7 +661,7 @@ export class DefaultComponent implements OnInit {
       const missingFields = this.getMissingRequiredFields();
       if (missingFields.length > 0) {
         this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
-        return; 
+        return;
       }
 
       const hasSfId = this.confirmedMappings.some((m) => m.sfField === 'Id');
@@ -744,18 +744,18 @@ export class DefaultComponent implements OnInit {
     const isDeleteOnly = this.isDeleteOnlyBatch;
     const hasDelete = this.hasDeleteInBatch;
 
-    const popupTitle = isDeleteOnly 
-      ? '<strong class="text-danger">Ready for Data Deletion?</strong>' 
+    const popupTitle = isDeleteOnly
+      ? '<strong class="text-danger">Ready for Data Deletion?</strong>'
       : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
-      
-    const confirmBtnText = isDeleteOnly 
-      ? '<i class="feather icon-trash-2 me-1"></i> Execute Deletion' 
+
+    const confirmBtnText = isDeleteOnly
+      ? '<i class="feather icon-trash-2 me-1"></i> Execute Deletion'
       : '<i class="feather icon-zap me-1"></i> Execute ' + (hasDelete ? 'Batch' : 'Migration');
-      
-    const confirmBtnClass = isDeleteOnly 
-      ? 'btn btn-danger btn-lg rounded-pill shadow px-4 mx-2 fw-bold' 
+
+    const confirmBtnClass = isDeleteOnly
+      ? 'btn btn-danger btn-lg rounded-pill shadow px-4 mx-2 fw-bold'
       : 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold';
-      
+
     const warningText = isDeleteOnly
       ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the Salesforce Recycle Bin.</p>'
       : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>';
@@ -783,7 +783,7 @@ export class DefaultComponent implements OnInit {
         ${warningText}
       `,
       icon: isDeleteOnly ? 'warning' : 'question',
-      iconColor: isDeleteOnly ? '#dc3545' : '#0d6efd', 
+      iconColor: isDeleteOnly ? '#dc3545' : '#0d6efd',
       backdrop: `
         rgba(0, 0, 0, 0.4)
         backdrop-filter: blur(8px)
@@ -791,7 +791,7 @@ export class DefaultComponent implements OnInit {
         no-repeat
       `,
       showCancelButton: true,
-      buttonsStyling: false, 
+      buttonsStyling: false,
       confirmButtonText: confirmBtnText,
       cancelButtonText: 'Review Again',
       customClass: {
@@ -801,7 +801,7 @@ export class DefaultComponent implements OnInit {
         cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
       }
     }).then((result) => {
-      
+
       if (result.isConfirmed) {
         this.isMigrating = true;
         this.cdr.detectChanges();
@@ -830,7 +830,7 @@ export class DefaultComponent implements OnInit {
                 mappings: job.mappings,
                 targetExtIdField: job.targetExtIdField,
                 operationMode: job.operationMode,
-                batchSize: this.batchSize 
+                batchSize: this.batchSize
               });
             }
 
@@ -904,14 +904,14 @@ export class DefaultComponent implements OnInit {
     setTimeout(() => {
       const rows = document.querySelectorAll('.row.mb-4');
       const newStepElement = rows[rows.length - 1];
-      
+
       if (newStepElement) {
         newStepElement.scrollIntoView({
           behavior: 'smooth',
           block: 'start'
         });
       }
-    }, 150); 
+    }, 150);
   }
 
   resetMigrationSession() {
@@ -944,30 +944,47 @@ export class DefaultComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
+  // getDynamicSequenceError(): string | null {
+  //   if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+
+  //   const activeLookupMappings = this.mappings.filter((m) => {
+  //     const meta = this.getSfFieldMeta(m.sfField);
+  //     return m.sfField && meta?.type === 'reference';
+  //   });
+
+  //   for (const mapping of activeLookupMappings) {
+  //     const meta = this.getSfFieldMeta(mapping.sfField);
+  //     const parentObjects: string[] = meta.referenceTo || [];
+  //     const externalParents = parentObjects.filter((p) => p !== this.selectedObject);
+
+  //     if (externalParents.length > 0) {
+  //       const isParentQueued = externalParents.some((parentName) => this.migrationQueue.some((q) => q.targetObject === parentName));
+
+  //       if (!isParentQueued) {
+  //         const parentName = externalParents[0];
+  //         return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
+  //       }
+  //     }
+  //   }
+  //   return null;
+  // }
   getDynamicSequenceError(): string | null {
-    if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+  if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
-    const activeLookupMappings = this.mappings.filter((m) => {
-      const meta = this.getSfFieldMeta(m.sfField);
-      return m.sfField && meta?.type === 'reference';
-    });
+  for (const mapping of this.mappings) {
+    // ONLY block if they are trying to use a 'Relational External ID'
+    // AND the parent sheet isn't in the queue.
+    if (mapping.relationalExtIdField && mapping.relationalExtIdField !== 'Id') {
+      const parentName = mapping.parentObjectName;
+      const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
-    for (const mapping of activeLookupMappings) {
-      const meta = this.getSfFieldMeta(mapping.sfField);
-      const parentObjects: string[] = meta.referenceTo || [];
-      const externalParents = parentObjects.filter((p) => p !== this.selectedObject);
-
-      if (externalParents.length > 0) {
-        const isParentQueued = externalParents.some((parentName) => this.migrationQueue.some((q) => q.targetObject === parentName));
-
-        if (!isParentQueued) {
-          const parentName = externalParents[0];
-          return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
-        }
+      if (!isParentInQueue) {
+        return `Upsert Blocked: You are trying to link to ${parentName} using a Legacy ID (${mapping.relationalExtIdField}), but the ${parentName} sheet is not in your upload queue.`;
       }
     }
-    return null;
   }
+  return null;
+}
 
   hasOrderingIssue(): boolean {
     let issueFound = false;
