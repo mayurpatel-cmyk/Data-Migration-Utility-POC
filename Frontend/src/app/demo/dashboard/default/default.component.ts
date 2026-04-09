@@ -782,8 +782,8 @@ export class DefaultComponent implements OnInit {
         </div>
         ${warningText}
       `,
-      icon: isDeleteOnly ? 'warning' : 'question',
-      iconColor: isDeleteOnly ? '#dc3545' : '#0d6efd',
+      icon: 'question',
+      iconColor: '#0d6efd',
       backdrop: `
         rgba(0, 0, 0, 0.4)
         backdrop-filter: blur(8px)
@@ -792,7 +792,7 @@ export class DefaultComponent implements OnInit {
       `,
       showCancelButton: true,
       buttonsStyling: false,
-      confirmButtonText: confirmBtnText,
+      confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
       cancelButtonText: 'Review Again',
       customClass: {
         popup: 'rounded-4 shadow-lg border-0',
