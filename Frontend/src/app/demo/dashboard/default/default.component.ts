@@ -1,12 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+<<<<<<< Updated upstream
 import { Component, OnInit, inject, ChangeDetectorRef } from '@angular/core';
+=======
+import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
+>>>>>>> Stashed changes
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
 import { CardComponent } from "src/app/theme/shared/components/card/card.component";
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
 import { MigrationService } from 'src/app/services/migration.service';
+import { ActivatedRoute, Router } from '@angular/router';
 import { ToastrService } from 'ngx-toastr';
+<<<<<<< Updated upstream
+=======
+import Swal from 'sweetalert2';
+import { AuthService } from '../../Services/auth.service';
+>>>>>>> Stashed changes
 
 interface MappingMeta {
   csvField: string;
@@ -39,6 +49,13 @@ export class DefaultComponent implements OnInit {
   private migrationService = inject(MigrationService);
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
+<<<<<<< Updated upstream
+=======
+  private eRef = inject(ElementRef);
+  private route = inject(ActivatedRoute); // <--- Add this
+  private router = inject(Router);
+  private authService = inject(AuthService);
+>>>>>>> Stashed changes
 
   // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
@@ -78,6 +95,7 @@ export class DefaultComponent implements OnInit {
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
 
+<<<<<<< Updated upstream
 
   ngOnInit() {
     this.isLoadingObjects = true;
@@ -91,7 +109,80 @@ export class DefaultComponent implements OnInit {
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
     });
+=======
+  isObjectDropdownOpen = false;
+  objectSearchQuery = '';
+
+  isUpsertKeyDropdownOpen = false;
+  upsertKeySearchQuery = '';
+  displayName = signal('Salesforce User');
+
+  
+ ngOnInit() {
+  // Use ActivatedRoute (this.route) for the best results in Angular
+  this.route.queryParams.subscribe(params => {
+    const token = params['token'];
+    const instanceUrl = params['instanceUrl'];
+    const name = params['name'];
+
+    if (token && instanceUrl) {
+      console.log('Token detected, updating session...');
+      localStorage.setItem('sf_token', token);
+
+      if (name) {
+        localStorage.setItem('sf_user_name', name);
+        this.displayName.set(name);
+      } else{
+      const savedName = localStorage.getItem('sf_user_name');
+      if (savedName) this.displayName.set(savedName);}
+
+    // 1. Use the service to save the data and update the signal
+      this.authService.handleOAuthLogin(token, instanceUrl);
+
+      // 2. Clean the URL
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { token: null, instanceUrl: null },
+        queryParamsHandling: 'merge'
+      });
+
+      this.toastr.success('Connection Verified!');
+      this.loadSalesforceObjects();
+    } else if (this.authService.isLoggedIn()) {
+      // 3. If no URL token but we are logged in, just load data
+      this.loadSalesforceObjects();
+    } else {
+      // 4. Truly not logged in
+      this.router.navigate(['/login']);
+    }
+  });
+}
+private loadSalesforceObjects() {
+  const token = localStorage.getItem('sf_token');
+
+  // If there's no token, the user isn't logged in. Send them back.
+  if (!token) {
+    this.toastr.warning('Please log in with Salesforce to continue.');
+    this.router.navigate(['/login']);
+    return;
+>>>>>>> Stashed changes
   }
+
+  this.isLoadingObjects = true;
+  this.migrationService.getAllObjects().subscribe({
+    next: (objects) => {
+      this.sfObjects = objects;
+      this.isLoadingObjects = false;
+      this.cdr.detectChanges();
+    },
+    error: (err) => {
+      this.isLoadingObjects = false;
+      this.toastr.error('Session expired or connection lost. Please login again.', 'Connection Error');
+      this.cdr.detectChanges();
+      // Optional: clear local storage and redirect to login if it's a 401 error
+    }
+  });
+}
 
   onCRMSelect(crm: string) {
     this.selectedCRM = crm;
