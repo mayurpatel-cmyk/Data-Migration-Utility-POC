@@ -53,7 +53,6 @@ body.berry-dark .tab-content {
   box-shadow: 0 4px 6px rgba(4, 169, 245, 0.2);
 }
 
-
 /* Keep existing styles, add these: */
 
 .table-responsive {
@@ -365,4 +364,9 @@ td .form-select {
 /* Ensure the sticky search bar doesn't look weird when scrolling */
 .position-sticky {
   position: sticky;
+}
+
+/* Table Dropdown Overflow Fix */
+table.table {
+    overflow: visible !important;
 }
