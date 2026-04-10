@@ -57,7 +57,7 @@ export class LoginComponent {
       next: () => {
         this.loading.set(false);
         this.toastr.success(`Successfully Connected To Salesforce ${this.loginModal().environment} Environment!`, 'Login Success');
-        this.router.navigate(['/dashboard']);
+        this.router.navigate(['/data-import']);
       },
       error: (err) => {
         this.loading.set(false);
