@@ -91,6 +91,7 @@ export class DefaultComponent implements OnInit {
   upsertKeySearchQuery = '';
 
   ngOnInit() {
+    this.showMigrationInstructions();
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
@@ -108,6 +109,7 @@ export class DefaultComponent implements OnInit {
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
     });
+    
   }
 
   onCRMSelect(crm: string) {
@@ -788,7 +790,6 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
       const mapToSave: any = {};
       this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
       localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
-      // ---------------------------------------------------------
 
       this.migrationQueue.push({
         sheetName: this.selectedSheetName,
@@ -967,6 +968,105 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
             this.cdr.detectChanges();
           }
         }, 10);
+      }
+    });
+  }
+
+showMigrationInstructions() {
+    Swal.fire({
+      title: '<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>',
+      html: `
+        <div class="text-start fs-6 text-muted mt-2">
+          <p class="mb-2">Please review these critical guidelines to ensure a successful Salesforce migration. <strong>Scroll to read all points.</strong></p>
+          
+          <div style="max-height: 45vh; overflow-y: auto; overflow-x: hidden; padding-right: 10px;" class="mb-3 border rounded shadow-sm bg-light">
+            <ul class="list-group list-group-flush">
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-file-text text-secondary me-2"></i>
+                <strong>1. Clean Your Data:</strong> Remove empty columns/rows. Ensure headers are clearly named.
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-layers text-primary me-2"></i>
+                <strong>2. Order of Operations:</strong> Always migrate Parent records (e.g., Accounts) <em>before</em> Child records (e.g., Contacts or Opportunities).
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-list text-info me-2"></i>
+                <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in Salesforce (they are case-sensitive).
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-calendar text-danger me-2"></i>
+                <strong>4. Date & Time Formats:</strong> Salesforce prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-key text-success me-2"></i>
+                <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or Salesforce ID column to prevent duplicate records.
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-alert-circle text-warning me-2"></i>
+                <strong>6. Required Fields:</strong> Check Salesforce to ensure you are mapping all universally required fields for your target object.
+              </li>
+              
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-check-square text-secondary me-2"></i>
+                <strong>7. Checkboxes:</strong> Use <code>TRUE</code>/<code>FALSE</code>, <code>Yes</code>/<code>No</code>, or <code>1</code>/<code>0</code> for boolean fields.
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-shopping-cart text-dark me-2"></i>
+                <strong>8. Product Migration Sequence:</strong> Products and Pricing must be loaded in this exact order: 
+                <br><span class="ms-4 small text-dark">① <b>Products</b> (Product2)</span>
+                <br><span class="ms-4 small text-danger fw-bold">② Standard Pricebook Entries (Required!)</span>
+                <br><span class="ms-4 small text-dark">③ Custom Pricebooks (Pricebook2)</span>
+                <br><span class="ms-4 small text-dark">④ Custom Pricebook Entries</span>
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-dollar-sign text-success me-2"></i>
+                <strong>9. Pricebook Criteria:</strong> A Product <em>cannot</em> be added to a Custom Pricebook unless it already has an Active Standard Pricebook Entry. Also, ensure your <code>CurrencyIsoCode</code> matches if multi-currency is enabled.
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-users text-info me-2"></i>
+                <strong>10. Record Ownership:</strong> Want someone else to own these records? Ensure you map the <code>OwnerId</code> column with the correct Salesforce User IDs. If left blank, you will own all migrated records.
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-check-circle text-secondary me-2"></i>
+                <strong>11. Multi-Select Picklists:</strong> If you are mapping to a multi-select picklist, separate multiple values using a semicolon (<code>;</code>) with no extra spaces (e.g., <code>Apples;Oranges;Bananas</code>).
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-map-pin text-danger me-2"></i>
+                <strong>12. State & Country Picklists:</strong> If your Salesforce org has State and Country Picklists enabled, your CSV data must perfectly match the configured Integration Values or ISO Codes, or the rows will fail.
+              </li>
+
+              <li class="list-group-item bg-white py-3">
+                <i class="feather icon-layout text-primary me-2"></i>
+                <strong>13. Record Types:</strong> If your target object uses multiple Record Types, remember to map the <code>RecordTypeId</code> column. Otherwise, all records will default to your personal default Record Type.
+              </li>
+
+            </ul>
+          </div>
+
+          <div class="alert alert-primary-subtle border-primary-subtle d-flex align-items-center gap-2 mb-0 py-2">
+            <i class="feather icon-shield text-primary fs-4"></i>
+            <small class="text-dark fw-bold">Tip: Always test your mapping with a small batch (e.g., 5 rows) before running a massive file.</small>
+          </div>
+        </div>
+      `,
+      width: '650px',
+      showCloseButton: true,
+      focusConfirm: false,
+      confirmButtonText: '<i class="feather icon-thumbs-up me-1"></i> I Understand, Let\'s Go',
+      customClass: {
+        confirmButton: 'btn btn-primary rounded-pill px-4 shadow-sm',
+        popup: 'rounded-4 shadow-lg border-0'
       }
     });
   }

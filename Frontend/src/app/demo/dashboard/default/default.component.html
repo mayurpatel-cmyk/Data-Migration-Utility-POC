@@ -23,6 +23,11 @@
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 2: Upload Data & Select Target">
+      <div class="d-flex justify-content-end mb-3 border-bottom pb-3">
+        <button class="btn btn-outline-info d-flex align-items-center gap-2 shadow-sm" (click)="showMigrationInstructions()">
+          <i class="feather icon-help-circle"></i> Read Migration Guidelines
+        </button>
+      </div>
       <div class="row g-4">
         <div class="col-md-6">
           <div class="form-group mb-0">
