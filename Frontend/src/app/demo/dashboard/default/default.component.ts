@@ -6,6 +6,7 @@ import { read, utils, WorkBook } from 'xlsx';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MigrationService } from 'src/app/services/migration.service';
+import { ActivatedRoute, Router } from '@angular/router';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 
@@ -111,6 +112,22 @@ export class DefaultComponent implements OnInit {
     });
     
   }
+
+  this.isLoadingObjects = true;
+  this.migrationService.getAllObjects().subscribe({
+    next: (objects) => {
+      this.sfObjects = objects;
+      this.isLoadingObjects = false;
+      this.cdr.detectChanges();
+    },
+    error: (err) => {
+      this.isLoadingObjects = false;
+      this.toastr.error('Session expired or connection lost. Please login again.', 'Connection Error');
+      this.cdr.detectChanges();
+      // Optional: clear local storage and redirect to login if it's a 401 error
+    }
+  });
+}
 
   onCRMSelect(crm: string) {
     setTimeout(() => {
@@ -526,7 +543,7 @@ export class DefaultComponent implements OnInit {
         });
       }
     });
-  }
+}
 
 private sortFieldsAlphabetically(fields: any[]): any[] {
     if (!Array.isArray(fields)) return [];
@@ -1181,5 +1198,5 @@ overrideGoToReview() {
       }
     }
     this.goToReview();
-  }
+}
 }

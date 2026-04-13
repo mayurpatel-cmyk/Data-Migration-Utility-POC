@@ -1,11 +1,12 @@
 // Angular import
-import { Component, OnInit,ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit,ChangeDetectorRef, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http'; // Added HttpClient
 import { CommonModule } from '@angular/common'; // Usually needed for async/pipes
 
 // third party import
 import { SharedModule } from 'src/app/theme/shared/shared.module';
+import { AuthService } from 'src/app/demo/Services/auth.service';
 
 @Component({
   selector: 'app-nav-right',
@@ -16,18 +17,23 @@ import { SharedModule } from 'src/app/theme/shared/shared.module';
 })
 export class NavRightComponent implements OnInit {
   // Variable to hold the fetched user data
-  currentUser: any = null; 
+  currentUser: any = null;
   isLoading: boolean = true;
+  displayName = signal('Guest');
 
-  constructor(private http: HttpClient,private cdr: ChangeDetectorRef) {}
+  constructor(private http: HttpClient,private cdr: ChangeDetectorRef,private authService: AuthService) {}
 
   ngOnInit(): void {
+    const savedName = localStorage.getItem('sf_user_name');
+    if (savedName) {
+      this.displayName.set(savedName);
+    }
     this.getUserData();
   }
 
 getUserData(): void {
     // 1. Get the full JSON string from local storage using your specific Key
-    const storageItem = localStorage.getItem('user_data'); 
+    const storageItem = localStorage.getItem('user_data');
     let userEmail = '';
     let accessToken = '';
     let instanceUrl = '';
@@ -36,8 +42,8 @@ getUserData(): void {
     if (storageItem) {
       try {
         const parsedData = JSON.parse(storageItem);
-        userEmail = parsedData.email || ''; 
-        accessToken = parsedData.accessToken || ''; 
+        userEmail = parsedData.email || '';
+        accessToken = parsedData.accessToken || '';
         instanceUrl = parsedData.instanceUrl || '';
       } catch (error) {
         console.error('Failed to parse user data from local storage:', error);
@@ -49,13 +55,17 @@ getUserData(): void {
       this.http.get<any>('http://localhost:3000/api/sf/user-info', {
         headers: {
           'user-email': userEmail,
-      'instanceurl': instanceUrl, 
-      'accesstoken': accessToken  
+      'instanceurl': instanceUrl,
+      'accesstoken': accessToken
         }
       }).subscribe({
         next: (response) => {
           if (response.success && response.data) {
             this.currentUser = response.data;
+            if (response.data.DisplayName) {
+              this.displayName.set(response.data.DisplayName);
+              localStorage.setItem('sf_user_name', response.data.DisplayName);
+            }
           }
           this.isLoading = false;
           setTimeout(() => {
