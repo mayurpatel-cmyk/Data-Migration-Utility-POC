@@ -108,7 +108,7 @@
         <div class="d-flex flex-wrap gap-4 mb-3">
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert"
-              [(ngModel)]="operationMode">
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
             <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
               Insert
             </label>
@@ -341,21 +341,15 @@
       </div>
 
       @if (selectedObject) {
-      @if (operationMode === 'upsert' && getDynamicSequenceError()) {
-      <div
-        class="alert alert-danger border-danger shadow-sm d-flex align-items-start gap-3 mb-4 p-4 animate__animated animate__shakeX">
-        <div class="bg-danger text-white rounded-circle d-flex align-items-center justify-content-center mt-1"
+      @if (operationMode === 'upsert' && getDynamicSequenceWarning()) {
+      <div class="alert alert-warning border-warning shadow-sm d-flex align-items-center gap-3 mb-4 p-3">
+        <div class="bg-warning text-dark rounded-circle d-flex align-items-center justify-content-center"
           style="min-width: 45px; height: 45px;">
-          <i class="feather icon-slash fs-4"></i>
+          <i class="feather icon-info fs-4"></i>
         </div>
         <div class="flex-grow-1">
-          <h5 class="alert-heading fw-bold mb-1 text-danger">Mapping Sequence Error</h5>
-          <p class="mb-0 text-dark">{{ getDynamicSequenceError() }}</p>
-          <div class="mt-3">
-            <button class="btn btn-sm btn-danger shadow-sm" (click)="currentStep = 2">
-              <i class="feather icon-arrow-left me-1"></i> Go back to add Parent Sheet
-            </button>
-          </div>
+          <h6 class="alert-heading fw-bold mb-1 text-dark">External ID Link Notice</h6>
+          <p class="mb-0 text-dark small">{{ getDynamicSequenceWarning() }}</p>
         </div>
       </div>
       }

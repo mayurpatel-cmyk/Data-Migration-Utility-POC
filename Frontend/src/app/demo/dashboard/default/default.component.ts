@@ -334,6 +334,21 @@ export class DefaultComponent implements OnInit {
     });
   }
 
+  onOperationModeChange() {
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      // Look for fields marked as externalId, unique, or idLookup in Salesforce
+      const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
+      
+      // If there is exactly one obvious choice, auto-select it!
+      if (extIds.length === 1) {
+        this.selectUpsertKey(extIds[0].name);
+        //this.toastr.info(`Automatically selected "${extIds[0].label}" as the Upsert Key.`, 'Smart Select');
+      }
+    } else if (this.operationMode === 'delete') {
+      this.targetExtIdField = '';
+    }
+  }
+
   onObjectChangeInMapping(newObject: string) {
     if (!newObject) return;
     this.isLoadingFields = true;
@@ -342,42 +357,105 @@ export class DefaultComponent implements OnInit {
     this.fetchObjectFields(this.selectedObject);
   }
 
-  autoMapFields() {
-    if (!this.sfFields || this.sfFields.length === 0) {
-      this.toastr.warning('Salesforce fields are not loaded yet. Please wait.', 'Not Ready');
-      return;
+  private getSimilarity(s1: string, s2: string): number {
+    let longer = s1;
+    let shorter = s2;
+    if (s1.length < s2.length) { longer = s2; shorter = s1; }
+    const longerLength = longer.length;
+    if (longerLength === 0) return 1.0;
+    
+    // Levenshtein logic
+    const costs = new Array();
+    for (let i = 0; i <= longer.length; i++) {
+      let lastValue = i;
+      for (let j = 0; j <= shorter.length; j++) {
+        if (i == 0) costs[j] = j;
+        else {
+          if (j > 0) {
+            let newValue = costs[j - 1];
+            if (longer.charAt(i - 1) != shorter.charAt(j - 1))
+              newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+            costs[j - 1] = lastValue;
+            lastValue = newValue;
+          }
+        }
+      }
+      if (i > 0) costs[shorter.length] = lastValue;
     }
+    return (longerLength - costs[shorter.length]) / parseFloat(longerLength.toString());
+  }
+
+  autoMapFields() {
+    if (!this.sfFields || this.sfFields.length === 0) return;
 
     setTimeout(() => {
       let matchCount = 0;
+      let memoryCount = 0;
+
+      // 1. Load Past Mappings from Memory
+      const savedMappingData = localStorage.getItem(`sf_map_${this.selectedObject}`);
+      const pastMappings = savedMappingData ? JSON.parse(savedMappingData) : {};
 
       const normalizeString = (str: string) => {
         return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
       };
 
-      const sfFieldDict: { [key: string]: any } = {};
-      this.sfFields.forEach(field => {
-        sfFieldDict[normalizeString(field.name)] = field;
-        sfFieldDict[normalizeString(field.label)] = field;
-      });
-
       this.mappings.forEach(mapping => {
         if (!mapping.sfField) {
-          const normalCsv = normalizeString(mapping.csvField);
-          const matchedField = sfFieldDict[normalCsv];
+          const rawCsv = mapping.csvField;
+          const normalCsv = normalizeString(rawCsv);
 
-          if (matchedField) {
-            mapping.sfField = matchedField.name;
+          // Strategy A: Check LocalStorage Memory First
+          if (pastMappings[rawCsv]) {
+            const savedSfField = this.sfFields.find(f => f.name === pastMappings[rawCsv]);
+            if (savedSfField) {
+              mapping.sfField = savedSfField.name;
+              memoryCount++;
+              this.onSfFieldChange(mapping);
+              return; // Skip to next column
+            }
+          }
+
+          // Strategy B: Exact Normal Match & Strategy C: Fuzzy Match
+          let bestMatch = null;
+          let highestScore = 0;
+
+          for (const field of this.sfFields) {
+            const normalName = normalizeString(field.name);
+            const normalLabel = normalizeString(field.label);
+
+            // Exact normalization match
+            if (normalCsv === normalName || normalCsv === normalLabel) {
+              bestMatch = field;
+              highestScore = 1.0;
+              break; 
+            }
+
+            // Fuzzy Match (If similarity is 80% or higher)
+            const labelScore = this.getSimilarity(normalCsv, normalLabel);
+            const nameScore = this.getSimilarity(normalCsv, normalName);
+            const bestFieldScore = Math.max(labelScore, nameScore);
+
+            if (bestFieldScore >= 0.8 && bestFieldScore > highestScore) {
+              highestScore = bestFieldScore;
+              bestMatch = field;
+            }
+          }
+
+          if (bestMatch) {
+            mapping.sfField = bestMatch.name;
             matchCount++;
             this.onSfFieldChange(mapping);
           }
         }
       });
 
+      // Show specific toastr notifications based on what happened
+      // if (memoryCount > 0) {
+      //   this.toastr.success(`Restored ${memoryCount} mappings from your past templates!`, 'Smart Template');
+      // }
       if (matchCount > 0) {
-        this.toastr.success(`Successfully auto-mapped ${matchCount} fields!`, 'Auto-Map Complete');
-      } else {
-        this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
+        this.toastr.success(`Auto-mapped ${matchCount} fields successfully.`, 'Auto-Map Complete');
       }
 
       this.cdr.detectChanges();
@@ -448,9 +526,14 @@ export class DefaultComponent implements OnInit {
     });
   }
 
-  private sortFieldsAlphabetically(fields: any[]): any[] {
+private sortFieldsAlphabetically(fields: any[]): any[] {
     if (!Array.isArray(fields)) return [];
     return fields.sort((a, b) => {
+      // 1. Group Required fields at the very top
+      if (a.isRequired && !b.isRequired) return -1;
+      if (!a.isRequired && b.isRequired) return 1;
+      
+      // 2. Then sort alphabetically
       const valA = (a.label || a.name || '').toLowerCase();
       const valB = (b.label || b.name || '').toLowerCase();
       return valA.localeCompare(valB);
@@ -495,17 +578,17 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  queueAnotherObject() {
+ queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {
       this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
       return;
     }
 
-    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
-      return;
-    }
+    // if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
+    //   this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
+    //   return;
+    // }
 
     const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -545,6 +628,12 @@ export class DefaultComponent implements OnInit {
         relationshipName: fieldMeta?.relationshipName
       };
     });
+
+    // ---> NEW: Save to Memory ONLY AFTER validations pass <---
+    const mapToSave: any = {};
+    activeMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
+    localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+    // ---------------------------------------------------------
 
     this.migrationQueue.push({
       sheetName: this.selectedSheetName,
@@ -650,8 +739,9 @@ export class DefaultComponent implements OnInit {
     this.previewingItemIndex = index;
   }
 
-  goToReview() {
+ goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
+    
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
@@ -693,6 +783,12 @@ export class DefaultComponent implements OnInit {
           relationshipName: fieldMeta?.relationshipName
         };
       });
+
+      // ---> NEW: Save to Memory ONLY AFTER validations pass <---
+      const mapToSave: any = {};
+      this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
+      localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+      // ---------------------------------------------------------
 
       this.migrationQueue.push({
         sheetName: this.selectedSheetName,
@@ -944,47 +1040,22 @@ export class DefaultComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
-  // getDynamicSequenceError(): string | null {
-  //   if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+getDynamicSequenceWarning(): string | null {
+    if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
-  //   const activeLookupMappings = this.mappings.filter((m) => {
-  //     const meta = this.getSfFieldMeta(m.sfField);
-  //     return m.sfField && meta?.type === 'reference';
-  //   });
+    for (const mapping of this.mappings) {
+      if (mapping.relationalExtIdField && mapping.relationalExtIdField !== 'Id') {
+        const parentName = mapping.parentObjectName;
+        const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
-  //   for (const mapping of activeLookupMappings) {
-  //     const meta = this.getSfFieldMeta(mapping.sfField);
-  //     const parentObjects: string[] = meta.referenceTo || [];
-  //     const externalParents = parentObjects.filter((p) => p !== this.selectedObject);
-
-  //     if (externalParents.length > 0) {
-  //       const isParentQueued = externalParents.some((parentName) => this.migrationQueue.some((q) => q.targetObject === parentName));
-
-  //       if (!isParentQueued) {
-  //         const parentName = externalParents[0];
-  //         return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
-  //       }
-  //     }
-  //   }
-  //   return null;
-  // }
-  getDynamicSequenceError(): string | null {
-  if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
-
-  for (const mapping of this.mappings) {
-    // ONLY block if they are trying to use a 'Relational External ID'
-    // AND the parent sheet isn't in the queue.
-    if (mapping.relationalExtIdField && mapping.relationalExtIdField !== 'Id') {
-      const parentName = mapping.parentObjectName;
-      const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
-
-      if (!isParentInQueue) {
-        return `Upsert Blocked: You are trying to link to ${parentName} using a Legacy ID (${mapping.relationalExtIdField}), but the ${parentName} sheet is not in your upload queue.`;
+        // Soft warning instead of a hard block
+        if (!isParentInQueue) {
+          return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in Salesforce, or add a ${parentName} sheet to your queue.`;
+        }
       }
     }
+    return null;
   }
-  return null;
-}
 
   hasOrderingIssue(): boolean {
     let issueFound = false;
@@ -1001,12 +1072,9 @@ export class DefaultComponent implements OnInit {
     return issueFound;
   }
 
-  overrideGoToReview() {
+overrideGoToReview() {
     if (this.operationMode === 'upsert') {
-      if (this.getDynamicSequenceError()) {
-        this.toastr.error('Please resolve sequence errors before proceeding.', 'Logic Error');
-        return;
-      }
+      // We only block if they have multiple sheets in the WRONG order
       if (this.hasOrderingIssue()) {
         this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
         return;
