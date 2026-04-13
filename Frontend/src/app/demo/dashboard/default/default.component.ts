@@ -98,51 +98,56 @@ export class DefaultComponent implements OnInit {
 
 
 ngOnInit() {
-  // 1. Show the guide immediately
-  this.showMigrationInstructions();
+    // 1. Defer the instructions popup slightly so it doesn't block rendering
+    setTimeout(() => {
+      this.showMigrationInstructions();
+    }, 0);
 
-  // 2. Listen for Query Params (Handle the Redirect)
-  this.route.queryParams.subscribe(params => {
-    const token = params['token'];
-    const instanceUrl = params['instanceUrl'];
-    const name = params['name'];
+    // 2. Listen for Query Params (Handle the Redirect)
+    this.route.queryParams.subscribe(params => {
+      const token = params['token'];
+      const instanceUrl = params['instanceUrl'];
+      const name = params['name'];
 
-    if (token && instanceUrl) {
-      console.log('OAuth Callback Detected: Saving session...');
-      
-      // Update local storage for display/persistence
-      if (name) {
-        localStorage.setItem('sf_user_name', name);
-        this.displayName.set(name);
-      }
+      // CRITICAL FIX: Wrap in setTimeout to prevent NG0100 ExpressionChangedAfterItHasBeenCheckedError
+      // This stops the Breadcrumbs from updating synchronously during the parent's initial render cycle.
+      setTimeout(() => {
+        if (token && instanceUrl) {
+          console.log('OAuth Callback Detected: Saving session...');
+          
+          // Update local storage for display/persistence
+          if (name) {
+            localStorage.setItem('sf_user_name', name);
+            this.displayName.set(name);
+          }
 
-      // CRITICAL: Update the AuthService signal/storage
-      // This ensures this.authService.isLoggedIn() returns true immediately
-      this.authService.handleOAuthLogin(token, instanceUrl);
+          // Update the AuthService signal/storage
+          this.authService.handleOAuthLogin(token, instanceUrl);
 
-      // Clean the URL so the token isn't visible in the address bar
-      this.router.navigate([], {
-        relativeTo: this.route,
-        queryParams: { token: null, instanceUrl: null, name: null },
-        queryParamsHandling: 'merge',
-        replaceUrl: true
-      });
+          // Clean the URL so the token isn't visible in the address bar
+          this.router.navigate([], {
+            relativeTo: this.route,
+            queryParams: { token: null, instanceUrl: null, name: null },
+            queryParamsHandling: 'merge',
+            replaceUrl: true
+          });
 
-      this.toastr.success('Connection Verified!', 'Welcome');
-      this.loadSalesforceObjects();
-      
-    } else if (this.authService.isLoggedIn()) {
-      // 3. Regular visit: User is already logged in
-      const savedName = localStorage.getItem('sf_user_name');
-      if (savedName) this.displayName.set(savedName);
-      
-      this.loadSalesforceObjects();
-    } else {
-      // 4. Not logged in and no token in URL
-      this.router.navigate(['/login']);
-    }
-  });
-}
+          this.toastr.success('Connection Verified!', 'Welcome');
+          this.loadSalesforceObjects();
+          
+        } else if (this.authService.isLoggedIn()) {
+          // Regular visit: User is already logged in
+          const savedName = localStorage.getItem('sf_user_name');
+          if (savedName) this.displayName.set(savedName);
+          
+          this.loadSalesforceObjects();
+        } else {
+          // Not logged in and no token in URL
+          this.router.navigate(['/login']);
+        }
+      }, 0);
+    });
+  }
 private loadSalesforceObjects() {
   this.isLoadingObjects = true;
   this.cdr.detectChanges(); // Ensure the spinner shows
