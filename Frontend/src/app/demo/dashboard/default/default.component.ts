@@ -3,8 +3,8 @@ import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef,
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
-import { CardComponent } from "src/app/theme/shared/components/card/card.component";
-import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
+import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
+import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ToastrService } from 'ngx-toastr';
@@ -20,6 +20,12 @@ interface MappingMeta {
   relationalExtIdField?: string;
   parentObjectName?: string;
   isLoadingParentFields?: boolean;
+
+  isDropdownOpen?: boolean;
+  searchQuery?: string;
+
+  isParentDropdownOpen?: boolean;
+  parentSearchQuery?: string;
 }
 
 interface JobQueueItem {
@@ -47,13 +53,9 @@ export class DefaultComponent implements OnInit {
   private router = inject(Router);
   private authService = inject(AuthService);
 
-  // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
 
-  // currentStep: number = 1;
-  // selectedCRM: string = '';
   currentStep: number = 2;
-  selectedCRM: string = 'Zoho';
   selectedFile: File | null = null;
   selectedObject: string = '';
   csvHeaders: string[] = [];
@@ -75,15 +77,17 @@ export class DefaultComponent implements OnInit {
   failedRecords: any[] = [];
   successfulRecords: any[] = [];
 
-  // --- PREVIEW STATE ---
   showPreview = false;
   previewData: any[] = [];
   previewHeaders: string[] = [];
   previewingItemIndex: number | null = null;
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
+
+  // Default to insert
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
+  batchSize: number = 200;
 
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
@@ -159,12 +163,19 @@ private loadSalesforceObjects() {
 }
 
   onCRMSelect(crm: string) {
-    this.selectedCRM = crm;
     setTimeout(() => {
       this.currentStep = 2;
       this.autoNavigate();
       this.cdr.detectChanges();
     }, 300);
+  }
+
+  get isDeleteOnlyBatch(): boolean {
+    return this.migrationQueue.length > 0 && this.migrationQueue.every(job => job.operationMode === 'delete');
+  }
+
+  get hasDeleteInBatch(): boolean {
+    return this.migrationQueue.some(job => job.operationMode === 'delete');
   }
 
   onFileSelected(event: any) {
@@ -198,9 +209,7 @@ private loadSalesforceObjects() {
       const worksheet = this.workbook.Sheets[sheetName];
       const json: any[][] = utils.sheet_to_json(worksheet, { header: 1 });
       if (json.length > 0) {
-        this.csvHeaders = json[0]
-          .map((h: any) => h ? String(h).trim() : '')
-          .filter((h: string) => h.length > 0);
+        this.csvHeaders = json[0].map((h: any) => (h ? String(h).trim() : '')).filter((h: string) => h.length > 0);
       } else {
         this.csvHeaders = [];
         this.toastr.warning(`Sheet "${sheetName}" appears to be empty.`, 'Empty Data');
@@ -208,15 +217,137 @@ private loadSalesforceObjects() {
     }
   }
 
+  getSfObjectLabel(objName: string): string {
+    if (!objName) return '';
+    const obj = this.sfObjects.find((o) => o.name === objName);
+    return obj ? `${obj.label} (${obj.name})` : objName;
+  }
+
+  getFilteredSfObjects(): any[] {
+    if (!this.objectSearchQuery) return this.sfObjects;
+    const lowerQuery = this.objectSearchQuery.toLowerCase();
+    return this.sfObjects.filter((o) => o.label?.toLowerCase().includes(lowerQuery) || o.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getFilteredUpsertKeys(): any[] {
+    if (!this.upsertKeySearchQuery) return this.sfFields;
+    const lowerQuery = this.upsertKeySearchQuery.toLowerCase();
+    return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getSfFieldLabel(fieldName: string): string {
+    if (!fieldName) return '';
+    const field = this.getSfFieldMeta(fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  getFilteredSfFields(query?: string): any[] {
+    if (!query) return this.sfFields;
+    const lowerQuery = query.toLowerCase();
+    return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getParentFieldLabel(mapping: MappingMeta, fieldName?: string): string {
+    if (!fieldName) return '';
+    if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
+    if (!mapping.parentObjectName) return fieldName;
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+    const field = parentFields.find((f: any) => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  getFilteredParentFields(mapping: MappingMeta): any[] {
+    if (!mapping.parentObjectName) return [];
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+    if (!mapping.parentSearchQuery) return parentFields;
+    const lowerQuery = mapping.parentSearchQuery.toLowerCase();
+    return parentFields.filter((f: any) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  toggleObjectDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isObjectDropdownOpen;
+    this.closeAllDropdowns();
+    this.isObjectDropdownOpen = !wasOpen;
+    if (this.isObjectDropdownOpen) this.objectSearchQuery = '';
+  }
+
+  toggleUpsertKeyDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isUpsertKeyDropdownOpen;
+    this.closeAllDropdowns();
+    this.isUpsertKeyDropdownOpen = !wasOpen;
+    if (this.isUpsertKeyDropdownOpen) this.upsertKeySearchQuery = '';
+  }
+
+  toggleDropdown(mapping: MappingMeta, event: Event) {
+    event.stopPropagation();
+    const currentState = mapping.isDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isDropdownOpen = !currentState;
+    if (mapping.isDropdownOpen) mapping.searchQuery = '';
+  }
+
+  toggleParentDropdown(mapping: MappingMeta, event: Event) {
+    event.stopPropagation();
+    const currentState = mapping.isParentDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isParentDropdownOpen = !currentState;
+    if (mapping.isParentDropdownOpen) mapping.parentSearchQuery = '';
+  }
+
+  selectTargetObject(objName: string, stepContext: number) {
+    this.selectedObject = objName;
+    this.isObjectDropdownOpen = false;
+    if (stepContext === 2) {
+      this.onStep2ObjectChange(objName);
+    } else {
+      this.onObjectChangeInMapping(objName);
+    }
+  }
+
+  selectUpsertKey(fieldName: string) {
+    this.targetExtIdField = fieldName;
+    this.isUpsertKeyDropdownOpen = false;
+  }
+
+  selectField(mapping: MappingMeta, fieldName: string) {
+    mapping.sfField = fieldName;
+    mapping.isDropdownOpen = false;
+    this.onSfFieldChange(mapping);
+  }
+
+  selectParentField(mapping: MappingMeta, fieldName: string) {
+    mapping.relationalExtIdField = fieldName;
+    mapping.isParentDropdownOpen = false;
+  }
+
+  closeAllDropdowns() {
+    this.mappings.forEach((m) => {
+      m.isDropdownOpen = false;
+      m.isParentDropdownOpen = false;
+    });
+    this.isObjectDropdownOpen = false;
+    this.isUpsertKeyDropdownOpen = false;
+  }
+
+  @HostListener('document:click', ['$event'])
+  clickout(event: Event) {
+      this.closeAllDropdowns();
+  }
+
   getSfFieldMeta(fieldName: string): any {
-    return this.sfFields.find(f => f.name === fieldName);
+    return this.sfFields.find((f) => f.name === fieldName);
   }
 
   getMissingRequiredFields(): string[] {
+    // If it's a delete operation, standard required fields don't apply.
+    if (this.operationMode === 'delete') return [];
+
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    const requiredSfFields = this.sfFields.filter(f => f.isRequired).map(f => f.name);
-    const currentlyMappedSfFields = this.mappings.map(m => m.sfField).filter(val => val !== '');
-    return requiredSfFields.filter(reqField => !currentlyMappedSfFields.includes(reqField));
+    const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
+    const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
+    return requiredSfFields.filter((reqField) => !currentlyMappedSfFields.includes(reqField));
   }
 
   onStep2ObjectChange(newObject: string) {
@@ -229,19 +360,12 @@ private loadSalesforceObjects() {
 
   goToMapping() {
     if (this.csvHeaders.length === 0) return;
-
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.warning('Please select a Primary Upsert Key before mapping.', 'Missing Configuration');
-      return;
-    }
-
     if (this.selectedFile && this.selectedObject) {
       this.currentStep = 3;
       this.autoNavigate();
       this.showPreview = false;
       this.previewingItemIndex = null;
-
-      this.mappings = this.csvHeaders.map(header => ({
+      this.mappings = this.csvHeaders.map((header) => ({
         csvField: header,
         sfField: '',
         relationalExtIdField: ''
@@ -250,13 +374,16 @@ private loadSalesforceObjects() {
   }
 
   onSheetChangeInMapping(newSheet: string) {
-    this.onSheetSelect(newSheet);
-    this.mappings = this.csvHeaders.map(header => ({
-      csvField: header,
-      sfField: '',
-      relationalExtIdField: ''
-    }));
-    this.showPreview = false;
+    setTimeout(() => {
+      this.onSheetSelect(newSheet);
+      this.mappings = this.csvHeaders.map(header => ({
+        csvField: header,
+        sfField: '',
+        relationalExtIdField: ''
+      }));
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    });
   }
 
   onObjectChangeInMapping(newObject: string) {
@@ -265,6 +392,71 @@ private loadSalesforceObjects() {
     this.showPreview = false;
     this.targetExtIdField = '';
     this.fetchObjectFields(this.selectedObject);
+  }
+
+  autoMapFields() {
+    if (!this.sfFields || this.sfFields.length === 0) {
+      this.toastr.warning('Salesforce fields are not loaded yet. Please wait.', 'Not Ready');
+      return;
+    }
+
+    setTimeout(() => {
+      let matchCount = 0;
+
+      const normalizeString = (str: string) => {
+        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
+      };
+
+      const sfFieldDict: { [key: string]: any } = {};
+      this.sfFields.forEach(field => {
+        sfFieldDict[normalizeString(field.name)] = field;
+        sfFieldDict[normalizeString(field.label)] = field;
+      });
+
+      this.mappings.forEach(mapping => {
+        if (!mapping.sfField) {
+          const normalCsv = normalizeString(mapping.csvField);
+          const matchedField = sfFieldDict[normalCsv];
+
+          if (matchedField) {
+            mapping.sfField = matchedField.name;
+            matchCount++;
+            this.onSfFieldChange(mapping);
+          }
+        }
+      });
+
+      if (matchCount > 0) {
+        this.toastr.success(`Successfully auto-mapped ${matchCount} fields!`, 'Auto-Map Complete');
+      } else {
+        this.toastr.info('Could not find any automatic matches for the remaining fields.', 'Auto-Map');
+      }
+
+      this.cdr.detectChanges();
+    });
+  }
+
+  clearAllMappings() {
+    Swal.fire({
+      title: 'Are you sure?',
+      text: "You will lose all your currently mapped fields!",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc3545',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, clear them!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.mappings.forEach(m => {
+          m.sfField = '';
+          m.relationalExtIdField = '';
+          m.parentObjectName = undefined;
+        });
+
+        this.toastr.info('All mappings have been reset.', 'Cleared');
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
@@ -292,19 +484,54 @@ private loadSalesforceObjects() {
         }
 
         setTimeout(() => {
+          const fieldsArray = response.fields ? response.fields : response;
+          this.sfFields = this.sortFieldsAlphabetically(fieldsArray);
+
+          if (!isEditMode) {
+            this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+          } else {
+            this.mappings.forEach(m => {
+              if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
+                m.isLoadingParentFields = true;
+                this.migrationService.getObjectFields(m.parentObjectName).subscribe({
+                  next: (pRes: any) => {
+                    setTimeout(() => {
+                      const pFieldsArray = pRes.fields ? pRes.fields : pRes;
+                      this.parentObjectFieldsCache[m.parentObjectName!] = this.sortFieldsAlphabetically(pFieldsArray);
+                      m.isLoadingParentFields = false;
+                      this.cdr.detectChanges();
+                    });
+                  }
+                });
+              }
+            });
+          }
+
           this.isLoadingFields = false;
           this.cdr.detectChanges();
         });
       },
       error: (err) => {
-        this.isLoadingFields = false;
-        this.toastr.error('Failed to load object fields.', 'API Error');
+        setTimeout(() => {
+          this.isLoadingFields = false;
+          this.toastr.error('Failed to load object fields.', 'API Error');
+          this.cdr.detectChanges();
+        });
       }
     });
 }
 
+  private sortFieldsAlphabetically(fields: any[]): any[] {
+    if (!Array.isArray(fields)) return [];
+    return fields.sort((a, b) => {
+      const valA = (a.label || a.name || '').toLowerCase();
+      const valB = (b.label || b.name || '').toLowerCase();
+      return valA.localeCompare(valB);
+    });
+  }
+
   getConfirmedCount(mappings: any[]): number {
-    return mappings.filter(m => m.sfField && m.sfField !== '').length;
+    return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
   onSfFieldChange(mapping: MappingMeta) {
@@ -315,19 +542,23 @@ private loadSalesforceObjects() {
       mapping.parentObjectName = parentObj;
 
       if (!this.parentObjectFieldsCache[parentObj]) {
-        mapping.isLoadingParentFields = true;
+        setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
 
         this.migrationService.getObjectFields(parentObj).subscribe({
           next: (response: any) => {
-            const fieldsArray = response.fields ? response.fields : response;
-            this.parentObjectFieldsCache[parentObj] = Array.isArray(fieldsArray) ? fieldsArray : [];
-            mapping.isLoadingParentFields = false;
-            this.cdr.detectChanges();
+            setTimeout(() => {
+              const fieldsArray = response.fields ? response.fields : response;
+              this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
+              mapping.isLoadingParentFields = false;
+              this.cdr.detectChanges();
+            });
           },
           error: (err) => {
-            mapping.isLoadingParentFields = false;
-            this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
-            this.cdr.detectChanges();
+            setTimeout(() => {
+              mapping.isLoadingParentFields = false;
+              this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
+              this.cdr.detectChanges();
+            });
           }
         });
       }
@@ -338,14 +569,37 @@ private loadSalesforceObjects() {
   }
 
   queueAnotherObject() {
-    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-      this.toastr.error(this.getDynamicSequenceError()!, "Sequence Blocked");
+    const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+    if (isDuplicate) {
+      this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
       return;
     }
 
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
+      this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
+      return;
+    }
+
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field.', 'No Mappings');
+      return;
+    }
+
+    // Validation for Operations
+    const hasSfId = activeMappings.some((m) => m.sfField === 'Id');
+    if (this.operationMode === 'delete' && !hasSfId) {
+      this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+      return;
+    }
+
+    if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
+      this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+      return;
+    }
+
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      this.toastr.error('Upsert requires a Primary Upsert Key (External ID).', 'Missing Configuration');
       return;
     }
 
@@ -355,12 +609,7 @@ private loadSalesforceObjects() {
       return;
     }
 
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      this.toastr.error('Please select a Primary Upsert Key (External ID) for Upsert mode.', 'Missing Configuration');
-      return;
-    }
-
-    const enhancedMappings = activeMappings.map(mapping => {
+    const enhancedMappings = activeMappings.map((mapping) => {
       const fieldMeta = this.getSfFieldMeta(mapping.sfField);
       return {
         ...mapping,
@@ -380,16 +629,14 @@ private loadSalesforceObjects() {
     });
 
     this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
-
     this.selectedObject = '';
     this.sfFields = [];
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
+    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
     this.confirmedMappings = [];
     this.targetExtIdField = '';
     this.operationMode = 'insert';
     this.showPreview = false;
     this.previewingItemIndex = null;
-
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
@@ -405,47 +652,40 @@ private loadSalesforceObjects() {
   }
 
   editQueuedItem(index: number) {
-    if (this.selectedObject && this.mappings.some(m => m.sfField !== '')) {
+    if (this.selectedObject && this.mappings.some((m) => m.sfField !== '')) {
       this.queueAnotherObject();
       this.toastr.info(`Saved current mapping to queue before editing.`, 'Queue Updated');
     }
-
     const itemToEdit = this.migrationQueue.splice(index, 1)[0];
     this.previewingItemIndex = null;
     this.showPreview = false;
-
     this.selectedSheetName = itemToEdit.sheetName;
     this.selectedObject = itemToEdit.targetObject;
     this.csvHeaders = [...itemToEdit.csvHeaders];
-    this.mappings = itemToEdit.mappings.map(m => ({...m}));
+    this.mappings = itemToEdit.mappings.map((m) => ({ ...m }));
     this.targetExtIdField = itemToEdit.targetExtIdField || '';
     this.operationMode = itemToEdit.operationMode || 'insert';
-
     this.currentStep = 3;
     this.isLoadingFields = true;
     this.cdr.detectChanges();
-
     this.fetchObjectFields(this.selectedObject, true);
   }
 
   previewCurrentMapping() {
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field to generate a preview.', 'No Mappings');
       return;
     }
-
     const worksheet = this.workbook!.Sheets[this.selectedSheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
-
-    this.previewHeaders = activeMappings.map(m => m.sfField);
+    this.previewHeaders = activeMappings.map((m) => m.sfField);
     const limit = Math.min(rawData.length, 5);
     const previewRows = [];
-
     for (let i = 0; i < limit; i++) {
       const rawRow = rawData[i];
       const sfRecord: any = {};
-      activeMappings.forEach(mapping => {
+      activeMappings.forEach((mapping) => {
         sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
       });
       previewRows.push(sfRecord);
@@ -461,24 +701,20 @@ private loadSalesforceObjects() {
       return;
     }
     const item = this.migrationQueue[index];
-    const activeMappings = item.mappings.filter(m => m.sfField !== '');
-
+    const activeMappings = item.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('This queued item has no mapped fields to preview.', 'Empty Mapping');
       return;
     }
-
     const worksheet = this.workbook!.Sheets[item.sheetName];
     const rawData: any[] = utils.sheet_to_json(worksheet);
-
-    this.previewItemHeaders = activeMappings.map(m => m.sfField);
+    this.previewItemHeaders = activeMappings.map((m) => m.sfField);
     const limit = Math.min(rawData.length, 5);
     const previewRows = [];
-
     for (let i = 0; i < limit; i++) {
       const rawRow = rawData[i];
       const sfRecord: any = {};
-      activeMappings.forEach(mapping => {
+      activeMappings.forEach((mapping) => {
         sfRecord[mapping.sfField] = rawRow[mapping.csvField] !== undefined ? rawRow[mapping.csvField] : '';
       });
       previewRows.push(sfRecord);
@@ -488,24 +724,42 @@ private loadSalesforceObjects() {
   }
 
   goToReview() {
-    this.confirmedMappings = this.mappings.filter(m => m.sfField && m.sfField !== '');
-
+    this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
     }
 
-    const isUpsertMissingKey = this.operationMode === 'upsert' && !this.targetExtIdField;
-
     if (this.confirmedMappings.length > 0) {
-      if (isUpsertMissingKey) {
-        this.toastr.error('Please select a Primary Upsert Key before proceeding.', 'Missing Configuration');
+      const missingFields = this.getMissingRequiredFields();
+      if (missingFields.length > 0) {
+        this.toastr.error(`Missing required fields: ${missingFields.join(', ')}`, 'Validation Error');
         return;
       }
 
-      const enhancedMappings = this.confirmedMappings.map(mapping => {
-        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-        return {
+      const hasSfId = this.confirmedMappings.some((m) => m.sfField === 'Id');
+      if (this.operationMode === 'delete' && !hasSfId) {
+        this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+        return;
+      }
+      if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
+        this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+        return;
+      }
+      if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+        this.toastr.error('Upsert requires a Primary Upsert Key before proceeding.', 'Missing Configuration');
+        return;
+      }
+
+      const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
+      if (isDuplicate) {
+        this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
+        return;
+      }
+
+      const enhancedMappings = this.confirmedMappings.map((mapping) => {
+      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+       return {
           ...mapping,
           type: fieldMeta?.type,
           referenceTo: fieldMeta?.referenceTo,
@@ -519,7 +773,7 @@ private loadSalesforceObjects() {
         csvHeaders: [...this.csvHeaders],
         mappings: enhancedMappings,
         targetExtIdField: this.targetExtIdField,
-        operationMode: this.operationMode,
+        operationMode: this.operationMode
       });
 
       this.confirmedMappings = [];
@@ -536,7 +790,7 @@ private loadSalesforceObjects() {
   }
 
   getActiveMappings(mappings: any[]) {
-    return mappings.filter(m => m.sfField && m.sfField !== '');
+    return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
   startMigration() {
@@ -548,75 +802,150 @@ private loadSalesforceObjects() {
       return;
     }
 
-    this.isMigrating = true;
-    this.cdr.detectChanges();
+    let totalRows = 0;
+    if (this.workbook) {
+      this.migrationQueue.forEach(job => {
+        const worksheet = this.workbook!.Sheets[job.sheetName];
+        const rawData: any[] = utils.sheet_to_json(worksheet);
+        totalRows += rawData.length;
+      });
+    }
 
-    setTimeout(() => {
-      try {
-        const jobsPayload: any[] = [];
+    const estimatedBatches = Math.ceil(totalRows / this.batchSize);
 
-        for (const job of this.migrationQueue) {
-          const worksheet = this.workbook!.Sheets[job.sheetName];
-          const rawData: any[] = utils.sheet_to_json(worksheet);
-          const relationalMapping = job.mappings.find(m => m.type === 'reference' && m.relationalExtIdField !== '');
+   // Dynamic UI Variables based on Operation Type
+    const isDeleteOnly = this.isDeleteOnlyBatch;
+    const hasDelete = this.hasDeleteInBatch;
 
-          if (relationalMapping) {
-            const parentCsvColumn = relationalMapping.csvField;
-            rawData.sort((a, b) => {
-              const valA = String(a[parentCsvColumn] || '');
-              const valB = String(b[parentCsvColumn] || '');
-              return valA.localeCompare(valB);
-            });
-          }
+    const popupTitle = isDeleteOnly
+      ? '<strong class="text-danger">Ready for Data Deletion?</strong>'
+      : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
 
-          jobsPayload.push({
-            targetObject: job.targetObject,
-            records: rawData,
-            mappings: job.mappings,
-            targetExtIdField: job.targetExtIdField,
-            operationMode: job.operationMode,
-          });
-        }
+    const confirmBtnText = isDeleteOnly
+      ? '<i class="feather icon-trash-2 me-1"></i> Execute Deletion'
+      : '<i class="feather icon-zap me-1"></i> Execute ' + (hasDelete ? 'Batch' : 'Migration');
 
-        this.migrationService.migrateData(jobsPayload).subscribe({
-          next: (response) => {
-            console.log('Migration response from server:', response);
-            this.isMigrating = false;
+    const confirmBtnClass = isDeleteOnly
+      ? 'btn btn-danger btn-lg rounded-pill shadow px-4 mx-2 fw-bold'
+      : 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold';
 
-            const successCount = response.stats?.success || 0;
-            const failedCount = response.stats?.failed || 0;
-            this.migrationSummary = response.stats;
-            this.failedRecords = response.failures || [];
-            this.successfulRecords = response.successfulRecords || [];
+    const warningText = isDeleteOnly
+      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the Salesforce Recycle Bin.</p>'
+      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>';
 
-            const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
+    Swal.fire({
+      title: popupTitle,
+      html: `
+        <div class="p-3 bg-light rounded-4 border border-secondary-subtle text-start mb-2 mt-3 shadow-inner">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Total Records</span>
+            <span class="fs-4 fw-bold text-dark">${totalRows.toLocaleString()}</span>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Target Objects</span>
+            <span class="fs-5 fw-bold text-primary bg-primary-subtle px-3 py-1 rounded-pill">${this.migrationQueue.length}</span>
+          </div>
+          <hr class="border-secondary-subtle my-2">
+          <div class="d-flex justify-content-between align-items-center pt-2">
+            <span class="text-muted fw-bold small text-uppercase tracking-wide">Execution Plan</span>
+            <span class="badge bg-dark text-white px-3 py-2 rounded-pill shadow-sm">
+              <i class="feather icon-layers me-1"></i> ~${estimatedBatches} Batches of ${this.batchSize.toLocaleString()}
+            </span>
+          </div>
+        </div>
+        ${warningText}
+      `,
+      icon: 'question',
+      iconColor: '#0d6efd',
+      backdrop: `
+        rgba(0, 0, 0, 0.4)
+        backdrop-filter: blur(8px)
+        left top
+        no-repeat
+      `,
+      showCancelButton: true,
+      buttonsStyling: false,
+      confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
+      cancelButtonText: 'Review Again',
+      customClass: {
+        popup: 'rounded-4 shadow-lg border-0',
+        title: 'fs-3 fw-bold text-dark',
+        confirmButton: confirmBtnClass,
+        cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
+      }
+    }).then((result) => {
 
-            if (successCount > 0 && failedCount === 0) {
-              this.toastr.success(msg, 'Migration Complete!');
-            } else if (successCount > 0 && failedCount > 0) {
-              this.toastr.warning(msg, 'Partial Migration');
-            } else {
-              this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+      if (result.isConfirmed) {
+        this.isMigrating = true;
+        this.cdr.detectChanges();
+
+        setTimeout(() => {
+          try {
+            const jobsPayload: any[] = [];
+
+            for (const job of this.migrationQueue) {
+              const worksheet = this.workbook!.Sheets[job.sheetName];
+              const rawData: any[] = utils.sheet_to_json(worksheet);
+              const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+
+              if (relationalMapping) {
+                const parentCsvColumn = relationalMapping.csvField;
+                rawData.sort((a, b) => {
+                  const valA = String(a[parentCsvColumn] || '');
+                  const valB = String(b[parentCsvColumn] || '');
+                  return valA.localeCompare(valB);
+                });
+              }
+
+              jobsPayload.push({
+                targetObject: job.targetObject,
+                records: rawData,
+                mappings: job.mappings,
+                targetExtIdField: job.targetExtIdField,
+                operationMode: job.operationMode,
+                batchSize: this.batchSize
+              });
             }
 
-            this.currentStep = 5;
-            this.autoNavigate();
-            this.cdr.detectChanges();
-          },
-          error: (err) => {
+            this.migrationService.migrateData(jobsPayload).subscribe({
+              next: (response) => {
+                this.isMigrating = false;
+
+                const successCount = response.stats?.success || 0;
+                const failedCount = response.stats?.failed || 0;
+                this.migrationSummary = response.stats;
+                this.failedRecords = response.failures || [];
+                this.successfulRecords = response.successfulRecords || [];
+
+                const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
+
+                if (successCount > 0 && failedCount === 0) {
+                  this.toastr.success(msg, 'Migration Complete!');
+                } else if (successCount > 0 && failedCount > 0) {
+                  this.toastr.warning(msg, 'Partial Migration');
+                } else {
+                  this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+                }
+
+                this.currentStep = 5;
+                this.autoNavigate();
+                this.cdr.detectChanges();
+              },
+              error: (err) => {
+                this.isMigrating = false;
+                const errMsg = err.error?.message || 'Check console for details';
+                this.toastr.error(errMsg, 'Server Error');
+                this.cdr.detectChanges();
+              }
+            });
+          } catch (error) {
             this.isMigrating = false;
-            const errMsg = err.error?.message || 'Check console for details';
-            this.toastr.error(errMsg, 'Server Error');
+            this.toastr.error('Failed to read data from the file.', 'Parsing Error');
             this.cdr.detectChanges();
           }
-        });
-
-      } catch (error) {
-        this.isMigrating = false;
-        this.toastr.error('Failed to read data from the file.', 'Parsing Error');
-        this.cdr.detectChanges();
+        }, 10);
       }
-    }, 10);
+    });
   }
 
   downloadSuccessLog() {
@@ -626,41 +955,40 @@ private loadSalesforceObjects() {
   }
 
   downloadErrorLog() {
-  // We transform the failedRecords array to make the CSV readable
-  const report = this.failedRecords.map(f => ({
-    Error: f.error,
-    ...f.record
-  }));
+    const report = this.failedRecords.map((f) => ({
+      Error: f.error,
+      ...f.record
+    }));
 
-  const worksheet = utils.json_to_sheet(report);
-  const csvOutput = utils.sheet_to_csv(worksheet);
-  this.saveAsCsv(csvOutput, 'error_log');
-}
+    const worksheet = utils.json_to_sheet(report);
+    const csvOutput = utils.sheet_to_csv(worksheet);
+    this.saveAsCsv(csvOutput, 'error_log');
+  }
 
- private saveAsCsv(buffer: string, fileName: string) {
-  const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = window.URL.createObjectURL(data);
-  link.download = `${fileName}_${new Date().getTime()}.csv`;
-  link.click();
-}
+  private saveAsCsv(buffer: string, fileName: string) {
+    const data = new Blob([buffer], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(data);
+    link.download = `${fileName}_${new Date().getTime()}.csv`;
+    link.click();
+  }
 
   private autoNavigate() {
     setTimeout(() => {
-       const element = document.querySelector('.row.mb-4:last-of-type');
-    if (element) {
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-        inline: 'nearest'
-      });
-    }
-    }, 100);
+      const rows = document.querySelectorAll('.row.mb-4');
+      const newStepElement = rows[rows.length - 1];
+
+      if (newStepElement) {
+        newStepElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      }
+    }, 150);
   }
 
   resetMigrationSession() {
     this.migrationQueue = [];
-    this.selectedCRM = '';
     this.selectedFile = null;
     this.selectedObject = '';
     this.csvHeaders = [];
@@ -684,46 +1012,59 @@ private loadSalesforceObjects() {
     this.previewHeaders = [];
     this.previewingItemIndex = null;
 
-    // this.currentStep = 1;
     this.currentStep = 2;
-    this.selectedCRM = 'Zoho';
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
 
+  // getDynamicSequenceError(): string | null {
+  //   if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+
+  //   const activeLookupMappings = this.mappings.filter((m) => {
+  //     const meta = this.getSfFieldMeta(m.sfField);
+  //     return m.sfField && meta?.type === 'reference';
+  //   });
+
+  //   for (const mapping of activeLookupMappings) {
+  //     const meta = this.getSfFieldMeta(mapping.sfField);
+  //     const parentObjects: string[] = meta.referenceTo || [];
+  //     const externalParents = parentObjects.filter((p) => p !== this.selectedObject);
+
+  //     if (externalParents.length > 0) {
+  //       const isParentQueued = externalParents.some((parentName) => this.migrationQueue.some((q) => q.targetObject === parentName));
+
+  //       if (!isParentQueued) {
+  //         const parentName = externalParents[0];
+  //         return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
+  //       }
+  //     }
+  //   }
+  //   return null;
+  // }
   getDynamicSequenceError(): string | null {
-    if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
+  if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
-    const activeLookupMappings = this.mappings.filter(m => {
-      const meta = this.getSfFieldMeta(m.sfField);
-      return m.sfField && meta?.type === 'reference';
-    });
+  for (const mapping of this.mappings) {
+    // ONLY block if they are trying to use a 'Relational External ID'
+    // AND the parent sheet isn't in the queue.
+    if (mapping.relationalExtIdField && mapping.relationalExtIdField !== 'Id') {
+      const parentName = mapping.parentObjectName;
+      const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
-    for (const mapping of activeLookupMappings) {
-      const meta = this.getSfFieldMeta(mapping.sfField);
-      const parentObjects: string[] = meta.referenceTo || [];
-      const externalParents = parentObjects.filter(p => p !== this.selectedObject);
-
-      if (externalParents.length > 0) {
-        const isParentQueued = externalParents.some(parentName =>
-          this.migrationQueue.some(q => q.targetObject === parentName)
-        );
-
-        if (!isParentQueued) {
-          const parentName = externalParents[0];
-          return `Upsert Blocked: The field "${meta.label}" requires the "${parentName}" sheet to be migrated first. Please go back and queue the "${parentName}" sheet.`;
-        }
+      if (!isParentInQueue) {
+        return `Upsert Blocked: You are trying to link to ${parentName} using a Legacy ID (${mapping.relationalExtIdField}), but the ${parentName} sheet is not in your upload queue.`;
       }
     }
-    return null;
   }
+  return null;
+}
 
   hasOrderingIssue(): boolean {
     let issueFound = false;
     this.migrationQueue.forEach((job, index) => {
-      job.mappings.forEach(m => {
+      job.mappings.forEach((m) => {
         if (m.relationalExtIdField && m.parentObjectName) {
-          const parentIndex = this.migrationQueue.findIndex(q => q.targetObject === m.parentObjectName);
+          const parentIndex = this.migrationQueue.findIndex((q) => q.targetObject === m.parentObjectName);
           if (parentIndex !== -1 && parentIndex > index) {
             issueFound = true;
           }
@@ -735,14 +1076,14 @@ private loadSalesforceObjects() {
 
   overrideGoToReview() {
     if (this.operationMode === 'upsert') {
-       if (this.getDynamicSequenceError()) {
-         this.toastr.error("Please resolve sequence errors before proceeding.", "Logic Error");
-         return;
-       }
-       if (this.hasOrderingIssue()) {
-         this.toastr.error("Please reorder the queue: Parents (like Accounts) must be above Children.", "Sequence Error");
-         return;
-       }
+      if (this.getDynamicSequenceError()) {
+        this.toastr.error('Please resolve sequence errors before proceeding.', 'Logic Error');
+        return;
+      }
+      if (this.hasOrderingIssue()) {
+        this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
+        return;
+      }
     }
     this.goToReview();
 }

@@ -47,7 +47,7 @@ const callback = async (req, res) => {
     // Redirect the browser back to your Angular Dashboard with the token
     // Angular will pick up these parameters from the URL
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4200';
-    res.redirect(`${frontendUrl}/dashboard?token=${authData.accessToken}&instanceUrl=${authData.instanceUrl}&name=${encodeURIComponent(authData.userName)}`);
+    res.redirect(`${frontendUrl}/data-import?token=${authData.accessToken}&instanceUrl=${authData.instanceUrl}&name=${encodeURIComponent(authData.userName)}`);
     
   } catch (error) {
     logger.error('OAuth Callback Failed', { error: error.message });
