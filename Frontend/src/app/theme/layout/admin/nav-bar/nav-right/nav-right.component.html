@@ -17,11 +17,11 @@
           <div class="dropdown-header">
             <h4>
               Hello,
-              <span class="small text-muted">{{ displayName() }}</span>
+              <span class="small text-muted">{{ currentUser?.Name || 'Guest' }}</span>
             </h4>
-
+            
             <p class="text-muted">{{ currentUser?.CompanyName || 'Salesforce User' }}</p>
-
+            
             <hr />
             <ng-scrollbar style="height: calc(70vh - 280px)" visibility="hover">
               <a [routerLink]="['/login']" class="dropdown-item">

@@ -9,41 +9,74 @@
             </a>
             <div class="row">
               <div class="d-flex justify-content-center">
-                <div class="auth-header text-center">
-                  <h2 class="text-secondary mt-5"><b>Welcome</b></h2>
-                  <p class="fs-4 mt-2">Connect Your Salesforce Org To Begin Migration</p>
+                <div class="auth-header">
+                  <h2 class="text-secondary mt-5"><b> Welcome </b></h2>
+                  <p class="fs-4 mt-2">Enter your credentials to continue</p>
                 </div>
               </div>
             </div>
             <div class="form-floating mb-3">
               <select class="form-select" id="salesforceEnvironment" aria-label="Salesforce Environment"
-                [(ngModel)]="selectedEnvironment"
-                name="environment">
-                <option value="production">Production / Developer</option>
+                [field]="loginForm.environment">
+                <option value="production">Production</option>
                 <option value="sandbox">Sandbox</option>
               </select>
               <label for="salesforceEnvironment">Salesforce Environment</label>
             </div>
 
+            <h5 class="my-4 d-flex justify-content-center">Sign in with Username</h5>
+            <div class="form-floating mb-3">
+              <input
+                type="email"
+                class="form-control"
+                id="floatingInput"
+                [class.is-invalid]="submitted() && loginForm.email().invalid()"
+                placeholder="Email Address"
+                [field]="loginForm.email"
+              />
+              <label for="floatingInput">Username</label>
+              @if (submitted() && loginForm.email().invalid()) {
+                <div class="invalid-feedback">
+                  @for (error of loginForm.email().errors(); track error.kind) {
+                    <div>{{ error.message }}</div>
+                  }
+                </div>
+              }
+            </div>
+            <div class="form-floating mb-3">
+              <input
+                type="password"
+                id="password"
+                class="form-control"
+                [field]="loginForm.password"
+                [class.is-invalid]="submitted() && loginForm.password().errors().length > 0"
+                placeholder="Password"
+              />
+              <label for="password">Password</label>
+              @if (submitted() && loginForm.password().errors().length > 0) {
+                <div class="invalid-feedback">
+                  @for (error of loginForm.password().errors(); track error.kind) {
+                    <div>{{ error.message }}</div>
+                  }
+                </div>
+              }
+            </div>
+            
             @if (error()) {
               <div class="alert alert-danger" role="alert">
                 {{ error() }}
               </div>
             }
-
+            
             <div class="d-grid mt-4">
-              <button type="submit" class="btn btn-primary btn-lg" [disabled]="loading()">
+              <button type="submit" class="btn btn-secondary" [disabled]="loading()">
                 @if (loading()) {
-                  Connecting...
+                  Signing in...
                 } @else {
-                  <i class="ti ti-brand-salesforce me-2"></i> Log in with Salesforce
+                  Sign In
                 }
               </button>
             </div>
-
-            <p class="text-muted text-center mt-3 fs-6">
-              You will be redirected to Salesforce to sign in securely.
-            </p>
             <hr />
           </form>
         </div>
