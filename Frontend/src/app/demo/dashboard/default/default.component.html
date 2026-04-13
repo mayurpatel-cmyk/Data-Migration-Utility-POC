@@ -58,7 +58,7 @@
             }
           </div>
         </div>
-        
+
         <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <div class="form-group mb-0">
             <label class="form-label fw-bold">2. Select Target Salesforce Object</label>
@@ -146,7 +146,7 @@
         </div>
 
         @if (['insert', 'update', 'upsert'].includes(operationMode)) {
-        
+
         <div class="bg-primary-subtle p-3 rounded border border-primary-subtle position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
           <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> External ID Key (Optional for Insert/Update, Required for Upsert)</label>
 
@@ -154,7 +154,7 @@
           <div class="text-primary small mt-1"><span class="spinner-border spinner-border-sm me-2"></span>Loading
             fields...</div>
           } @else {
-          
+
           <div class="position-relative w-50" (click)="$event.stopPropagation()">
             <div class="form-select cursor-pointer bg-white border-primary-subtle"
               (click)="!isLoadingFields && toggleUpsertKeyDropdown($event)" [class.text-muted]="!targetExtIdField">
@@ -243,7 +243,7 @@
           </div>
 
           @if (['insert', 'update', 'upsert'].includes(operationMode)) {
-          
+
           <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
             <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID Key:</label>
 
@@ -299,7 +299,7 @@
           </select>
         </div>
         }
-        
+
         <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
             Target Salesforce Object</label>
@@ -391,14 +391,14 @@
         </div>
         <div class="d-flex gap-2">
           @if (getConfirmedCount(mappings) > 0) {
-            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm" 
+            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
                     (click)="clearAllMappings()">
               <i class="feather icon-trash-2"></i> Clear All
             </button>
           }
-          
-          <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm" 
-                  (click)="autoMapFields()" 
+
+          <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
+                  (click)="autoMapFields()"
                   [disabled]="isLoadingFields">
             <i class="feather icon-cpu"></i> Auto-Map Fields
           </button>
@@ -417,14 +417,14 @@
             @for (mapping of mappings; track mapping.csvField) {
             <tr class="position-relative"
                 [style.z-index]="(mapping.isDropdownOpen || mapping.isParentDropdownOpen) ? '1060' : 'auto'">
-              
+
               <td class="fw-bold text-primary ps-4 align-middle">
                 <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
               </td>
               <td>
 
                 <div class="position-relative" (click)="$event.stopPropagation()">
-                  
+
                   <div class="form-select form-select-sm mb-2 cursor-pointer bg-white"
                     (click)="!isLoadingFields && toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
 
@@ -493,7 +493,7 @@
                   } @else {
 
                   <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
-                    
+
                     <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
                       (click)="toggleParentDropdown(mapping, $event)"
                       [class.text-muted]="!mapping.relationalExtIdField">
@@ -743,15 +743,15 @@
             <div class="small text-muted">Adjust the chunk size to prevent API timeouts on massive datasets.</div>
           </div>
         </div>
-        
+
         <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle">
           <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Batch Size:</label>
-          <input type="number" 
-                 class="form-control form-control-sm border-primary border-2 fw-bold text-primary" 
-                 [(ngModel)]="batchSize" 
-                 [disabled]="isMigrating" 
-                 min="1" 
-                 max="10000" 
+          <input type="number"
+                 class="form-control form-control-sm border-primary border-2 fw-bold text-primary"
+                 [(ngModel)]="batchSize"
+                 [disabled]="isMigrating"
+                 min="1"
+                 max="10000"
                  step="100"
                  style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
           <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10k)</span></span>
@@ -808,27 +808,27 @@
       </div>
       }
 
-   
+
 
       <div class="d-flex flex-wrap justify-content-end align-items-center gap-3 mt-4 pt-3 border-top">
         <button class="btn btn-outline-secondary d-flex align-items-center gap-2" [disabled]="isMigrating"
           (click)="currentStep = 3">
           <i class="feather icon-arrow-left"></i> Back to Mapping
         </button>
-        
-        <button class="btn shadow d-flex align-items-center gap-2" 
+
+        <button class="btn shadow d-flex align-items-center gap-2"
           [class.btn-danger]="isDeleteOnlyBatch"
           [class.btn-success]="!isDeleteOnlyBatch"
           [disabled]="isMigrating"
           (click)="startMigration()">
-          
+
           @if (isMigrating) {
             <span class="spinner-border spinner-border-sm"></span> Executing {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }}...
           } @else {
-            <i class="feather" [class.icon-trash-2]="isDeleteOnlyBatch" [class.icon-check-circle]="!isDeleteOnlyBatch"></i> 
+            <i class="feather" [class.icon-trash-2]="isDeleteOnlyBatch" [class.icon-check-circle]="!isDeleteOnlyBatch"></i>
             Confirm & Start {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Batch
           }
-          
+
         </button>
       </div>
     </app-card>

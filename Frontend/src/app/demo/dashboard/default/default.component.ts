@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
@@ -8,6 +8,8 @@ import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
+import { AuthService } from '../../Services/auth.service';
+import { ActivatedRoute, Router } from '@angular/router';
 
 interface MappingMeta {
   csvField: string;
@@ -47,6 +49,9 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
   private eRef = inject(ElementRef);
+  private route = inject(ActivatedRoute); // <--- Add this
+  private router = inject(Router);
+  private authService = inject(AuthService);
 
   migrationQueue: JobQueueItem[] = [];
 
@@ -89,9 +94,48 @@ export class DefaultComponent implements OnInit {
 
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
+  displayName = signal('Salesforce User');
 
-  ngOnInit() {
-    this.showMigrationInstructions();
+
+ ngOnInit() {
+  // Use ActivatedRoute (this.route) for the best results in Angular
+  this.route.queryParams.subscribe(params => {
+    const token = params['token'];
+    const instanceUrl = params['instanceUrl'];
+    const name = params['name'];
+
+    if (token && instanceUrl) {
+      console.log('Token detected, updating session...');
+      localStorage.setItem('sf_token', token);
+
+      if (name) {
+        localStorage.setItem('sf_user_name', name);
+        this.displayName.set(name);
+      } else{
+      const savedName = localStorage.getItem('sf_user_name');
+      if (savedName) this.displayName.set(savedName);}
+
+    // 1. Use the service to save the data and update the signal
+      this.authService.handleOAuthLogin(token, instanceUrl);
+
+      // 2. Clean the URL
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { token: null, instanceUrl: null },
+        queryParamsHandling: 'merge'
+      });
+
+      this.toastr.success('Connection Verified!');
+      this.loadSalesforceObjects();
+    } else if (this.authService.isLoggedIn()) {
+      // 3. If no URL token but we are logged in, just load data
+      this.loadSalesforceObjects();
+    } else {
+      // 4. Truly not logged in
+      this.router.navigate(['/login']);
+    }
+  });
+this.showMigrationInstructions();
     this.isLoadingObjects = true;
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
@@ -109,10 +153,35 @@ export class DefaultComponent implements OnInit {
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
     });
-    
+
+}
+private loadSalesforceObjects() {
+  const token = localStorage.getItem('sf_token');
+
+  // If there's no token, the user isn't logged in. Send them back.
+  if (!token) {
+    this.toastr.warning('Please log in with Salesforce to continue.');
+    this.router.navigate(['/login']);
+    return;
   }
 
-  onCRMSelect(crm: string) {
+  this.isLoadingObjects = true;
+  this.migrationService.getAllObjects().subscribe({
+    next: (objects) => {
+      this.sfObjects = objects;
+      this.isLoadingObjects = false;
+      this.cdr.detectChanges();
+    },
+    error: (err) => {
+      this.isLoadingObjects = false;
+      this.toastr.error('Session expired or connection lost. Please login again.', 'Connection Error');
+      this.cdr.detectChanges();
+      // Optional: clear local storage and redirect to login if it's a 401 error
+    }
+  });
+}
+
+ onCRMSelect(crm: string) {
     setTimeout(() => {
       this.currentStep = 2;
       this.autoNavigate();

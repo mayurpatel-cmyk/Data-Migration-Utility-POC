@@ -7,6 +7,25 @@ import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
 export const routes: Routes = [
   {
     path: '',
+    component: AdminComponent,
+    canActivate: [authGuard],
+    children: [
+      {
+        // We removed the 'dashboard' nesting.
+        // Now it matches the URL from your navigation menu directly.
+        path: 'data-import',
+        loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
+      },
+      {
+        // Optional: Redirect the base admin path to your import page
+        path: '',
+        redirectTo: 'data-import',
+        pathMatch: 'full'
+      }
+    ]
+  },
+  {
+    path: '',
     component: GuestComponent,
     children: [
       {
@@ -19,26 +38,8 @@ export const routes: Routes = [
         loadComponent: () => import('./demo/pages/authentication/login/login.component').then((c) => c.LoginComponent)
       }
     ]
-  },
-  {
-    path: '',
-    component: AdminComponent,
-    canActivate: [authGuard],
-    children: [
-      {
-        // We removed the 'dashboard' nesting. 
-        // Now it matches the URL from your navigation menu directly.
-        path: 'data-import', 
-        loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
-      },
-      {
-        // Optional: Redirect the base admin path to your import page
-        path: '',
-        redirectTo: 'data-import',
-        pathMatch: 'full'
-      }
-    ]
   }
+
 ];
 
 @NgModule({
