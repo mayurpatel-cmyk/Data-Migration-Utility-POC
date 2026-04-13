@@ -58,9 +58,19 @@ class MigrationService {
       case 'date':
       case 'datetime':
         if (typeof processedValue === 'number') {
+          // Attempt to parse as an Excel Serial Date
           const dateObj = new Date(Math.round((processedValue - 25569) * 86400 * 1000));
-          return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
+          
+          // ✅ FIX: Verify the calculated date is within valid bounds before stringifying
+          if (!isNaN(dateObj.getTime())) {
+            return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
+          }
+          
+          logger.warn(`Numeric value "${processedValue}" resulted in an out-of-bounds Date for field [${fieldName}]. Skipping.`);
+          return null; 
         }
+
+        // Standard string date parsing
         const parsedDate = new Date(processedValue);
         if (!isNaN(parsedDate.getTime())) {
           return sfType === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
