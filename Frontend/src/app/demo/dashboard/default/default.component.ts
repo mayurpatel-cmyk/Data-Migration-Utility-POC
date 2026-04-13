@@ -1,9 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-<<<<<<< Updated upstream
-import { Component, OnInit, inject, ChangeDetectorRef } from '@angular/core';
-=======
-import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
->>>>>>> Stashed changes
+import { Component, OnInit, inject, ChangeDetectorRef, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
@@ -12,11 +8,8 @@ import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs
 import { MigrationService } from 'src/app/services/migration.service';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ToastrService } from 'ngx-toastr';
-<<<<<<< Updated upstream
-=======
 import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
->>>>>>> Stashed changes
 
 interface MappingMeta {
   csvField: string;
@@ -49,13 +42,10 @@ export class DefaultComponent implements OnInit {
   private migrationService = inject(MigrationService);
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
-<<<<<<< Updated upstream
-=======
   private eRef = inject(ElementRef);
   private route = inject(ActivatedRoute); // <--- Add this
   private router = inject(Router);
   private authService = inject(AuthService);
->>>>>>> Stashed changes
 
   // --- MULTI-OBJECT QUEUE STATE ---
   migrationQueue: JobQueueItem[] = [];
@@ -95,21 +85,6 @@ export class DefaultComponent implements OnInit {
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
 
-<<<<<<< Updated upstream
-
-  ngOnInit() {
-    this.isLoadingObjects = true;
-    this.migrationService.getAllObjects().subscribe({
-      next: (objects) => {
-        this.sfObjects = objects.sort((a: any, b: any) => a.label.localeCompare(b.label));
-        setTimeout(() => this.isLoadingObjects = false);
-      },
-      error: (err) => {
-        setTimeout(() => this.isLoadingObjects = false);
-        this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
-      }
-    });
-=======
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
 
@@ -165,7 +140,6 @@ private loadSalesforceObjects() {
     this.toastr.warning('Please log in with Salesforce to continue.');
     this.router.navigate(['/login']);
     return;
->>>>>>> Stashed changes
   }
 
   this.isLoadingObjects = true;
