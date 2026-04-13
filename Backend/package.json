@@ -20,6 +20,7 @@
     "helmet": "^8.1.0",
     "jsforce": "^3.10.14",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "multer": "^2.1.1",
     "passport": "^0.7.0",
     "passport-oauth2": "^1.8.0",

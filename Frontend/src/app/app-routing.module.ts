@@ -11,7 +11,7 @@ export const routes: Routes = [
     children: [
       {
         path: '',
-        redirectTo: 'login', // Redirect empty guest path to login
+        redirectTo: 'login',
         pathMatch: 'full'
       },
       {
@@ -23,13 +23,20 @@ export const routes: Routes = [
   {
     path: '',
     component: AdminComponent,
-     canActivate: [authGuard],
+    canActivate: [authGuard],
     children: [
       {
-        path: 'dashboard',
+        // We removed the 'dashboard' nesting. 
+        // Now it matches the URL from your navigation menu directly.
+        path: 'data-import', 
         loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
+      },
+      {
+        // Optional: Redirect the base admin path to your import page
+        path: '',
+        redirectTo: 'data-import',
+        pathMatch: 'full'
       }
-      // ... rest of your admin routes
     ]
   }
 ];
