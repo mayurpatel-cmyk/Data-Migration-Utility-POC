@@ -97,75 +97,56 @@ export class DefaultComponent implements OnInit {
   displayName = signal('Salesforce User');
 
 
- ngOnInit() {
-  // Use ActivatedRoute (this.route) for the best results in Angular
+ngOnInit() {
+  // 1. Show the guide immediately
+  this.showMigrationInstructions();
+
+  // 2. Listen for Query Params (Handle the Redirect)
   this.route.queryParams.subscribe(params => {
     const token = params['token'];
     const instanceUrl = params['instanceUrl'];
     const name = params['name'];
 
     if (token && instanceUrl) {
-      console.log('Token detected, updating session...');
-      localStorage.setItem('sf_token', token);
-
+      console.log('OAuth Callback Detected: Saving session...');
+      
+      // Update local storage for display/persistence
       if (name) {
         localStorage.setItem('sf_user_name', name);
         this.displayName.set(name);
-      } else{
-      const savedName = localStorage.getItem('sf_user_name');
-      if (savedName) this.displayName.set(savedName);}
+      }
 
-    // 1. Use the service to save the data and update the signal
+      // CRITICAL: Update the AuthService signal/storage
+      // This ensures this.authService.isLoggedIn() returns true immediately
       this.authService.handleOAuthLogin(token, instanceUrl);
 
-      // 2. Clean the URL
+      // Clean the URL so the token isn't visible in the address bar
       this.router.navigate([], {
         relativeTo: this.route,
-        queryParams: { token: null, instanceUrl: null },
-        queryParamsHandling: 'merge'
+        queryParams: { token: null, instanceUrl: null, name: null },
+        queryParamsHandling: 'merge',
+        replaceUrl: true
       });
 
-      this.toastr.success('Connection Verified!');
+      this.toastr.success('Connection Verified!', 'Welcome');
       this.loadSalesforceObjects();
+      
     } else if (this.authService.isLoggedIn()) {
-      // 3. If no URL token but we are logged in, just load data
+      // 3. Regular visit: User is already logged in
+      const savedName = localStorage.getItem('sf_user_name');
+      if (savedName) this.displayName.set(savedName);
+      
       this.loadSalesforceObjects();
     } else {
-      // 4. Truly not logged in
+      // 4. Not logged in and no token in URL
       this.router.navigate(['/login']);
     }
   });
-this.showMigrationInstructions();
-    this.isLoadingObjects = true;
-    this.migrationService.getAllObjects().subscribe({
-      next: (objects) => {
-        this.sfObjects = objects;
-        setTimeout(() => {
-          this.isLoadingObjects = false;
-          this.cdr.detectChanges();
-        });
-      },
-      error: (err) => {
-        setTimeout(() => {
-          this.isLoadingObjects = false;
-          this.cdr.detectChanges();
-        });
-        this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
-      }
-    });
-
 }
 private loadSalesforceObjects() {
-  const token = localStorage.getItem('sf_token');
-
-  // If there's no token, the user isn't logged in. Send them back.
-  if (!token) {
-    this.toastr.warning('Please log in with Salesforce to continue.');
-    this.router.navigate(['/login']);
-    return;
-  }
-
   this.isLoadingObjects = true;
+  this.cdr.detectChanges(); // Ensure the spinner shows
+
   this.migrationService.getAllObjects().subscribe({
     next: (objects) => {
       this.sfObjects = objects;
@@ -174,9 +155,16 @@ private loadSalesforceObjects() {
     },
     error: (err) => {
       this.isLoadingObjects = false;
-      this.toastr.error('Session expired or connection lost. Please login again.', 'Connection Error');
+      console.error('Fetch Error:', err);
+      
+      // If the token is invalid/expired (401), send them back to login
+      if (err.status === 401) {
+        this.toastr.error('Session expired. Please log in again.');
+        this.authService.logout(); // This clears tokens and navigates to /login
+      } else {
+        this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
+      }
       this.cdr.detectChanges();
-      // Optional: clear local storage and redirect to login if it's a 401 error
     }
   });
 }
