@@ -1,5 +1,5 @@
 // Angular Import
-import { Component, Input, inject } from '@angular/core';
+import { Component, Input, inject, ChangeDetectorRef } from '@angular/core'; // Added ChangeDetectorRef
 
 import { NavigationEnd, Router, RouterModule, Event } from '@angular/router';
 import { Title } from '@angular/platform-browser';
@@ -25,13 +25,16 @@ interface titleType {
 export class BreadcrumbComponent {
   private route = inject(Router);
   private titleService = inject(Title);
+  private cdr = inject(ChangeDetectorRef); // <--- 1. Inject ChangeDetectorRef
 
   // public props
   @Input() type: string;
 
   navigations: NavigationItem[];
   breadcrumbList: Array<string> = [];
-  navigationList!: titleType[];
+  
+  // <--- 2. THE FIX: Initialize this with an empty array instead of leaving it undefined
+  navigationList: titleType[] = []; 
 
   // constructor
   constructor() {
@@ -47,8 +50,12 @@ export class BreadcrumbComponent {
         const activeLink = router.url;
         const breadcrumbList = this.filterNavigation(this.navigations, activeLink);
         const title = breadcrumbList[breadcrumbList.length - 1]?.title || 'Welcome';
+        
+        // 3. Update the list and safely trigger change detection
         this.navigationList = breadcrumbList.splice(-2);
         this.titleService.setTitle(title + ' | Data Migration Utility - POC');
+        
+        this.cdr.detectChanges(); // Tell Angular the breadcrumb data has updated
       }
     });
   }

@@ -98,56 +98,60 @@ export class DefaultComponent implements OnInit {
 
 
 ngOnInit() {
-    // 1. Defer the instructions popup slightly so it doesn't block rendering
+  // 1. Show instructions
+  setTimeout(() => {
+    this.showMigrationInstructions();
+  }, 0);
+
+  let hasInitialized = false;
+
+  // 2. Listen for Query Params
+  this.route.queryParams.subscribe(params => {
+    if (hasInitialized) return; 
+
+    const token = params['token'];
+    const instanceUrl = params['instanceUrl'];
+    const name = params['name'];
+
+    hasInitialized = true;
+
+    // THE FIX: Push ALL of this to the next JavaScript event tick.
+    // This allows Breadcrumbs to finish rendering its initial state 
+    // BEFORE we start changing the URL and loading data.
     setTimeout(() => {
-      this.showMigrationInstructions();
-    }, 0);
+      if (token && instanceUrl) {
+        console.log('OAuth Callback Detected: Saving session...');
+        
+        if (name) {
+          localStorage.setItem('sf_user_name', name);
+          this.displayName.set(name);
+        }
 
-    // 2. Listen for Query Params (Handle the Redirect)
-    this.route.queryParams.subscribe(params => {
-      const token = params['token'];
-      const instanceUrl = params['instanceUrl'];
-      const name = params['name'];
+        this.authService.handleOAuthLogin(token, instanceUrl);
 
-      // CRITICAL FIX: Wrap in setTimeout to prevent NG0100 ExpressionChangedAfterItHasBeenCheckedError
-      // This stops the Breadcrumbs from updating synchronously during the parent's initial render cycle.
-      setTimeout(() => {
-        if (token && instanceUrl) {
-          console.log('OAuth Callback Detected: Saving session...');
-          
-          // Update local storage for display/persistence
-          if (name) {
-            localStorage.setItem('sf_user_name', name);
-            this.displayName.set(name);
-          }
-
-          // Update the AuthService signal/storage
-          this.authService.handleOAuthLogin(token, instanceUrl);
-
-          // Clean the URL so the token isn't visible in the address bar
-          this.router.navigate([], {
-            relativeTo: this.route,
-            queryParams: { token: null, instanceUrl: null, name: null },
-            queryParamsHandling: 'merge',
-            replaceUrl: true
-          });
-
+        // Clean the URL safely
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { token: null, instanceUrl: null, name: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true
+        }).then(() => {
           this.toastr.success('Connection Verified!', 'Welcome');
           this.loadSalesforceObjects();
-          
-        } else if (this.authService.isLoggedIn()) {
-          // Regular visit: User is already logged in
-          const savedName = localStorage.getItem('sf_user_name');
-          if (savedName) this.displayName.set(savedName);
-          
-          this.loadSalesforceObjects();
-        } else {
-          // Not logged in and no token in URL
-          this.router.navigate(['/login']);
-        }
-      }, 0);
-    });
-  }
+        });
+        
+      } else if (this.authService.isLoggedIn()) {
+        const savedName = localStorage.getItem('sf_user_name');
+        if (savedName) this.displayName.set(savedName);
+        
+        this.loadSalesforceObjects();
+      } else {
+        this.router.navigate(['/login']);
+      }
+    }, 0); // <--- This 0ms timeout is the magic shield against NG0100
+  });
+}
+
 private loadSalesforceObjects() {
   this.isLoadingObjects = true;
   this.cdr.detectChanges(); // Ensure the spinner shows
@@ -155,24 +159,27 @@ private loadSalesforceObjects() {
   this.migrationService.getAllObjects().subscribe({
     next: (objects) => {
       this.sfObjects = objects;
-      this.isLoadingObjects = false;
-      this.cdr.detectChanges();
+      setTimeout(() => {
+        this.isLoadingObjects = false;
+        this.cdr.detectChanges();
+      });
     },
     error: (err) => {
-      this.isLoadingObjects = false;
-      console.error('Fetch Error:', err);
+      setTimeout(() => {
+        this.isLoadingObjects = false;
+        this.cdr.detectChanges();
+      });
       
-      // If the token is invalid/expired (401), send them back to login
       if (err.status === 401) {
         this.toastr.error('Session expired. Please log in again.');
-        this.authService.logout(); // This clears tokens and navigates to /login
+        this.authService.logout(); 
       } else {
         this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
       }
-      this.cdr.detectChanges();
     }
   });
 }
+
 
  onCRMSelect(crm: string) {
     setTimeout(() => {
