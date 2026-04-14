@@ -86,7 +86,7 @@ export class DefaultComponent implements OnInit {
   // Default to insert
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
-  batchSize: number = 200;
+  batchSize: number = 10;
 
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
@@ -888,6 +888,8 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
+    if (this.batchSize > 200) this.batchSize = 200;
+  if (this.batchSize < 10) this.batchSize = 10;
 
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
