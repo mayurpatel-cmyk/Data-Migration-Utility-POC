@@ -4,7 +4,6 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook } from 'xlsx';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
-import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
@@ -40,7 +39,7 @@ interface JobQueueItem {
 @Component({
   selector: 'app-default',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent],
+  imports: [CommonModule, FormsModule, CardComponent],
   templateUrl: './default.component.html',
   styleUrls: ['./default.component.scss']
 })
