@@ -951,78 +951,98 @@ export class DefaultComponent implements OnInit {
         let allFailures: any[] = [];
         let allSuccesses: any[] = [];
 
-        try {
-          // Process objects sequentially to allow real-time UI updates
-          for (let i = 0; i < this.migrationQueue.length; i++) {
-            const job = this.migrationQueue[i];
-            
-            this.activeJobStatus = `Currently Processing: ${job.targetObject}...`;
-            this.cdr.detectChanges();
+try {
+  // Process objects sequentially
+  for (let i = 0; i < this.migrationQueue.length; i++) {
+    const job = this.migrationQueue[i];
+    
+    this.activeJobStatus = `Preparing ${job.targetObject}...`;
+    this.cdr.detectChanges();
 
-            const worksheet = this.workbook!.Sheets[job.sheetName];
-            const rawData: any[] = utils.sheet_to_json(worksheet);
-            const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+    const worksheet = this.workbook!.Sheets[job.sheetName];
+    const rawData: any[] = utils.sheet_to_json(worksheet);
+    const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
 
-            if (relationalMapping) {
-              const parentCsvColumn = relationalMapping.csvField;
-              rawData.sort((a, b) => {
-                const valA = String(a[parentCsvColumn] || '');
-                const valB = String(b[parentCsvColumn] || '');
-                return valA.localeCompare(valB);
-              });
-            }
+    // Sort if relational mapping exists
+    if (relationalMapping) {
+      const parentCsvColumn = relationalMapping.csvField;
+      rawData.sort((a, b) => {
+        const valA = String(a[parentCsvColumn] || '');
+        const valB = String(b[parentCsvColumn] || '');
+        return valA.localeCompare(valB);
+      });
+    }
 
-            const singleJobPayload = [{
-              targetObject: job.targetObject,
-              records: rawData,
-              mappings: job.mappings,
-              targetExtIdField: job.targetExtIdField,
-              operationMode: job.operationMode,
-              batchSize: this.batchSize
-            }];
+    // --- NEW: Frontend Chunking Logic ---
+    const totalRecords = rawData.length;
+    const totalBatches = Math.ceil(totalRecords / this.batchSize);
 
-            // Execute this single target object via firstValueFrom
-            const response: any = await firstValueFrom(this.migrationService.migrateData(singleJobPayload));
+    // Loop through each batch for this specific object
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const startRecord = batchIndex * this.batchSize;
+      const endRecord = startRecord + this.batchSize;
+      
+      // Slice out just the records for this specific batch
+      const batchRecords = rawData.slice(startRecord, endRecord);
 
-            totalSuccess += response.stats?.success || 0;
-            totalFailed += response.stats?.failed || 0;
-            if (response.failures) allFailures = allFailures.concat(response.failures);
-            if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+      // Update the UI with real-time batch progress!
+      this.activeJobStatus = `Processing ${job.targetObject}: Batch ${batchIndex + 1} of ${totalBatches}...`;
+      this.cdr.detectChanges();
 
-            this.completedJobsCount++;
-            this.activeJobStatus = `Completed: ${job.targetObject} ✅`;
-            this.cdr.detectChanges();
-            
-            // Brief visual pause before the next job starts or UI redirects
-            await new Promise(resolve => setTimeout(resolve, 800));
-          }
+      const singleBatchPayload = [{
+        targetObject: job.targetObject,
+        records: batchRecords, // Only send this batch's records
+        mappings: job.mappings,
+        targetExtIdField: job.targetExtIdField,
+        operationMode: job.operationMode,
+        batchSize: this.batchSize 
+      }];
 
-          // All Jobs Finished
-          this.isMigrating = false;
-          this.migrationSummary = { success: totalSuccess, failed: totalFailed };
-          this.failedRecords = allFailures;
-          this.successfulRecords = allSuccesses;
+      // Wait for just this ONE batch to finish
+      const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
 
-          const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
+      // Tally up the results
+      totalSuccess += response.stats?.success || 0;
+      totalFailed += response.stats?.failed || 0;
+      if (response.failures) allFailures = allFailures.concat(response.failures);
+      if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+    }
+    // --- End Frontend Chunking ---
 
-          if (totalSuccess > 0 && totalFailed === 0) {
-            this.toastr.success(msg, 'Migration Complete!');
-          } else if (totalSuccess > 0 && totalFailed > 0) {
-            this.toastr.warning(msg, 'Partial Migration');
-          } else {
-            this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
-          }
+    this.completedJobsCount++;
+    this.activeJobStatus = `Completed: ${job.targetObject} ✅`;
+    this.cdr.detectChanges();
+    
+    // Brief visual pause before the next job starts
+    await new Promise(resolve => setTimeout(resolve, 800));
+  }
 
-          this.currentStep = 5;
-          this.autoNavigate();
-          this.cdr.detectChanges();
+  // All Jobs Finished (Keep your existing finish logic here)
+  this.isMigrating = false;
+  this.migrationSummary = { success: totalSuccess, failed: totalFailed };
+  this.failedRecords = allFailures;
+  this.successfulRecords = allSuccesses;
 
-        } catch (error: any) {
-          this.isMigrating = false;
-          const errMsg = error.error?.message || error.message || 'Check console for details';
-          this.toastr.error(errMsg, 'Server Error');
-          this.cdr.detectChanges();
-        }
+  const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
+
+  if (totalSuccess > 0 && totalFailed === 0) {
+    this.toastr.success(msg, 'Migration Complete!');
+  } else if (totalSuccess > 0 && totalFailed > 0) {
+    this.toastr.warning(msg, 'Partial Migration');
+  } else {
+    this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+  }
+
+  this.currentStep = 5;
+  this.autoNavigate();
+  this.cdr.detectChanges();
+
+} catch (error: any) {
+  this.isMigrating = false;
+  const errMsg = error.error?.message || error.message || 'Check console for details';
+  this.toastr.error(errMsg, 'Server Error');
+  this.cdr.detectChanges();
+}
       }
     });
   }
