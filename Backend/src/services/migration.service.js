@@ -135,15 +135,27 @@ class MigrationService {
         }
       }
 
-      if (fieldName) {
+ if (fieldName) {
         const lowerField = fieldName.toLowerCase();
         const lowerVal = cleanStr.toLowerCase();
 
-        if (lowerField.includes('country') && COUNTRY_MAP[lowerVal]) {
-          return COUNTRY_MAP[lowerVal];
+        // 1. Process Country mapping
+        if (lowerField.includes('country')) {
+          if (COUNTRY_MAP[lowerVal]) return COUNTRY_MAP[lowerVal];
+          
+          // If not in our map, warn but send as-is (might be valid in SF)
+          logger.warn(`Unmapped Country: "${cleanStr}". Sending as-is.`);
+          return cleanStr; 
         }
-        if ((lowerField.includes('state') || lowerField.includes('province')) && STATE_MAP[lowerVal]) {
-          return STATE_MAP[lowerVal];
+        
+        // 2. Process State mapping
+        if (lowerField.includes('state') || lowerField.includes('province')) {
+          if (STATE_MAP[lowerVal]) return STATE_MAP[lowerVal];
+          
+          // CRITICAL FIX: If the state is not exactly mapped to a Full Name, 
+          // set it to null. Sending a bad text state guarantees a crash.
+          logger.warn(`Invalid State: "${cleanStr}". Removing to prevent crash.`);
+          return null; 
         }
       }
 
