@@ -979,38 +979,42 @@ try {
 
     // Loop through each batch for this specific object
     for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-      const startRecord = batchIndex * this.batchSize;
-      const endRecord = startRecord + this.batchSize;
-      
-      // Slice out just the records for this specific batch
-      const batchRecords = rawData.slice(startRecord, endRecord);
+  const startRecord = batchIndex * this.batchSize;
+  const endRecord = startRecord + this.batchSize;
+  const batchRecords = rawData.slice(startRecord, endRecord);
 
-      // Update the UI with real-time batch progress!
-      this.activeJobStatus = `Processing ${job.targetObject}: Batch ${batchIndex + 1} of ${totalBatches}...`;
-      this.cdr.detectChanges();
+  // 1. SHOW PROCESSING STATUS
+  this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
+  this.cdr.detectChanges();
 
-      const singleBatchPayload = [{
-        targetObject: job.targetObject,
-        records: batchRecords, // Only send this batch's records
-        mappings: job.mappings,
-        targetExtIdField: job.targetExtIdField,
-        operationMode: job.operationMode,
-        batchSize: this.batchSize 
-      }];
+  const singleBatchPayload = [{
+    targetObject: job.targetObject,
+    records: batchRecords, 
+    mappings: job.mappings,
+    targetExtIdField: job.targetExtIdField,
+    operationMode: job.operationMode,
+    batchSize: this.batchSize 
+  }];
 
-      // Wait for just this ONE batch to finish
-      const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
+     const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
 
-      // Tally up the results
-      totalSuccess += response.stats?.success || 0;
-      totalFailed += response.stats?.failed || 0;
-      if (response.failures) allFailures = allFailures.concat(response.failures);
-      if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
-    }
+  // 2. SHOW COMPLETED STATUS
+  this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
+  this.cdr.detectChanges();
+  
+  // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
+  await new Promise(resolve => setTimeout(resolve, 600));
+
+  // Tally up the results
+  totalSuccess += response.stats?.success || 0;
+  totalFailed += response.stats?.failed || 0;
+  if (response.failures) allFailures = allFailures.concat(response.failures);
+  if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+}
     // --- End Frontend Chunking ---
 
     this.completedJobsCount++;
-    this.activeJobStatus = `Completed: ${job.targetObject} ✅`;
+    this.activeJobStatus = `Completed: ${job.targetObject}`;
     this.cdr.detectChanges();
     
     // Brief visual pause before the next job starts
