@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "*.log",
+    "logs/*",
+    "*.sqlite",
+    "data/*"
+  ]
+}

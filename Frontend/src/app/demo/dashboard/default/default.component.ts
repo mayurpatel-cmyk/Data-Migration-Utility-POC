@@ -9,6 +9,7 @@ import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
+import { firstValueFrom } from 'rxjs'; // <-- Required for sequential async/await calls
 
 interface MappingMeta {
   csvField: string;
@@ -48,7 +49,7 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
   private eRef = inject(ElementRef);
-  private route = inject(ActivatedRoute); // <--- Add this
+  private route = inject(ActivatedRoute); 
   private router = inject(Router);
   private authService = inject(AuthService);
 
@@ -83,7 +84,6 @@ export class DefaultComponent implements OnInit {
   previewItemData: any[] = [];
   previewItemHeaders: string[] = [];
 
-  // Default to insert
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
   batchSize: number = 10;
@@ -95,92 +95,89 @@ export class DefaultComponent implements OnInit {
   upsertKeySearchQuery = '';
   displayName = signal('Salesforce User');
 
+  // --- NEW: Real-Time UI State Trackers ---
+  activeJobStatus: string = '';
+  completedJobsCount: number = 0;
 
-ngOnInit() {
-  // 1. Show instructions
-  setTimeout(() => {
-    this.showMigrationInstructions();
-  }, 0);
 
-  let hasInitialized = false;
-
-  // 2. Listen for Query Params
-  this.route.queryParams.subscribe(params => {
-    if (hasInitialized) return; 
-
-    const token = params['token'];
-    const instanceUrl = params['instanceUrl'];
-    const name = params['name'];
-
-    hasInitialized = true;
-
-    // THE FIX: Push ALL of this to the next JavaScript event tick.
-    // This allows Breadcrumbs to finish rendering its initial state 
-    // BEFORE we start changing the URL and loading data.
+  ngOnInit() {
     setTimeout(() => {
-      if (token && instanceUrl) {
-        console.log('OAuth Callback Detected: Saving session...');
-        
-        if (name) {
-          localStorage.setItem('sf_user_name', name);
-          this.displayName.set(name);
-        }
+      this.showMigrationInstructions();
+    }, 0);
 
-        this.authService.handleOAuthLogin(token, instanceUrl);
+    let hasInitialized = false;
 
-        // Clean the URL safely
-        this.router.navigate([], {
-          relativeTo: this.route,
-          queryParams: { token: null, instanceUrl: null, name: null },
-          queryParamsHandling: 'merge',
-          replaceUrl: true
-        }).then(() => {
-          this.toastr.success('Connection Verified!', 'Welcome');
+    this.route.queryParams.subscribe(params => {
+      if (hasInitialized) return; 
+
+      const token = params['token'];
+      const instanceUrl = params['instanceUrl'];
+      const name = params['name'];
+
+      hasInitialized = true;
+
+      setTimeout(() => {
+        if (token && instanceUrl) {
+          console.log('OAuth Callback Detected: Saving session...');
+          
+          if (name) {
+            localStorage.setItem('sf_user_name', name);
+            this.displayName.set(name);
+          }
+
+          this.authService.handleOAuthLogin(token, instanceUrl);
+
+          this.router.navigate([], {
+            relativeTo: this.route,
+            queryParams: { token: null, instanceUrl: null, name: null },
+            queryParamsHandling: 'merge',
+            replaceUrl: true
+          }).then(() => {
+            this.toastr.success('Connection Verified!', 'Welcome');
+            this.loadSalesforceObjects();
+          });
+          
+        } else if (this.authService.isLoggedIn()) {
+          const savedName = localStorage.getItem('sf_user_name');
+          if (savedName) this.displayName.set(savedName);
+          
           this.loadSalesforceObjects();
+        } else {
+          this.router.navigate(['/login']);
+        }
+      }, 0); 
+    });
+  }
+
+  private loadSalesforceObjects() {
+    this.isLoadingObjects = true;
+    this.cdr.detectChanges(); 
+
+    this.migrationService.getAllObjects().subscribe({
+      next: (objects) => {
+        this.sfObjects = objects;
+        setTimeout(() => {
+          this.isLoadingObjects = false;
+          this.cdr.detectChanges();
+        });
+      },
+      error: (err) => {
+        setTimeout(() => {
+          this.isLoadingObjects = false;
+          this.cdr.detectChanges();
         });
         
-      } else if (this.authService.isLoggedIn()) {
-        const savedName = localStorage.getItem('sf_user_name');
-        if (savedName) this.displayName.set(savedName);
-        
-        this.loadSalesforceObjects();
-      } else {
-        this.router.navigate(['/login']);
+        if (err.status === 401) {
+          this.toastr.error('Session expired. Please log in again.');
+          this.authService.logout(); 
+        } else {
+          this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
+        }
       }
-    }, 0); // <--- This 0ms timeout is the magic shield against NG0100
-  });
-}
+    });
+  }
 
-private loadSalesforceObjects() {
-  this.isLoadingObjects = true;
-  this.cdr.detectChanges(); // Ensure the spinner shows
-
-  this.migrationService.getAllObjects().subscribe({
-    next: (objects) => {
-      this.sfObjects = objects;
-      setTimeout(() => {
-        this.isLoadingObjects = false;
-        this.cdr.detectChanges();
-      });
-    },
-    error: (err) => {
-      setTimeout(() => {
-        this.isLoadingObjects = false;
-        this.cdr.detectChanges();
-      });
-      
-      if (err.status === 401) {
-        this.toastr.error('Session expired. Please log in again.');
-        this.authService.logout(); 
-      } else {
-        this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
-      }
-    }
-  });
-}
-
-
- onCRMSelect(crm: string) {
+  onCRMSelect(crm: string) {
     setTimeout(() => {
       this.currentStep = 2;
       this.autoNavigate();
@@ -359,7 +356,6 @@ private loadSalesforceObjects() {
   }
 
   getMissingRequiredFields(): string[] {
-    // If it's a delete operation, standard required fields don't apply.
     if (this.operationMode === 'delete') return [];
 
     if (!this.sfFields || this.sfFields.length === 0) return [];
@@ -406,13 +402,10 @@ private loadSalesforceObjects() {
 
   onOperationModeChange() {
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      // Look for fields marked as externalId, unique, or idLookup in Salesforce
       const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
       
-      // If there is exactly one obvious choice, auto-select it!
       if (extIds.length === 1) {
         this.selectUpsertKey(extIds[0].name);
-        //this.toastr.info(`Automatically selected "${extIds[0].label}" as the Upsert Key.`, 'Smart Select');
       }
     } else if (this.operationMode === 'delete') {
       this.targetExtIdField = '';
@@ -434,7 +427,6 @@ private loadSalesforceObjects() {
     const longerLength = longer.length;
     if (longerLength === 0) return 1.0;
     
-    // Levenshtein logic
     const costs = new Array();
     for (let i = 0; i <= longer.length; i++) {
       let lastValue = i;
@@ -462,7 +454,6 @@ private loadSalesforceObjects() {
       let matchCount = 0;
       let memoryCount = 0;
 
-      // 1. Load Past Mappings from Memory
       const savedMappingData = localStorage.getItem(`sf_map_${this.selectedObject}`);
       const pastMappings = savedMappingData ? JSON.parse(savedMappingData) : {};
 
@@ -475,18 +466,16 @@ private loadSalesforceObjects() {
           const rawCsv = mapping.csvField;
           const normalCsv = normalizeString(rawCsv);
 
-          // Strategy A: Check LocalStorage Memory First
           if (pastMappings[rawCsv]) {
             const savedSfField = this.sfFields.find(f => f.name === pastMappings[rawCsv]);
             if (savedSfField) {
               mapping.sfField = savedSfField.name;
               memoryCount++;
               this.onSfFieldChange(mapping);
-              return; // Skip to next column
+              return; 
             }
           }
 
-          // Strategy B: Exact Normal Match & Strategy C: Fuzzy Match
           let bestMatch = null;
           let highestScore = 0;
 
@@ -494,14 +483,12 @@ private loadSalesforceObjects() {
             const normalName = normalizeString(field.name);
             const normalLabel = normalizeString(field.label);
 
-            // Exact normalization match
             if (normalCsv === normalName || normalCsv === normalLabel) {
               bestMatch = field;
               highestScore = 1.0;
               break; 
             }
 
-            // Fuzzy Match (If similarity is 80% or higher)
             const labelScore = this.getSimilarity(normalCsv, normalLabel);
             const nameScore = this.getSimilarity(normalCsv, normalName);
             const bestFieldScore = Math.max(labelScore, nameScore);
@@ -520,10 +507,6 @@ private loadSalesforceObjects() {
         }
       });
 
-      // Show specific toastr notifications based on what happened
-      // if (memoryCount > 0) {
-      //   this.toastr.success(`Restored ${memoryCount} mappings from your past templates!`, 'Smart Template');
-      // }
       if (matchCount > 0) {
         this.toastr.success(`Auto-mapped ${matchCount} fields successfully.`, 'Auto-Map Complete');
       }
@@ -596,14 +579,12 @@ private loadSalesforceObjects() {
     });
   }
 
-private sortFieldsAlphabetically(fields: any[]): any[] {
+  private sortFieldsAlphabetically(fields: any[]): any[] {
     if (!Array.isArray(fields)) return [];
     return fields.sort((a, b) => {
-      // 1. Group Required fields at the very top
       if (a.isRequired && !b.isRequired) return -1;
       if (!a.isRequired && b.isRequired) return 1;
       
-      // 2. Then sort alphabetically
       const valA = (a.label || a.name || '').toLowerCase();
       const valB = (b.label || b.name || '').toLowerCase();
       return valA.localeCompare(valB);
@@ -648,17 +629,12 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
     }
   }
 
- queueAnotherObject() {
+  queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {
       this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
       return;
     }
-
-    // if (this.operationMode === 'upsert' && this.getDynamicSequenceError()) {
-    //   this.toastr.error(this.getDynamicSequenceError()!, 'Sequence Blocked');
-    //   return;
-    // }
 
     const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -666,7 +642,6 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
       return;
     }
 
-    // Validation for Operations
     const hasSfId = activeMappings.some((m) => m.sfField === 'Id');
     if (this.operationMode === 'delete' && !hasSfId) {
       this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
@@ -699,11 +674,9 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
       };
     });
 
-    // ---> NEW: Save to Memory ONLY AFTER validations pass <---
     const mapToSave: any = {};
     activeMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
     localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
-    // ---------------------------------------------------------
 
     this.migrationQueue.push({
       sheetName: this.selectedSheetName,
@@ -809,7 +782,7 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
     this.previewingItemIndex = index;
   }
 
- goToReview() {
+  goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
     
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
@@ -854,7 +827,6 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
         };
       });
 
-      // ---> NEW: Save to Memory ONLY AFTER validations pass <---
       const mapToSave: any = {};
       this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
       localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
@@ -885,11 +857,12 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
     return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
+  // --- UPGRADED: Sequential Batch Processing ---
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
     if (this.batchSize > 200) this.batchSize = 200;
-  if (this.batchSize < 10) this.batchSize = 10;
+    if (this.batchSize < 10) this.batchSize = 10;
 
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
@@ -906,8 +879,6 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
     }
 
     const estimatedBatches = Math.ceil(totalRows / this.batchSize);
-
-   // Dynamic UI Variables based on Operation Type
     const isDeleteOnly = this.isDeleteOnlyBatch;
     const hasDelete = this.hasDeleteInBatch;
 
@@ -959,7 +930,7 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
       `,
       showCancelButton: true,
       buttonsStyling: false,
-      confirmButtonText: '<i class="feather icon-zap me-1"></i> Execute Migration',
+      confirmButtonText: confirmBtnText,
       cancelButtonText: 'Review Again',
       customClass: {
         popup: 'rounded-4 shadow-lg border-0',
@@ -967,82 +938,96 @@ private sortFieldsAlphabetically(fields: any[]): any[] {
         confirmButton: confirmBtnClass,
         cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
       }
-    }).then((result) => {
-
+    }).then(async (result) => {
       if (result.isConfirmed) {
+        
         this.isMigrating = true;
+        this.completedJobsCount = 0;
+        this.activeJobStatus = `Initializing sequence for ${this.migrationQueue.length} objects...`;
         this.cdr.detectChanges();
 
-        setTimeout(() => {
-          try {
-            const jobsPayload: any[] = [];
+        let totalSuccess = 0;
+        let totalFailed = 0;
+        let allFailures: any[] = [];
+        let allSuccesses: any[] = [];
 
-            for (const job of this.migrationQueue) {
-              const worksheet = this.workbook!.Sheets[job.sheetName];
-              const rawData: any[] = utils.sheet_to_json(worksheet);
-              const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+        try {
+          // Process objects sequentially to allow real-time UI updates
+          for (let i = 0; i < this.migrationQueue.length; i++) {
+            const job = this.migrationQueue[i];
+            
+            this.activeJobStatus = `Currently Processing: ${job.targetObject}...`;
+            this.cdr.detectChanges();
 
-              if (relationalMapping) {
-                const parentCsvColumn = relationalMapping.csvField;
-                rawData.sort((a, b) => {
-                  const valA = String(a[parentCsvColumn] || '');
-                  const valB = String(b[parentCsvColumn] || '');
-                  return valA.localeCompare(valB);
-                });
-              }
+            const worksheet = this.workbook!.Sheets[job.sheetName];
+            const rawData: any[] = utils.sheet_to_json(worksheet);
+            const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
 
-              jobsPayload.push({
-                targetObject: job.targetObject,
-                records: rawData,
-                mappings: job.mappings,
-                targetExtIdField: job.targetExtIdField,
-                operationMode: job.operationMode,
-                batchSize: this.batchSize
+            if (relationalMapping) {
+              const parentCsvColumn = relationalMapping.csvField;
+              rawData.sort((a, b) => {
+                const valA = String(a[parentCsvColumn] || '');
+                const valB = String(b[parentCsvColumn] || '');
+                return valA.localeCompare(valB);
               });
             }
 
-            this.migrationService.migrateData(jobsPayload).subscribe({
-              next: (response) => {
-                this.isMigrating = false;
+            const singleJobPayload = [{
+              targetObject: job.targetObject,
+              records: rawData,
+              mappings: job.mappings,
+              targetExtIdField: job.targetExtIdField,
+              operationMode: job.operationMode,
+              batchSize: this.batchSize
+            }];
 
-                const successCount = response.stats?.success || 0;
-                const failedCount = response.stats?.failed || 0;
-                this.migrationSummary = response.stats;
-                this.failedRecords = response.failures || [];
-                this.successfulRecords = response.successfulRecords || [];
+            // Execute this single target object via firstValueFrom
+            const response: any = await firstValueFrom(this.migrationService.migrateData(singleJobPayload));
 
-                const msg = `Successfully processed ${successCount} records. Failed: ${failedCount}`;
+            totalSuccess += response.stats?.success || 0;
+            totalFailed += response.stats?.failed || 0;
+            if (response.failures) allFailures = allFailures.concat(response.failures);
+            if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
 
-                if (successCount > 0 && failedCount === 0) {
-                  this.toastr.success(msg, 'Migration Complete!');
-                } else if (successCount > 0 && failedCount > 0) {
-                  this.toastr.warning(msg, 'Partial Migration');
-                } else {
-                  this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
-                }
-
-                this.currentStep = 5;
-                this.autoNavigate();
-                this.cdr.detectChanges();
-              },
-              error: (err) => {
-                this.isMigrating = false;
-                const errMsg = err.error?.message || 'Check console for details';
-                this.toastr.error(errMsg, 'Server Error');
-                this.cdr.detectChanges();
-              }
-            });
-          } catch (error) {
-            this.isMigrating = false;
-            this.toastr.error('Failed to read data from the file.', 'Parsing Error');
+            this.completedJobsCount++;
+            this.activeJobStatus = `Completed: ${job.targetObject} ✅`;
             this.cdr.detectChanges();
+            
+            // Brief visual pause before the next job starts or UI redirects
+            await new Promise(resolve => setTimeout(resolve, 800));
           }
-        }, 10);
+
+          // All Jobs Finished
+          this.isMigrating = false;
+          this.migrationSummary = { success: totalSuccess, failed: totalFailed };
+          this.failedRecords = allFailures;
+          this.successfulRecords = allSuccesses;
+
+          const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
+
+          if (totalSuccess > 0 && totalFailed === 0) {
+            this.toastr.success(msg, 'Migration Complete!');
+          } else if (totalSuccess > 0 && totalFailed > 0) {
+            this.toastr.warning(msg, 'Partial Migration');
+          } else {
+            this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+          }
+
+          this.currentStep = 5;
+          this.autoNavigate();
+          this.cdr.detectChanges();
+
+        } catch (error: any) {
+          this.isMigrating = false;
+          const errMsg = error.error?.message || error.message || 'Check console for details';
+          this.toastr.error(errMsg, 'Server Error');
+          this.cdr.detectChanges();
+        }
       }
     });
   }
 
-showMigrationInstructions() {
+  showMigrationInstructions() {
     Swal.fire({
       title: '<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>',
       html: `
@@ -1204,13 +1189,17 @@ showMigrationInstructions() {
     this.previewData = [];
     this.previewHeaders = [];
     this.previewingItemIndex = null;
+    
+    // reset real time vars
+    this.activeJobStatus = '';
+    this.completedJobsCount = 0;
 
     this.currentStep = 2;
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
   }
 
-getDynamicSequenceWarning(): string | null {
+  getDynamicSequenceWarning(): string | null {
     if (this.operationMode !== 'upsert' || !this.selectedObject) return null;
 
     for (const mapping of this.mappings) {
@@ -1218,7 +1207,6 @@ getDynamicSequenceWarning(): string | null {
         const parentName = mapping.parentObjectName;
         const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
-        // Soft warning instead of a hard block
         if (!isParentInQueue) {
           return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in Salesforce, or add a ${parentName} sheet to your queue.`;
         }
@@ -1242,9 +1230,8 @@ getDynamicSequenceWarning(): string | null {
     return issueFound;
   }
 
-overrideGoToReview() {
+  overrideGoToReview() {
     if (this.operationMode === 'upsert') {
-      // We only block if they have multiple sheets in the WRONG order
       if (this.hasOrderingIssue()) {
         this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
         return;

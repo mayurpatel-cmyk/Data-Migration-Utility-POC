@@ -1,3 +1,4 @@
+
 const logger = require('../utils/logger')(__filename);
 const { STATE_MAP, COUNTRY_MAP, RECORD_TYPE_MAP } = require('../configs/mappings');
 
@@ -58,10 +59,9 @@ class MigrationService {
       case 'date':
       case 'datetime':
         if (typeof processedValue === 'number') {
-          // Attempt to parse as an Excel Serial Date
+
           const dateObj = new Date(Math.round((processedValue - 25569) * 86400 * 1000));
           
-          // ✅ FIX: Verify the calculated date is within valid bounds before stringifying
           if (!isNaN(dateObj.getTime())) {
             return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
           }
@@ -364,9 +364,7 @@ class MigrationService {
             totalFailed += chunk.length;
         };
 
-        // -------------------------------------------------------------
         // SCENARIO 0: PASS 3 PATCH (Cross-Object Link)
-        // -------------------------------------------------------------
         if (isPass3Patch) {
           if (!targetExtIdField) {
             logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
@@ -401,9 +399,7 @@ class MigrationService {
           continue;
         }
 
-        // -------------------------------------------------------------
         // SCENARIO 1: DELETE OPERATION (Standalone process)
-        // -------------------------------------------------------------
         if (operationMode === 'delete') {
             const deletePayload = this.buildPayload(rawJobRecords, mappings, { targetObject, operationMode });
             if (deletePayload.length === 0) continue;
@@ -440,9 +436,7 @@ class MigrationService {
         }
 
 
-        // -------------------------------------------------------------
         // SCENARIO 2: INSERT / UPDATE / UPSERT
-        // -------------------------------------------------------------
 
         // Resolve Dynamic API Call type. (e.g. Updating via ExtID is handled via SF's "upsert" call)
         let sfOperation = operationMode;
