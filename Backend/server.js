@@ -1,3 +1,4 @@
+require('dotenv').config();
 const app = require('./app');
 const logger = require('./src/utils/logger')(__filename);
 
