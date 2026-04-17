@@ -1,0 +1,31 @@
+service: datamigrate-poc-api
+
+# Add this to load the plugin
+plugins:
+  - serverless-dotenv-plugin
+
+# Tell the framework to actually use the .env variables
+useDotenv: true 
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  # You can also manually define non-sensitive variables here
+  environment:
+    NODE_ENV: production
+    PORT: 3000
+    FRONTEND_URL: http://YOUR-S3-BUCKET-NAME.s3-website-us-east-1.amazonaws.com
+
+functions:
+  api:
+    handler: lambda.handler
+    events:
+      - http:
+          path: /
+          method: ANY
+          cors: true
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors: true
