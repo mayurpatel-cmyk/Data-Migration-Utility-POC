@@ -23,6 +23,14 @@ export const NavigationItems: NavigationItem[] = [
   url: '/data-import', // This must match the path in AppRoutingModule
   icon: 'ti ti-file-upload',
   breadcrumbs: true
-}
+},
+ {
+  id: 'connection',
+  title: 'Connection',
+  type: 'item',
+  url: '/connection', // This must match the path in AppRoutingModule
+  icon: 'ti ti-file-upload',
+  breadcrumbs: true
+},
 
 ];

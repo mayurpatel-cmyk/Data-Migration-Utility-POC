@@ -3,12 +3,17 @@ import { RouterModule, Routes } from '@angular/router';
 import { AdminComponent } from './theme/layout/admin/admin.component';
 import { GuestComponent } from './theme/layout/guest/guest.component';
 import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
+import { ConnectionComponent } from './demo/dashboard/Connection/connection.component';
 
 export const routes: Routes = [
+        {
+  path: 'api-mapping', 
+  loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+},
   {
     path: '',
     component: AdminComponent,
-    canActivate: [authGuard],
+    //canActivate: [authGuard],
     children: [
       {
         // We removed the 'dashboard' nesting.
@@ -21,6 +26,10 @@ export const routes: Routes = [
         path: '',
         redirectTo: 'data-import',
         pathMatch: 'full'
+      },
+{
+        path: 'connection',
+        loadComponent: () => import('./demo/dashboard/Connection/connection.component').then(c => c.ConnectionComponent)
       }
     ]
   },
