@@ -22,57 +22,177 @@
         <label for="crmPlatform" class="form-label fw-bold"><i class="feather icon-cpu text-primary me-1"></i> Select Source Platform</label>
         <select id="crmPlatform" class="form-select border-primary-subtle" [(ngModel)]="selectedPlatform">
           <option value="" disabled selected>-- Choose a Platform --</option>
-          <option value="MSDynamics">Microsoft Dynamics 365 </option>
+          <option value="MSDynamics">Microsoft Dynamics 365</option>
           <option value="Salesforce">Salesforce</option>
           <option value="HubSpot">HubSpot</option>
+          <option value="Zoho">Zoho CRM</option>
+          <option value="Zendesk">Zendesk</option>
         </select>
       </div>
 
-      @if (selectedPlatform === 'MSDynamics') {
+      @if (selectedPlatform) {
         <div class="animate__animated animate__fadeIn">
-          <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
-            <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
-            <div class="small text-info-emphasis">
-              <strong>OAuth 2.0 Required:</strong> Microsoft requires Server-to-Server authentication. You must register an App in Microsoft Entra ID (Azure AD) to generate these credentials.
+          
+          @if (selectedPlatform === 'MSDynamics') {
+            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
+              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
+              <div class="small text-info-emphasis">
+                <strong>OAuth 2.0 Required:</strong> Microsoft requires Server-to-Server authentication. You must register an App in Microsoft Entra ID (Azure AD) to generate these credentials.
+              </div>
             </div>
-          </div>
+          }
+          @if (selectedPlatform === 'Salesforce') {
+            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
+              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
+              <div class="small text-info-emphasis">
+                <strong>Connected App Required:</strong> Create a Connected App in Salesforce to generate your Consumer Key (Client ID) and Consumer Secret (Client Secret).
+              </div>
+            </div>
+          }
+          @if (selectedPlatform === 'HubSpot') {
+            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
+              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
+              <div class="small text-info-emphasis">
+                <strong>Private App Token:</strong> HubSpot recommends using a Private App Access Token for custom integrations rather than legacy API keys.
+              </div>
+            </div>
+          }
 
           <form (ngSubmit)="testAndSaveConnection()">
-            <div class="mb-3">
-              <label class="form-label fw-bold">Environment URL</label>
-              <div class="input-group">
-                <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
-                <input type="text" class="form-control" placeholder="https://your-org.api.crm.dynamics.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
+            
+            @if (selectedPlatform === 'MSDynamics') {
+              <div class="mb-3">
+                <label class="form-label fw-bold">Environment URL</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
+                  <input type="text" class="form-control" placeholder="https://your-org.api.crm.dynamics.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
+                </div>
               </div>
-              <div class="form-text">The base URL of your Dynamics 365 environment.</div>
-            </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Directory (Tenant) ID</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-folder"></i></span>
+                  <input type="text" class="form-control" placeholder="e.g. 8a7b6c5d-4e3f-2g1h-..." [(ngModel)]="credentials.tenantId" name="tenantId" required>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Application (Client) ID</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
+                  <input type="text" class="form-control" placeholder="e.g. 1b2c3d4e-5f6g-7h8i-..." [(ngModel)]="credentials.clientId" name="clientId" required>
+                </div>
+              </div>
+              <div class="mb-4">
+                <label class="form-label fw-bold">Client Secret</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
+                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter your Client Secret value" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
+                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
+                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
+                  </button>
+                </div>
+              </div>
+            }
 
-            <div class="mb-3">
-              <label class="form-label fw-bold">Directory (Tenant) ID</label>
-              <div class="input-group">
-                <span class="input-group-text bg-light"><i class="feather icon-folder"></i></span>
-                <input type="text" class="form-control" placeholder="e.g. 8a7b6c5d-4e3f-2g1h-..." [(ngModel)]="credentials.tenantId" name="tenantId" required>
+            @if (selectedPlatform === 'Salesforce') {
+              <div class="mb-3">
+                <label class="form-label fw-bold">Instance URL</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
+                  <input type="text" class="form-control" placeholder="https://your-domain.my.salesforce.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
+                </div>
               </div>
-            </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Consumer Key (Client ID)</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
+                  <input type="text" class="form-control" placeholder="Enter Consumer Key" [(ngModel)]="credentials.clientId" name="clientId" required>
+                </div>
+              </div>
+              <div class="mb-4">
+                <label class="form-label fw-bold">Consumer Secret (Client Secret)</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
+                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Consumer Secret" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
+                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
+                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
+                  </button>
+                </div>
+              </div>
+            }
 
-            <div class="mb-3">
-              <label class="form-label fw-bold">Application (Client) ID</label>
-              <div class="input-group">
-                <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
-                <input type="text" class="form-control" placeholder="e.g. 1b2c3d4e-5f6g-7h8i-..." [(ngModel)]="credentials.clientId" name="clientId" required>
+            @if (selectedPlatform === 'HubSpot') {
+              <div class="mb-4">
+                <label class="form-label fw-bold">Private App Access Token</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-key"></i></span>
+                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="pat-na1-..." [(ngModel)]="credentials.accessToken" name="accessToken" required>
+                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
+                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
+                  </button>
+                </div>
               </div>
-            </div>
+            }
 
-            <div class="mb-4">
-              <label class="form-label fw-bold">Client Secret</label>
-              <div class="input-group">
-                <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
-                <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter your Client Secret value" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
-                <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                  <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                </button>
+            @if (selectedPlatform === 'Zoho') {
+              <div class="mb-3">
+                <label class="form-label fw-bold">Data Center Domain</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-globe"></i></span>
+                  <select class="form-select" [(ngModel)]="credentials.envUrl" name="envUrl" required>
+                    <option value="" disabled selected>Select your region</option>
+                    <option value="zoho.com">zoho.com (US)</option>
+                    <option value="zoho.eu">zoho.eu (Europe)</option>
+                    <option value="zoho.in">zoho.in (India)</option>
+                    <option value="zoho.com.au">zoho.com.au (Australia)</option>
+                  </select>
+                </div>
               </div>
-            </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Client ID</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
+                  <input type="text" class="form-control" placeholder="Enter Client ID" [(ngModel)]="credentials.clientId" name="clientId" required>
+                </div>
+              </div>
+              <div class="mb-4">
+                <label class="form-label fw-bold">Client Secret</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
+                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Client Secret" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
+                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
+                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
+                  </button>
+                </div>
+              </div>
+            }
+
+            @if (selectedPlatform === 'Zendesk') {
+              <div class="mb-3">
+                <label class="form-label fw-bold">Zendesk Subdomain</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
+                  <input type="text" class="form-control" placeholder="https://your-subdomain.zendesk.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Admin Email Address</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-mail"></i></span>
+                  <input type="email" class="form-control" placeholder="admin@yourcompany.com" [(ngModel)]="credentials.username" name="username" required>
+                </div>
+              </div>
+              <div class="mb-4">
+                <label class="form-label fw-bold">API Token</label>
+                <div class="input-group">
+                  <span class="input-group-text bg-light"><i class="feather icon-key"></i></span>
+                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Zendesk API Token" [(ngModel)]="credentials.accessToken" name="accessToken" required>
+                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
+                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
+                  </button>
+                </div>
+              </div>
+            }
 
             <div class="d-flex justify-content-end gap-3 pt-3 border-top">
               <button type="button" class="btn btn-outline-secondary" (click)="resetForm()">Cancel</button>
@@ -97,13 +217,6 @@
               {{ testMessage }}
             </div>
           }
-        </div>
-      }
-
-      @if (selectedPlatform && selectedPlatform !== 'MSDynamics') {
-        <div class="text-center p-5 border rounded bg-light border-dashed">
-          <i class="feather icon-settings text-muted opacity-50" style="font-size: 3rem;"></i>
-          <h5 class="mt-3 text-muted fw-normal">Settings for {{ selectedPlatform }} are coming soon.</h5>
         </div>
       }
 

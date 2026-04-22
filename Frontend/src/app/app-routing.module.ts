@@ -6,14 +6,14 @@ import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
 import { ConnectionComponent } from './demo/dashboard/Connection/connection.component';
 
 export const routes: Routes = [
-        {
-  path: 'api-mapping', 
-  loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
-},
+//         {
+//   path: 'api-mapping', 
+//   loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+// },
   {
     path: '',
     component: AdminComponent,
-    //canActivate: [authGuard],
+    canActivate: [authGuard],
     children: [
       {
         // We removed the 'dashboard' nesting.
@@ -26,6 +26,11 @@ export const routes: Routes = [
         path: '',
         redirectTo: 'data-import',
         pathMatch: 'full'
+      },
+{
+        path: 'data-validation',
+        // Make sure this path exactly matches where you saved the validation component
+        loadComponent: () => import('./demo/dashboard/DataValidation/data-validation.component').then(c => c.DataValidationComponent)
       },
 {
         path: 'connection',

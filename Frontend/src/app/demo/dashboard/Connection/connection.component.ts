@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router'; // 1. IMPORT ROUTER
+import { Router } from '@angular/router';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
 
@@ -19,15 +19,16 @@ export class ConnectionComponent {
   connectionSuccessful = false;
   testMessage = '';
 
-  // Object to hold Dynamics API inputs
+  // Expanded object to hold API inputs for various platforms
   credentials = {
-    envUrl: '',
-    tenantId: '',
-    clientId: '',
-    clientSecret: ''
+    envUrl: '',       // Used for Dynamics Env, Salesforce Instance, Zoho Domain, Zendesk Subdomain
+    tenantId: '',     // Used for Dynamics
+    clientId: '',     // Used for Dynamics, Salesforce, Zoho
+    clientSecret: '', // Used for Dynamics, Salesforce, Zoho
+    accessToken: '',  // Used for HubSpot PAT, Zendesk API Token
+    username: ''      // Used for Zendesk Email
   };
 
-  // 2. INJECT ROUTER INTO THE CONSTRUCTOR
   constructor(private router: Router) {}
 
   testConnection() {
@@ -35,24 +36,25 @@ export class ConnectionComponent {
     this.testMessage = '';
     this.connectionSuccessful = false;
 
-    // TODO: Call your actual backend service here. 
+    // TODO: Call your actual backend service here. Depending on the `selectedPlatform`, 
+    // you will pass different properties from the `credentials` object.
     setTimeout(() => {
       // Mocking a successful response after 1.5 seconds
       this.isTesting = false;
       this.connectionSuccessful = true;
-      this.testMessage = 'Connection successful! Your API keys are valid.';
+      this.testMessage = `Connection to ${this.selectedPlatform} successful! Your API keys are valid.`;
     }, 1500);
   }
 
   testAndSaveConnection() {
-    this.router.navigate(['/api-mapping']); 
     if (this.connectionSuccessful) {
       // TODO: Save to database or state management
-      console.log('Saving credentials payload: ', this.credentials);
+      console.log(`Saving ${this.selectedPlatform} credentials payload: `, this.credentials);
       
-      // 3. NAVIGATE TO THE MAPPING COMPONENT
-      // Ensure this path exactly matches the path in your routing module
+      // NAVIGATE TO THE MAPPING COMPONENT
       this.router.navigate(['/api-mapping']); 
+    } else {
+      this.testMessage = 'Please test the connection successfully before saving.';
     }
   }
 
@@ -60,6 +62,16 @@ export class ConnectionComponent {
     this.selectedPlatform = '';
     this.connectionSuccessful = false;
     this.testMessage = '';
-    this.credentials = { envUrl: '', tenantId: '', clientId: '', clientSecret: '' };
+    this.showPassword = false;
+    
+    // Reset all potential credential fields
+    this.credentials = { 
+      envUrl: '', 
+      tenantId: '', 
+      clientId: '', 
+      clientSecret: '',
+      accessToken: '',
+      username: ''
+    };
   }
 }

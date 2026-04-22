@@ -6,6 +6,7 @@ const cors = require('cors');
 const authRoutes = require('./src/routes/auth.routes');
 const sfRoutes = require('./src/routes/sfRoutes');
 const migrateRoutes = require('./src/routes/migration.routes');
+const validationRoutes = require('./src/routes/validation.routes');
 
 
 const app = express();
@@ -30,6 +31,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/sf',sfRoutes );
 app.use('/api/migrate-data',migrateRoutes );
+app.use('/api/validate-data', validationRoutes);
 
 
 // Export the app

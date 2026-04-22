@@ -1,0 +1,185 @@
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 1: Upload & Build Validation Queue">
+      
+      <div class="row g-4 mb-4">
+        <div class="col-md-6">
+          <label class="form-label fw-bold">1. Upload Raw Data (.csv, .xlsx)</label>
+          <input type="file" class="form-control border-primary" accept=".csv, .xlsx" (change)="onFileSelected($event)">
+          
+          @if (availableSheets.length > 1) {
+            <select class="form-select mt-2" [(ngModel)]="selectedSheetName" (ngModelChange)="onSheetSelect($event)">
+              @for (sheet of availableSheets; track sheet) {
+                <option [value]="sheet">Sheet: {{ sheet }}</option>
+              }
+            </select>
+          }
+        </div>
+        
+        <div class="col-md-6">
+          <label class="form-label fw-bold">2. Target Salesforce Object</label>
+          <select class="form-select" [(ngModel)]="selectedObject" (ngModelChange)="onObjectChange()" [disabled]="!selectedFile">
+            <option value="" disabled selected>-- Select Object --</option>
+            @for (obj of sfObjects; track obj.name) {
+              <option [value]="obj.name">{{ obj.label }}</option>
+            }
+          </select>
+        </div>
+      </div>
+
+      @if (selectedObject && csvHeaders.length > 0) {
+      <div class="bg-light p-3 rounded border mb-4 border-primary-subtle shadow-sm">
+        <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Map Rules for {{ selectedObject }}</h6>
+        
+        <div class="mb-3 w-50">
+          <label class="fw-bold text-muted small"><i class="feather icon-key text-primary"></i> Remove Duplicates Based On:</label>
+          <select class="form-select form-select-sm border-primary" [(ngModel)]="dedupeKey">
+            <option value="">-- No Duplicate Check --</option>
+            @for (header of csvHeaders; track header) {
+              <option [value]="header">{{ header }}</option>
+            }
+          </select>
+        </div>
+
+        <div style="max-height: 250px; overflow-y: auto;" class="border rounded shadow-sm">
+          <table class="table table-sm table-bordered bg-white mb-0 align-middle">
+            <thead class="table-light text-muted small position-sticky top-0">
+              <tr>
+                <th width="50%">CSV Header</th>
+                <th width="50%">Salesforce Data Type Rule</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (mapping of mappings; track mapping.csvField) {
+              <tr>
+                <td class="fw-bold text-dark ps-2">{{ mapping.csvField }}</td>
+                <td class="p-1">
+                  <select class="form-select form-select-sm border-0" [ngModel]="mapping.sfField" (ngModelChange)="updateFieldType(mapping, $event)">
+                    <option value="">-- Ignore --</option>
+                    @for (field of sfFields; track field.name) {
+                      <option [value]="field.name">{{ field.label }} ({{ field.type }})</option>
+                    }
+                  </select>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div class="text-end mt-3">
+          <button class="btn btn-outline-primary d-flex align-items-center gap-2 ms-auto bg-white shadow-sm" (click)="addToQueue()">
+            <i class="feather icon-plus"></i> Add to Validation Queue
+          </button>
+        </div>
+      </div>
+      }
+
+      @if (validationQueue.length > 0) {
+      <div class="mt-4 pt-3 border-top">
+        <h6 class="fw-bold text-secondary mb-3"><i class="feather icon-layers"></i> Validation Queue ({{ validationQueue.length }})</h6>
+        <div class="table-responsive border rounded shadow-sm mb-3">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Source Sheet</th>
+                <th>Target Object</th>
+                <th>Mapped Fields</th>
+                <th>Status</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (job of validationQueue; track $index) {
+              <tr>
+                <td class="fw-bold text-muted"><i class="feather icon-file-text me-1"></i> {{ job.sheetName }}</td>
+                <td><span class="badge bg-primary-subtle text-primary border border-primary-subtle py-1 px-2">{{ job.targetObject }}</span></td>
+                <td class="small">{{ job.mappings.length }} mapped</td>
+                <td>
+                  @if (job.status === 'pending') { <span class="badge bg-secondary">Pending</span> }
+                  @if (job.status === 'validating') { <span class="badge bg-info text-dark"><span class="spinner-border spinner-border-sm me-1" style="width: 10px; height: 10px;"></span> Running...</span> }
+                  @if (job.status === 'done') { <span class="badge bg-success"><i class="feather icon-check"></i> Done</span> }
+                </td>
+                <td class="text-end">
+                  <button class="btn btn-sm btn-outline-danger" (click)="removeFromQueue($index)" [disabled]="isValidating"><i class="feather icon-trash-2"></i></button>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div class="text-end">
+          <button class="btn btn-primary btn-lg shadow d-flex align-items-center gap-2 ms-auto" [disabled]="isValidating" (click)="runValidationQueue()">
+            @if (isValidating) {
+              <span class="spinner-border spinner-border-sm"></span> Processing Batch...
+            } @else {
+              <i class="feather icon-zap"></i> Run Batch Validation
+            }
+          </button>
+        </div>
+      </div>
+      }
+
+    </app-card>
+  </div>
+</div>
+
+@if (currentStep === 2 && validationQueue.length > 0) {
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 2: Batch Validation Results">
+      
+      <div class="row text-center mb-4 g-3">
+        <div class="col-md-3">
+          <div class="p-3 border rounded bg-light">
+            <h6 class="text-muted small fw-bold">Total Processed</h6>
+            <h3 class="text-dark mb-0">{{ aggregateStats.total }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-success-subtle bg-success-subtle rounded">
+            <h6 class="text-success-emphasis small fw-bold">Ready to Migrate</h6>
+            <h3 class="text-success mb-0">{{ aggregateStats.valid }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-danger-subtle bg-danger-subtle rounded">
+            <h6 class="text-danger-emphasis small fw-bold">Failed Rules</h6>
+            <h3 class="text-danger mb-0">{{ aggregateStats.invalid }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-warning-subtle bg-warning-subtle rounded">
+            <h6 class="text-warning-emphasis small fw-bold">Duplicates Removed</h6>
+            <h3 class="text-warning mb-0">{{ aggregateStats.duplicates }}</h3>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex flex-wrap justify-content-between align-items-center mt-4 border-top pt-3 gap-3">
+        <div class="d-flex gap-2">
+          @if (aggregateStats.invalid > 0) {
+            <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
+              <i class="feather icon-download"></i> Merged Error Log
+            </button>
+          }
+          
+          @if (aggregateStats.valid > 0) {
+            <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2" (click)="downloadCleanData()">
+              <i class="feather icon-download-cloud"></i> Multi-Sheet Clean Data
+            </button>
+          }
+        </div>
+
+        @if (aggregateStats.valid > 0) {
+          <button class="btn btn-primary shadow-lg d-flex align-items-center gap-2 fw-bold px-4" (click)="routeToMigration()">
+            <i class="feather icon-zap"></i> Push Queue to Migration Engine <i class="feather icon-arrow-right"></i>
+          </button>
+        }
+      </div>
+
+    </app-card>
+  </div>
+</div>
+}
