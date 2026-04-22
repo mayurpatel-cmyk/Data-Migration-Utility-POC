@@ -1,59 +1,63 @@
-const validationService = require('../services/ValidationService'); // Adjust path if needed
 const logger = require('../utils/logger')(__filename);
 
 exports.validateData = async (req, res) => {
   const email = req.headers['user-email'];
-  const { records, mappings, dedupeKey } = req.body;
+  const targetObject = req.body.targetObject; // Grab the object name
 
   try {
-    // Basic payload checks
-    if (!Array.isArray(records) || records.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid payload: No records provided for validation."
-      });
+    logger.info(`Sending ${req.body.records.length} records to Python Data Engine...`);
+
+    // 1. DYNAMIC DESCRIBE API FETCH
+    let sfRules = {};
+    if (targetObject && req.sfConn) {
+      try {
+        const describeMeta = await req.sfConn.sobject(targetObject).describe();
+        
+        // Compress the massive Describe payload into a lightweight dictionary
+        describeMeta.fields.forEach(field => {
+          sfRules[field.name] = {
+            type: field.type,
+            length: field.length, // Dynamic string truncation
+            // Check if it's universally required in SF
+            required: !field.nillable && !field.defaultedOnCreate && field.createable,
+            unique: field.unique,
+            externalId: field.externalId,
+            // Grab active picklist values (lowercase for easy matching)
+            picklistValues: field.picklistValues 
+              ? field.picklistValues.filter(p => p.active).map(p => p.value.toLowerCase()) 
+              : []
+          };
+        });
+      } catch (describeErr) {
+        logger.warn(`Could not fetch Describe API for ${targetObject}. Proceeding with default Python rules.`);
+      }
     }
 
-    if (!Array.isArray(mappings) || mappings.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid payload: No mappings provided for validation."
-      });
-    }
+    // 2. Attach the SF rules to the payload for Python
+    req.body.sfRules = sfRules;
 
-    logger.info(`Data Validation Batch started`, {
-      userEmail: email,
-      recordCount: records.length
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+    const response = await fetch('http://localhost:8000/api/python/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: controller.signal
     });
 
-    // Execute the validation (Runs synchronously as it doesn't need to hit SF API)
-    const result = validationService.validateBatch(records, mappings, dedupeKey);
+    clearTimeout(timeoutId); 
 
-    logger.info(`Validation batch completed`, {
-      valid: result.stats.valid,
-      invalid: result.stats.invalid,
-      duplicates: result.stats.duplicates
-    });
+    if (!response.ok) throw new Error(`Python service status: ${response.status}`);
+    const pythonData = await response.json();
 
-    // Return the formatted response matching the frontend expectations
-    res.json({
-      success: true,
-      message: `Validation finished!`,
-      stats: result.stats,
-      validRecords: result.validRecords,
-      invalidRecords: result.invalidRecords
-    });
+    res.json({ success: true, message: `Validation finished!`, ...pythonData });
 
   } catch (error) {
-    logger.error('Validation Controller Error', {
-      error: error.message,
-      userEmail: email,
-      stack: error.stack
-    });
-
-    res.status(500).json({
-      success: false,
-      message: error.message || "Internal Server Error during validation"
-    });
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ success: false, message: "Python Engine Timed Out." });
+    }
+    logger.error('Python Validation Gateway Error', { error: error.message });
+    res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };

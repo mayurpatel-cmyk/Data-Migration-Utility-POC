@@ -144,23 +144,29 @@ export class DataValidationComponent implements OnInit {
     this.validationQueue.splice(index, 1);
   }
 
-  async runValidationQueue() {
+async runValidationQueue() {
     if (this.validationQueue.length === 0) return;
 
     this.isValidating = true;
     this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
     
-    try {
-      for (const job of this.validationQueue) {
-        job.status = 'validating';
-        this.cdr.detectChanges();
+    // We want to track if the whole queue finishes successfully
+    let queueHasErrors = false;
 
-        const payload = {
-          records: job.rawData,
-          mappings: job.mappings,
-          dedupeKey: job.dedupeKey
-        };
+    for (const job of this.validationQueue) {
+      job.status = 'validating';
+      this.cdr.detectChanges();
 
+      const payload = {
+        targetObject: job.targetObject,
+        records: job.rawData,
+        mappings: job.mappings,
+        dedupeKey: job.dedupeKey,
+        validCountries: { "united states": "US", "canada": "CA" }, 
+        validStates: { "california": "CA", "new york": "NY" }
+      };
+
+      try {
         const res = await firstValueFrom(this.validationApi.validateData(payload));
         
         job.results = res;
@@ -170,16 +176,39 @@ export class DataValidationComponent implements OnInit {
         this.aggregateStats.valid += res.stats.valid || 0;
         this.aggregateStats.invalid += res.stats.invalid || 0;
         this.aggregateStats.duplicates += res.stats.duplicates || 0;
-      }
 
-      this.currentStep = 2;
-      this.toastr.success(`Queue Validation Complete!`, 'Done');
-    } catch (error) {
-      this.toastr.error('A server error occurred during batch validation.', 'Error');
-    } finally {
-      this.isValidating = false;
+      } catch (error: any) {
+        job.status = 'error';
+        queueHasErrors = true;
+
+        if (error.name === 'TimeoutError') {
+          this.toastr.error(`Batch for ${job.targetObject} timed out (exceeded 2 minutes). The file is too large.`, 'Timeout Warning');
+        } else if (error.status === 504) {
+          this.toastr.error(`The Data Engine timed out processing ${job.targetObject}. Try splitting the file.`, 'Server Timeout');
+        } else if (error.error && error.error.message) {
+           // Display specific error message sent from Node.js
+          this.toastr.error(error.error.message, `Error: ${job.targetObject}`);
+        } else {
+          this.toastr.error(`An unexpected error occurred while validating ${job.targetObject}.`, 'Validation Failed');
+        }
+      }
+      
       this.cdr.detectChanges();
     }
+
+    this.isValidating = false;
+    
+    // Only proceed to Step 2 if at least some data was processed without timing out completely
+    if (!queueHasErrors || this.aggregateStats.total > 0) {
+       this.currentStep = 2;
+       if (queueHasErrors) {
+         this.toastr.warning(`Queue finished, but some objects failed or timed out.`, 'Partial Completion');
+       } else {
+         this.toastr.success(`Queue Validation Complete!`, 'Done');
+       }
+    }
+    
+    this.cdr.detectChanges();
   }
 
   downloadCleanData() {
