@@ -2,7 +2,7 @@
 import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { read, utils, WorkBook } from 'xlsx';
+import { read, utils, WorkBook ,write } from 'xlsx';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
@@ -10,6 +10,7 @@ import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs'; // <-- Required for sequential async/await calls
+import { DataTransferService } from 'src/app/services/data-transfer.service';
 
 interface MappingMeta {
   csvField: string;
@@ -52,6 +53,8 @@ export class DefaultComponent implements OnInit {
   private route = inject(ActivatedRoute); 
   private router = inject(Router);
   private authService = inject(AuthService);
+  private dataTransfer = inject(DataTransferService);
+
 
   migrationQueue: JobQueueItem[] = [];
 
@@ -100,11 +103,61 @@ export class DefaultComponent implements OnInit {
   completedJobsCount: number = 0;
 
 
-  ngOnInit() {
-    setTimeout(() => {
-      this.showMigrationInstructions();
-    }, 0);
+ngOnInit() {
+    const transferred = this.dataTransfer.getValidatedData(); 
+  
+    // Check if we have an array of jobs transferred from Validation
+    if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
+       console.log("📥 Received Clean Data from Validation:", transferred.data);
+       
+       const newWorkbook = utils.book_new();
+       this.availableSheets = [];
 
+       // Loop through the Validation Jobs and create a multi-sheet Excel file
+       transferred.data.forEach((job: any, index: number) => {
+          const sheetName = (job.sheetName || `Sheet${index+1}`).substring(0, 31);
+          const worksheet = utils.json_to_sheet(job.results.validRecords);
+          
+          utils.book_append_sheet(newWorkbook, worksheet, sheetName);
+          this.availableSheets.push(sheetName);
+       });
+       
+       // Bind the new workbook and file to the UI
+       this.workbook = newWorkbook;
+       this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+       // Select the first sheet by default
+       this.selectedSheetName = this.availableSheets[0];
+       const firstJob = transferred.data[0];
+       
+       if (firstJob.results.validRecords.length > 0) {
+           this.csvHeaders = Object.keys(firstJob.results.validRecords[0]);
+           
+           // ✨ MAGIC: Pre-fill the mappings you already made in the Validation tab!
+           this.mappings = firstJob.mappings;
+           this.targetExtIdField = firstJob.dedupeKey || '';
+       }
+
+       // Auto-select the Salesforce Object
+       if (transferred.data.length === 1 && firstJob.targetObject) {
+           this.selectedObject = firstJob.targetObject;
+           this.onObjectChangeInMapping(this.selectedObject); // Fetches SF fields instantly
+       }
+
+       this.toastr.success('Cleaned data imported. Please review your field mappings.', 'Success');
+       
+       // 🎯 Drop them exactly on the MAPPING screen (Visually Step 2 of 4)
+       this.currentStep = 3; 
+       this.cdr.detectChanges();
+
+    } else {
+       // Only show pop-up instructions if arriving manually
+       setTimeout(() => {
+         this.showMigrationInstructions();
+       }, 0);
+    }
+
+    // --- OAUTH LOGIC ALWAYS RUNS ---
     let hasInitialized = false;
 
     this.route.queryParams.subscribe(params => {
