@@ -384,7 +384,18 @@
         <div class="text-muted small fw-bold">
           Mapped: <span class="text-primary">{{ getConfirmedCount(mappings) }} / {{ mappings.length }}</span> columns
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex flex-wrap gap-2">
+          
+          <!-- <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2 shadow-sm"
+                  (click)="loadMappingTemplate()" [disabled]="isLoadingFields">
+            <i class="feather icon-download"></i> Load Template
+          </button>
+          
+          <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
+                  (click)="saveMappingTemplate()" [disabled]="getConfirmedCount(mappings) === 0">
+            <i class="feather icon-save"></i> Save Template
+          </button> -->
+
           @if (getConfirmedCount(mappings) > 0) {
             <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
                     (click)="clearAllMappings()">
@@ -635,20 +646,38 @@
                 <td class="text-muted">
                   <strong class="text-dark">{{ getConfirmedCount(item.mappings) }}</strong> fields mapped
                 </td>
-                <td>
-                  <div class="d-flex justify-content-end gap-2">
-                    <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-1"
+                 <td>
+                  <div class="d-flex justify-content-end align-items-center gap-2">
+                    
+                    <div class="btn-group shadow-sm me-2">
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2" 
+                              (click)="moveQueueItemUp($index)" 
+                              [disabled]="$index === 0" 
+                              title="Move Up in Queue">
+                        <i class="feather icon-chevron-up text-dark fw-bold"></i><span class="ms-1 d-inline-block" style="line-height: 1;">&#8593;</span>
+                      </button>
+                      
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2" 
+                              (click)="moveQueueItemDown($index)" 
+                              [disabled]="$index === migrationQueue.length - 1" 
+                              title="Move Down in Queue">
+                        <i class="feather icon-chevron-down text-dark fw-bold"></i><span class="ms-1 d-inline-block" style="line-height: 1;">&#8595;</span>
+                      </button>
+                    </div>
+
+                    <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-1 shadow-sm"
                       (click)="previewQueuedItem($index)" title="Preview Data">
                       <i class="feather icon-eye"></i> Preview
                     </button>
-                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1"
+                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1 shadow-sm"
                       (click)="editQueuedItem($index)" title="Edit this mapping">
                       <i class="feather icon-edit-2"></i> Edit
                     </button>
-                    <button class="btn btn-sm btn-outline-danger" (click)="removeFromQueue($index)"
+                    <button class="btn btn-sm btn-outline-danger shadow-sm" (click)="removeFromQueue($index)"
                       title="Remove from queue">
                       <i class="feather icon-trash-2"></i>
                     </button>
+
                   </div>
                 </td>
               </tr>

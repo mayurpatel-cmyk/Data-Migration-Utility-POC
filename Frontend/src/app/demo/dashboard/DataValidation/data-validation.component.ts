@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook, write } from 'xlsx';
@@ -6,6 +6,7 @@ import { CardComponent } from 'src/app/theme/shared/components/card/card.compone
 import { ToastrService } from 'ngx-toastr';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import Swal from 'sweetalert2';
 
 import { ValidationApiService } from 'src/app/services/validation-api.service';
 import { MigrationService } from 'src/app/services/migration.service';
@@ -49,7 +50,13 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
-  mappings: { csvField: string, sfField: string, type: string }[] = [];
+  
+  // Updated Mapping Interface to handle Dropdown UI state
+  mappings: { csvField: string, sfField: string, type: string, isDropdownOpen?: boolean, searchQuery?: string }[] = [];
+
+  // Dropdown UI Trackers
+  isObjectDropdownOpen = false;
+  objectSearchQuery = '';
 
   // Queue State
   validationQueue: ValidationJob[] = [];
@@ -63,6 +70,70 @@ export class DataValidationComponent implements OnInit {
     });
   }
 
+  // --- DROPDOWN UI LOGIC ---
+  @HostListener('document:click', ['$event'])
+  clickout(event: Event) {
+      this.closeAllDropdowns();
+  }
+
+  closeAllDropdowns() {
+    this.isObjectDropdownOpen = false;
+    this.mappings.forEach(m => m.isDropdownOpen = false);
+  }
+
+  toggleObjectDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isObjectDropdownOpen;
+    this.closeAllDropdowns();
+    this.isObjectDropdownOpen = !wasOpen;
+    if (this.isObjectDropdownOpen) this.objectSearchQuery = '';
+  }
+
+  toggleDropdown(mapping: any, event: Event) {
+    event.stopPropagation();
+    const wasOpen = mapping.isDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isDropdownOpen = !wasOpen;
+    if (mapping.isDropdownOpen) mapping.searchQuery = '';
+  }
+
+  getSfObjectLabel(objName: string): string {
+    if (!objName) return '';
+    const obj = this.sfObjects.find((o) => o.name === objName);
+    return obj ? `${obj.label} (${obj.name})` : objName;
+  }
+
+  getFilteredSfObjects(): any[] {
+    if (!this.objectSearchQuery) return this.sfObjects;
+    const lowerQuery = this.objectSearchQuery.toLowerCase();
+    return this.sfObjects.filter((o) => o.label?.toLowerCase().includes(lowerQuery) || o.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  getSfFieldLabel(fieldName: string): string {
+    if (!fieldName) return '';
+    const field = this.sfFields.find((f) => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  getFilteredSfFields(query?: string): any[] {
+    if (!query) return this.sfFields;
+    const lowerQuery = query.toLowerCase();
+    return this.sfFields.filter((f) => f.label?.toLowerCase().includes(lowerQuery) || f.name?.toLowerCase().includes(lowerQuery));
+  }
+
+  selectTargetObject(objName: string) {
+    this.selectedObject = objName;
+    this.isObjectDropdownOpen = false;
+    this.onObjectChange();
+  }
+
+  selectField(mapping: any, fieldName: string) {
+    mapping.sfField = fieldName;
+    mapping.isDropdownOpen = false;
+    this.updateFieldType(mapping, fieldName);
+  }
+
+  // --- DATA LOADING LOGIC ---
   onFileSelected(event: any) {
     const file = event.target.files[0];
     if (!file) return;
@@ -87,6 +158,8 @@ export class DataValidationComponent implements OnInit {
     this.rawData = utils.sheet_to_json(worksheet);
     if (this.rawData.length > 0) {
       this.csvHeaders = Object.keys(this.rawData[0]);
+      // Reset mappings if sheet changes
+      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
     }
     this.cdr.detectChanges(); 
   }
@@ -101,13 +174,123 @@ export class DataValidationComponent implements OnInit {
   }
 
   updateFieldType(mapping: any, sfFieldName: string) {
+    if (!sfFieldName) {
+      mapping.type = 'string';
+      return;
+    }
     const fieldMeta = this.sfFields.find(f => f.name === sfFieldName);
     if (fieldMeta) {
-      mapping.sfField = fieldMeta.name;
       mapping.type = fieldMeta.type;
     }
   }
 
+  // --- AUTO-MAP LOGIC ---
+  getConfirmedCount(): number {
+    return this.mappings.filter((m) => m.sfField && m.sfField !== '').length;
+  }
+
+  private getSimilarity(s1: string, s2: string): number {
+    let longer = s1; let shorter = s2;
+    if (s1.length < s2.length) { longer = s2; shorter = s1; }
+    const longerLength = longer.length;
+    if (longerLength === 0) return 1.0;
+    
+    const costs = new Array();
+    for (let i = 0; i <= longer.length; i++) {
+      let lastValue = i;
+      for (let j = 0; j <= shorter.length; j++) {
+        if (i == 0) costs[j] = j;
+        else {
+          if (j > 0) {
+            let newValue = costs[j - 1];
+            if (longer.charAt(i - 1) != shorter.charAt(j - 1))
+              newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+            costs[j - 1] = lastValue;
+            lastValue = newValue;
+          }
+        }
+      }
+      if (i > 0) costs[shorter.length] = lastValue;
+    }
+    return (longerLength - costs[shorter.length]) / parseFloat(longerLength.toString());
+  }
+
+  autoMapFields() {
+    if (!this.sfFields || this.sfFields.length === 0) return;
+
+    setTimeout(() => {
+      let matchCount = 0;
+
+      const normalizeString = (str: string) => {
+        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
+      };
+
+      this.mappings.forEach(mapping => {
+        if (!mapping.sfField) {
+          const rawCsv = mapping.csvField;
+          const normalCsv = normalizeString(rawCsv);
+
+          let bestMatch = null;
+          let highestScore = 0;
+
+          for (const field of this.sfFields) {
+            const normalName = normalizeString(field.name);
+            const normalLabel = normalizeString(field.label);
+
+            if (normalCsv === normalName || normalCsv === normalLabel) {
+              bestMatch = field;
+              highestScore = 1.0;
+              break; 
+            }
+
+            const labelScore = this.getSimilarity(normalCsv, normalLabel);
+            const nameScore = this.getSimilarity(normalCsv, normalName);
+            const bestFieldScore = Math.max(labelScore, nameScore);
+
+            if (bestFieldScore >= 0.8 && bestFieldScore > highestScore) {
+              highestScore = bestFieldScore;
+              bestMatch = field;
+            }
+          }
+
+          if (bestMatch) {
+            this.selectField(mapping, bestMatch.name);
+            matchCount++;
+          }
+        }
+      });
+
+      if (matchCount > 0) {
+        this.toastr.success(`Auto-mapped ${matchCount} fields successfully.`, 'Auto-Map Complete');
+      } else {
+        this.toastr.info(`Could not find any clear auto-map matches.`, 'No Matches');
+      }
+
+      this.cdr.detectChanges();
+    });
+  }
+
+  clearAllMappings() {
+    Swal.fire({
+      title: 'Are you sure?',
+      text: "You will lose all your currently mapped fields!",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc3545',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, clear them!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.mappings.forEach(m => {
+          m.sfField = '';
+        });
+        this.toastr.info('All mappings have been reset.', 'Cleared');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // --- QUEUE LOGIC ---
   addToQueue() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -121,12 +304,19 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
+    // Clean up mapping objects before passing them to the validation engine
+    const cleanMappings = activeMappings.map(m => ({
+      csvField: m.csvField,
+      sfField: m.sfField,
+      type: m.type
+    }));
+
     this.validationQueue.push({
       sheetName: this.selectedSheetName,
       targetObject: this.selectedObject,
       rawData: [...this.rawData],
       csvHeaders: [...this.csvHeaders],
-      mappings: activeMappings,
+      mappings: cleanMappings,
       dedupeKey: this.dedupeKey,
       status: 'pending'
     });
@@ -144,13 +334,13 @@ export class DataValidationComponent implements OnInit {
     this.validationQueue.splice(index, 1);
   }
 
-async runValidationQueue() {
+  async runValidationQueue() {
+    // ... KEEP YOUR EXACT EXISTING API CALL LOGIC ...
     if (this.validationQueue.length === 0) return;
 
     this.isValidating = true;
     this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
     
-    // We want to track if the whole queue finishes successfully
     let queueHasErrors = false;
 
     for (const job of this.validationQueue) {
@@ -186,7 +376,6 @@ async runValidationQueue() {
         } else if (error.status === 504) {
           this.toastr.error(`The Data Engine timed out processing ${job.targetObject}. Try splitting the file.`, 'Server Timeout');
         } else if (error.error && error.error.message) {
-           // Display specific error message sent from Node.js
           this.toastr.error(error.error.message, `Error: ${job.targetObject}`);
         } else {
           this.toastr.error(`An unexpected error occurred while validating ${job.targetObject}.`, 'Validation Failed');
@@ -198,14 +387,15 @@ async runValidationQueue() {
 
     this.isValidating = false;
     
-    // Only proceed to Step 2 if at least some data was processed without timing out completely
-    if (!queueHasErrors || this.aggregateStats.total > 0) {
-       this.currentStep = 2;
+    if (this.aggregateStats.total > 0 || !queueHasErrors) {
+       this.currentStep = 2; // Trigger UI to move to Step 2
        if (queueHasErrors) {
-         this.toastr.warning(`Queue finished, but some objects failed or timed out.`, 'Partial Completion');
+         this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
        } else {
          this.toastr.success(`Queue Validation Complete!`, 'Done');
        }
+    } else {
+       this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
     }
     
     this.cdr.detectChanges();
