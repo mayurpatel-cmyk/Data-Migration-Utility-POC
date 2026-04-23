@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, timeout } from 'rxjs';
 
 @Injectable({
   providedIn: 'root'
@@ -29,10 +29,12 @@ export class ValidationApiService {
    * Sends the raw data and mappings to the Node backend for validation
    * @param payload { records: any[], mappings: any[], dedupeKey: string }
    */
-  validateData(payload: any): Observable<any> {
+validateData(payload: any): Observable<any> {
     return this.http.post<any>(this.validateUrl, payload, {
       headers: this.getHeaders(),
       withCredentials: true 
-    });
+    }).pipe(
+      timeout(120000) 
+    );
   }
 }

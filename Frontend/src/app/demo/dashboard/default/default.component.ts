@@ -112,8 +112,8 @@ ngOnInit() {
        
        const newWorkbook = utils.book_new();
        this.availableSheets = [];
-
-       // Loop through the Validation Jobs and create a multi-sheet Excel file
+       
+       // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
        transferred.data.forEach((job: any, index: number) => {
           const sheetName = (job.sheetName || `Sheet${index+1}`).substring(0, 31);
           const worksheet = utils.json_to_sheet(job.results.validRecords);
@@ -126,28 +126,39 @@ ngOnInit() {
        this.workbook = newWorkbook;
        this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-       // Select the first sheet by default
-       this.selectedSheetName = this.availableSheets[0];
-       const firstJob = transferred.data[0];
+       // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
        
-       if (firstJob.results.validRecords.length > 0) {
-           this.csvHeaders = Object.keys(firstJob.results.validRecords[0]);
-           
-           // ✨ MAGIC: Pre-fill the mappings you already made in the Validation tab!
-           this.mappings = firstJob.mappings;
-           this.targetExtIdField = firstJob.dedupeKey || '';
-       }
+       this.migrationQueue = []; // Reset just in case
 
-       // Auto-select the Salesforce Object
-       if (transferred.data.length === 1 && firstJob.targetObject) {
-           this.selectedObject = firstJob.targetObject;
-           this.onObjectChangeInMapping(this.selectedObject); // Fetches SF fields instantly
-       }
+       transferred.data.forEach((job: any, index: number) => {
+         // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
+         const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
+             csvField: m.csvField,
+             sfField: m.sfField,
+             type: m.type,
+             // Note: Relationship lookup fields won't be fully auto-resolved here because 
+             // we don't have the parent object data from Step 1, but standard fields will map perfectly.
+             relationalExtIdField: '', 
+             parentObjectName: undefined
+         }));
 
-       this.toastr.success('Cleaned data imported. Please review your field mappings.', 'Success');
+         // Push directly into the execution queue
+         this.migrationQueue.push({
+             sheetName: (job.sheetName || `Sheet${index+1}`).substring(0, 31),
+             targetObject: job.targetObject,
+             csvHeaders: Object.keys(job.results.validRecords[0] || {}),
+             mappings: enhancedMappings,
+             operationMode: 'insert', // Default to insert, user can change later if needed
+             targetExtIdField: job.dedupeKey || ''
+         });
+       });
+
+       // 2. We skip Step 2 and Step 3 completely!
+       // Take them directly to the final review screen
+       this.currentStep = 3;
+       this.selectedObject = '';
        
-       // 🎯 Drop them exactly on the MAPPING screen (Visually Step 2 of 4)
-       this.currentStep = 3; 
+       this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
        this.cdr.detectChanges();
 
     } else {
@@ -462,6 +473,122 @@ ngOnInit() {
       }
     } else if (this.operationMode === 'delete') {
       this.targetExtIdField = '';
+    }
+  }
+
+  moveQueueItemUp(index: number) {
+    if (index > 0) {
+      // Remove the item from its current position
+      const item = this.migrationQueue.splice(index, 1)[0];
+      // Insert it one position higher
+      this.migrationQueue.splice(index - 1, 0, item);
+      
+      // Reset previews to prevent UI glitches when rows shift
+      this.previewingItemIndex = null;
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  moveQueueItemDown(index: number) {
+    if (index < this.migrationQueue.length - 1) {
+      // Remove the item from its current position
+      const item = this.migrationQueue.splice(index, 1)[0];
+      // Insert it one position lower
+      this.migrationQueue.splice(index + 1, 0, item);
+      
+      // Reset previews to prevent UI glitches when rows shift
+      this.previewingItemIndex = null;
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  // --- 💾 SAVED MAPPING TEMPLATES ---
+  async saveMappingTemplate() {
+    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Map at least one field to save a template.', 'Cannot Save');
+      return;
+    }
+
+    const { value: templateName } = await Swal.fire({
+      title: 'Save Mapping Template',
+      input: 'text',
+      inputLabel: 'Give this template a name (e.g., Monthly Sales Import)',
+      inputPlaceholder: 'Template Name...',
+      showCancelButton: true,
+      confirmButtonColor: '#0d6efd',
+      inputValidator: (value) => {
+        if (!value) return 'You need to write a name!';
+        return null;
+      }
+    });
+
+    if (templateName) {
+      const template = {
+        targetObject: this.selectedObject,
+        operationMode: this.operationMode,
+        targetExtIdField: this.targetExtIdField,
+        mappings: activeMappings
+      };
+      
+      let templates = JSON.parse(localStorage.getItem('sf_mapping_templates') || '[]');
+      // Overwrite if name already exists
+      templates = templates.filter((t: any) => t.name !== templateName);
+      templates.push({ name: templateName, data: template });
+      localStorage.setItem('sf_mapping_templates', JSON.stringify(templates));
+      
+      this.toastr.success(`Template "${templateName}" saved successfully!`, 'Template Saved');
+    }
+  }
+
+  async loadMappingTemplate() {
+    const templates = JSON.parse(localStorage.getItem('sf_mapping_templates') || '[]');
+    const objectTemplates = templates.filter((t: any) => t.data.targetObject === this.selectedObject);
+
+    if (objectTemplates.length === 0) {
+      this.toastr.info(`No saved templates found for ${this.selectedObject}.`, 'No Templates');
+      return;
+    }
+
+    const options: any = {};
+    objectTemplates.forEach((t: any) => { options[t.name] = t.name; });
+
+    const { value: selectedName } = await Swal.fire({
+      title: 'Load Template',
+      input: 'select',
+      inputOptions: options,
+      inputPlaceholder: '-- Select a Saved Template --',
+      showCancelButton: true,
+      confirmButtonColor: '#198754'
+    });
+
+    if (selectedName) {
+      const t = objectTemplates.find((x: any) => x.name === selectedName).data;
+      this.operationMode = t.operationMode;
+      this.targetExtIdField = t.targetExtIdField;
+      
+      // Clear existing mappings
+      this.mappings.forEach(m => { m.sfField = ''; m.parentObjectName = undefined; m.relationalExtIdField = ''; });
+      
+      // Apply saved mappings
+      t.mappings.forEach((savedMap: any) => {
+        const match = this.mappings.find(m => m.csvField === savedMap.csvField);
+        if (match) {
+          match.sfField = savedMap.sfField;
+          match.parentObjectName = savedMap.parentObjectName;
+          match.relationalExtIdField = savedMap.relationalExtIdField;
+          
+          // Trigger parent field load if it was a relational mapping
+          if (match.parentObjectName) {
+             this.onSfFieldChange(match);
+          }
+        }
+      });
+      
+      this.toastr.success(`Loaded "${selectedName}"!`, 'Template Loaded');
+      this.cdr.detectChanges();
     }
   }
 
@@ -1307,10 +1434,11 @@ try {
     return issueFound;
   }
 
-  overrideGoToReview() {
+ overrideGoToReview() {
+
     if (this.operationMode === 'upsert') {
       if (this.hasOrderingIssue()) {
-        this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
+        this.toastr.error('Complex circular dependency detected. Please check your external IDs.', 'Sequence Error');
         return;
       }
     }
