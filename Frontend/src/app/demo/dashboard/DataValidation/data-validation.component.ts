@@ -62,6 +62,15 @@ export class DataValidationComponent implements OnInit {
   validationQueue: ValidationJob[] = [];
   isValidating = false;
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+  showingValidPreview: { [key: number]: boolean } = {};
+
+  toggleValidPreview(index: number) {
+    this.showingValidPreview[index] = !this.showingValidPreview[index];
+  }
+
+  getPreviewRecords(records: any[]): any[] {
+    return records ? records.slice(0, 50) : []; // Limit preview to 50 rows for performance
+  }
 
   ngOnInit() {
     this.migrationService.getAllObjects().subscribe(objs => {
@@ -423,6 +432,74 @@ export class DataValidationComponent implements OnInit {
     link.href = window.URL.createObjectURL(blob);
     link.download = `Cleaned_Batch_Data.xlsx`;
     link.click();
+  }
+  
+  recalculateStats() {
+    let totalValid = 0;
+    let totalInvalid = 0;
+    let totalDuplicates = 0;
+
+    this.validationQueue.forEach(job => {
+      if (job.results) {
+        totalValid += job.results.validRecords?.length || 0;
+        totalInvalid += job.results.invalidRecords?.length || 0;
+        totalDuplicates += job.results.stats?.duplicates || 0;
+      }
+    });
+
+    this.aggregateStats = {
+      total: totalValid + totalInvalid + totalDuplicates,
+      valid: totalValid,
+      invalid: totalInvalid,
+      duplicates: totalDuplicates
+    };
+  }
+
+  async revalidateJob(jobIndex: number) {
+    const job = this.validationQueue[jobIndex];
+    if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
+
+    this.isValidating = true;
+    this.toastr.info(`Re-validating ${job.targetObject} records...`, 'Processing');
+    this.cdr.detectChanges();
+
+    // Extract the user-edited rows
+    const recordsToTest = job.results.invalidRecords.map((ir: any) => ir.originalRow);
+
+    const payload = {
+      targetObject: job.targetObject,
+      records: recordsToTest,
+      mappings: job.mappings,
+      dedupeKey: job.dedupeKey,
+      validCountries: { "united states": "US", "canada": "CA" }, 
+      validStates: { "california": "CA", "new york": "NY" }
+    };
+
+    try {
+      const res: any = await firstValueFrom(this.validationApi.validateData(payload));
+      
+      // 1. Move newly fixed records into the valid bucket
+      job.results.validRecords = [...(job.results.validRecords || []), ...res.validRecords];
+      
+      // 2. Overwrite the invalid bucket with records that STILL have errors
+      job.results.invalidRecords = res.invalidRecords;
+      
+      // 3. Update the global stats UI
+      this.recalculateStats();
+      
+      if (res.stats.valid > 0) {
+        this.toastr.success(`Successfully fixed ${res.stats.valid} records!`, 'Errors Resolved');
+      } else {
+        this.toastr.warning('Records still contain errors. Please review them.', 'Still Invalid');
+      }
+
+    } catch (error: any) {
+      console.error("Re-validation Error:", error);
+      this.toastr.error(`Re-validation failed for ${job.targetObject}.`, 'Server Error');
+    }
+
+    this.isValidating = false;
+    this.cdr.detectChanges();
   }
 
   downloadErrorLog() {

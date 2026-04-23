@@ -205,62 +205,128 @@
 </div>
 
 @if (currentStep === 2 && validationQueue.length > 0) {
-  <div class="row mb-4">
+<div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 2: Batch Validation Results">
 
       <div class="row text-center mb-4 g-3">
         <div class="col-md-3">
-          <div class="p-3 border rounded bg-light">
+          <div class="p-3 border rounded bg-light transition-all">
             <h6 class="text-muted small fw-bold">Total Processed</h6>
             <h3 class="text-dark mb-0">{{ aggregateStats.total }}</h3>
           </div>
         </div>
         <div class="col-md-3">
-          <div class="p-3 border border-success-subtle bg-success-subtle rounded">
+          <div class="p-3 border border-success-subtle bg-success-subtle rounded transition-all">
             <h6 class="text-success-emphasis small fw-bold">Ready to Migrate</h6>
             <h3 class="text-success mb-0">{{ aggregateStats.valid }}</h3>
           </div>
         </div>
         <div class="col-md-3">
-          <div class="p-3 border border-danger-subtle bg-danger-subtle rounded">
+          <div class="p-3 border border-danger-subtle bg-danger-subtle rounded transition-all">
             <h6 class="text-danger-emphasis small fw-bold">Failed Rules</h6>
             <h3 class="text-danger mb-0">{{ aggregateStats.invalid }}</h3>
           </div>
         </div>
         <div class="col-md-3">
-          <div class="p-3 border border-warning-subtle bg-warning-subtle rounded">
+          <div class="p-3 border border-warning-subtle bg-warning-subtle rounded transition-all">
             <h6 class="text-warning-emphasis small fw-bold">Duplicates Removed</h6>
             <h3 class="text-warning mb-0">{{ aggregateStats.duplicates }}</h3>
           </div>
         </div>
       </div>
 
-      <div class="d-flex flex-wrap justify-content-between align-items-center mt-4 border-top pt-3 gap-3">
+      @if (aggregateStats.invalid > 0) {
+      <div class="mt-5 border-top pt-4">
+        <h4 class="fw-bold text-danger mb-3 d-flex align-items-center gap-2">
+          <i class="feather icon-edit-2"></i> Inline Error Resolution
+        </h4>
+        <p class="text-muted small mb-4">Fix formatting errors directly in the grid below, then click Re-Validate to push them to your clean queue.</p>
+        
+        @for (job of validationQueue; track jobIndex; let jobIndex = $index) {
+          @if (job.results?.invalidRecords?.length > 0) {
+          <div class="card border border-danger-subtle shadow-sm mb-4">
+            <div class="card-header bg-danger-subtle d-flex justify-content-between align-items-center py-2">
+              <h6 class="m-0 text-danger-emphasis fw-bold d-flex align-items-center gap-2">
+                <i class="feather icon-box"></i> {{ job.targetObject }} 
+                <span class="badge bg-danger rounded-pill">{{ job.results.invalidRecords.length }} Errors</span>
+              </h6>
+              
+              <button class="btn btn-sm btn-danger shadow-sm d-flex align-items-center gap-1 fw-bold" 
+                      (click)="revalidateJob(jobIndex)" 
+                      [disabled]="isValidating">
+                @if (isValidating) {
+                  <span class="spinner-border spinner-border-sm"></span> Checking...
+                } @else {
+                  <i class="feather icon-refresh-cw"></i> Re-Validate {{ job.targetObject }}
+                }
+              </button>
+            </div>
+            
+            <div class="card-body p-0">
+              <div class="table-responsive" style="max-height: 350px; overflow-y: auto;">
+                <table class="table table-sm table-bordered align-middle mb-0" style="min-width: 800px;">
+                  <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
+                    <tr>
+                      <th width="30%" class="text-danger fw-bold py-2 ps-3">Salesforce Error Rule</th>
+                      @for (mapping of job.mappings; track mapping.csvField) {
+                        <th class="py-2">
+                          <span class="d-block text-dark fw-bold">{{ mapping.csvField }}</span>
+                          <small class="text-primary" style="font-family: monospace;">{{ mapping.sfField }}</small>
+                        </th>
+                      }
+                    </tr>
+                  </thead>
+                  <tbody class="small">
+                    @for (record of job.results.invalidRecords; track $index) {
+                      <tr>
+                        <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium ps-3" style="font-size: 0.8rem; line-height: 1.2;">
+                          {{ record.errors }}
+                        </td>
+                        
+                        @for (mapping of job.mappings; track mapping.csvField) {
+                          <td class="p-1">
+                            <input type="text" 
+                                   class="form-control form-control-sm border-secondary-subtle" 
+                                   [(ngModel)]="record.originalRow[mapping.csvField]"
+                                   [class.is-invalid]="record.errors.includes(mapping.csvField)">
+                          </td>
+                        }
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          }
+        }
+      </div>
+      }
+
+      <div class="d-flex flex-wrap justify-content-between align-items-center mt-5 border-top pt-3 gap-3">
         <div class="d-flex gap-2">
           @if (aggregateStats.invalid > 0) {
-          <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
-            <i class="feather icon-download"></i> Error Log
-          </button>
+            <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
+              <i class="feather icon-download"></i> Download Unfixed Errors
+            </button>
           }
-
+          
           @if (aggregateStats.valid > 0) {
-          <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2"
-            (click)="downloadCleanData()">
-            <i class="feather icon-download-cloud"></i> Multi-Sheet Processed Data
-          </button>
+            <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2" (click)="downloadCleanData()">
+              <i class="feather icon-download-cloud"></i> Multi-Sheet Processed Data
+            </button>
           }
         </div>
 
         @if (aggregateStats.valid > 0) {
-        <button class="btn btn-primary shadow-lg d-flex align-items-center gap-2 fw-bold px-4"
-          (click)="routeToMigration()">
-          <i class="feather icon-zap"></i> Push Queue to Migration Engine <i class="feather icon-arrow-right"></i>
-        </button>
+          <button class="btn btn-primary shadow-lg d-flex align-items-center gap-2 fw-bold px-4" (click)="routeToMigration()">
+            <i class="feather icon-zap"></i> Push Queue to Migration Engine <i class="feather icon-arrow-right"></i>
+          </button>
         }
       </div>
 
     </app-card>
   </div>
 </div>
-    }
+}
