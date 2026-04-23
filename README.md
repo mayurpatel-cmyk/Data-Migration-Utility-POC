@@ -34,10 +34,11 @@ npm install
 
 3. PYTHON
 cd Python_service
-pip install -r requirements.txt
-
+pip install -r requirements.txt (Linux)
+py -m pip install -r requirements.txt (Windows)
 
 ## Running the Application
 1. BACKEND: npm run dev
 2. FRONTEND: ng serve
-3. PYTHON: uvicorn app.main:app --reload --port 8000
+3. PYTHON(Linux): uvicorn app.main:app --reload --port 8000
+4. PYTHON(Windows): py -m uvicorn app.main:app --reload --port 8000

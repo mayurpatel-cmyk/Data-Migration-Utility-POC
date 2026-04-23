@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class

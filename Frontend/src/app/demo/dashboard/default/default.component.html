@@ -787,16 +787,16 @@
         </div>
 
         <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle">
-  <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Batch Size:</label>
+  <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Record Size:</label>
   <input type="number"
          class="form-control form-control-sm border-primary border-2 fw-bold text-primary"
          [(ngModel)]="batchSize"
          [disabled]="isMigrating"
          min="10"
-         max="200"
-         step="10"
+         max="10000"
+         step="1000"
          style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
-  <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 200)</span></span>
+  <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10000)</span></span>
 </div>
       </div>
 

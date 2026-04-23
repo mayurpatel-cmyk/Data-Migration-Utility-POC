@@ -89,7 +89,7 @@ export class DefaultComponent implements OnInit {
 
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
-  batchSize: number = 10;
+  batchSize: number = 10000;
 
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
@@ -1041,7 +1041,7 @@ ngOnInit() {
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
-    if (this.batchSize > 200) this.batchSize = 200;
+    if (this.batchSize > 10000) this.batchSize = 10000;
     if (this.batchSize < 10) this.batchSize = 10;
 
     if (this.migrationQueue.length === 0) {
