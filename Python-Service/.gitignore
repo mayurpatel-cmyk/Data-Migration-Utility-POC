@@ -1,7 +1,3 @@
-node_modules/
-dist/
-.env
-
 # Python cache
 *.py[cod]
 *$py.class

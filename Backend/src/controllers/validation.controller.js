@@ -17,12 +17,21 @@ exports.validateData = async (req, res) => {
         describeMeta.fields.forEach(field => {
           sfRules[field.name] = {
             type: field.type,
-            length: field.length, // Dynamic string truncation
-            // Check if it's universally required in SF
+            length: field.length,
+            precision: field.precision,
+            scale: field.scale,
+            referenceTo: field.referenceTo && field.referenceTo.length > 0 ? field.referenceTo : null,
+            relationshipName: field.relationshipName,
             required: !field.nillable && !field.defaultedOnCreate && field.createable,
             unique: field.unique,
             externalId: field.externalId,
+            idLookup: field.idLookup,
+            createable: field.createable,
+            updateable: field.updateable,
+            calculated: field.calculated, // Is it a Formula field?
+            autoNumber: field.autoNumber,
             // Grab active picklist values (lowercase for easy matching)
+            restrictedPicklist: field.restrictedPicklist,
             picklistValues: field.picklistValues 
               ? field.picklistValues.filter(p => p.active).map(p => p.value.toLowerCase()) 
               : []
