@@ -34,7 +34,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
         field_rules = sf_rules.get(sf_field, {})
         sf_type = field_rules.get('type', mapping.get('type', 'string'))
         
-        # 💡 FIX: Safely detect empty values
+        #  Safely detect empty values
         is_empty = df[csv_col].isna() | (df[csv_col].astype(str).str.strip() == '') | (df[csv_col].astype(str).str.lower() == 'nan')
 
         # --- REQUIRED & UNIQUE CHECKS ---

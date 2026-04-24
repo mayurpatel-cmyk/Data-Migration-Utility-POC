@@ -179,9 +179,25 @@
                   @if (job.status === 'validating') { <span class="badge bg-info text-dark"><span class="spinner-border spinner-border-sm me-1" style="width: 10px; height: 10px;"></span> Running...</span> }
                   @if (job.status === 'done') { <span class="badge bg-success"><i class="feather icon-check"></i> Done</span> }
                 </td>
-                <td class="text-end">
-                  <button class="btn btn-sm btn-outline-danger" (click)="removeFromQueue($index)" [disabled]="isValidating"><i class="feather icon-trash-2"></i></button>
-                </td>
+                 <td class="text-end">
+  <div class="d-flex justify-content-end align-items-center gap-2">
+    
+    <button class="btn btn-sm btn-light border-secondary-subtle text-secondary fw-bold d-flex align-items-center gap-1 shadow-sm px-3" 
+            (click)="editQueuedItem($index)" 
+            [disabled]="isValidating" 
+            title="Edit Mapping Rules">
+      <i class="feather icon-edit-2"></i> Edit
+    </button>
+
+    <button class="btn btn-sm btn-danger d-flex align-items-center justify-content-center shadow-sm px-2" 
+            (click)="removeFromQueue($index)" 
+            [disabled]="isValidating"
+            title="Remove from Queue">
+      <i class="feather icon-trash-2"></i>
+    </button>
+    
+  </div>
+</td>
               </tr>
               }
             </tbody>
@@ -239,10 +255,13 @@
       @if (aggregateStats.invalid > 0) {
       <div class="mt-5 border-top pt-4">
         <h4 class="fw-bold text-danger mb-3 d-flex align-items-center gap-2">
-          <i class="feather icon-edit-2"></i> Inline Error Resolution
+          <i class="feather icon-edit-2"></i> Review & Fix Errors
         </h4>
-        <p class="text-muted small mb-4">Fix formatting errors directly in the grid below, then click Re-Validate to push them to your clean queue.</p>
-        
+<p class="text-muted small mb-4">
+  Fix formatting errors <strong class="text-dark">directly in the grid</strong> below, then click 
+  <span class="badge bg-danger text-white mx-1 px-2 py-1 shadow-sm"><i class="feather icon-refresh-cw"></i> Re-Validate</span> 
+  to push them to your clean queue.
+</p>      
         @for (job of validationQueue; track jobIndex; let jobIndex = $index) {
           @if (job.results?.invalidRecords?.length > 0) {
           <div class="card border border-danger-subtle shadow-sm mb-4">
@@ -306,6 +325,9 @@
 
       <div class="d-flex flex-wrap justify-content-between align-items-center mt-5 border-top pt-3 gap-3">
         <div class="d-flex gap-2">
+          <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" (click)="currentStep = 1">
+            <i class="feather icon-arrow-left"></i> Back to Mapping
+          </button>
           @if (aggregateStats.invalid > 0) {
             <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
               <i class="feather icon-download"></i> Download Unfixed Errors

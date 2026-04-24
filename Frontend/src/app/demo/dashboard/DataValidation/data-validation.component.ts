@@ -57,6 +57,7 @@ export class DataValidationComponent implements OnInit {
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
+  isLoadingObjects = false;
 
   // Queue State
   validationQueue: ValidationJob[] = [];
@@ -339,20 +340,73 @@ export class DataValidationComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
+  editQueuedItem(index: number) {
+    // 1. Remove the item from the queue
+    const itemToEdit = this.validationQueue.splice(index, 1)[0];
+
+    // 2. Restore the basic form state
+    this.selectedSheetName = itemToEdit.sheetName;
+    this.selectedObject = itemToEdit.targetObject;
+    this.rawData = [...itemToEdit.rawData];
+    this.csvHeaders = [...itemToEdit.csvHeaders];
+    this.dedupeKey = itemToEdit.dedupeKey || '';
+
+    // 3. Fetch the SF fields for this object to repopulate the dropdowns
+    this.isLoadingObjects = true; // Optional: If you have a loading spinner state
+    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+      next: (res: any) => {
+        this.sfFields = res.fields || res;
+
+        // 4. Reconstruct the full mappings array (including unmapped fields)
+        this.mappings = this.csvHeaders.map(header => {
+          // Find if this header was previously mapped
+          const existing = itemToEdit.mappings.find(m => m.csvField === header);
+          return existing
+            ? { ...existing, isDropdownOpen: false, searchQuery: '' }
+            : { csvField: header, sfField: '', type: 'string', isDropdownOpen: false, searchQuery: '' };
+        });
+
+        // 5. Ensure we are on Step 1 and scroll to top
+        this.currentStep = 1; 
+        this.isLoadingObjects = false;
+        this.cdr.detectChanges();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        
+        this.toastr.info(`You can now edit the mapping rules for ${this.selectedObject}.`, 'Edit Mode');
+      },
+      error: () => {
+        this.toastr.error('Failed to load Salesforce fields for editing.', 'Error');
+        this.isLoadingObjects = false;
+      }
+    });
+  }
+
   removeFromQueue(index: number) {
-    this.validationQueue.splice(index, 1);
+    // 1. Remove the item from the queue array
+    const removedItem = this.validationQueue.splice(index, 1)[0];
+    this.toastr.info(`Removed ${removedItem.targetObject} from the queue.`, 'Item Removed');
+
+    this.recalculateStats();
+
+    if (this.validationQueue.length === 0) {
+      this.currentStep = 1;
+      this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+    }
   }
 
   async runValidationQueue() {
-    // ... KEEP YOUR EXACT EXISTING API CALL LOGIC ...
     if (this.validationQueue.length === 0) return;
 
     this.isValidating = true;
-    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
-    
     let queueHasErrors = false;
+    let processedAtLeastOne = false; // Track if we actually had to do any work
 
     for (const job of this.validationQueue) {
+      if (job.status === 'done') {
+        continue;
+      }
+
+      processedAtLeastOne = true;
       job.status = 'validating';
       this.cdr.detectChanges();
 
@@ -370,11 +424,6 @@ export class DataValidationComponent implements OnInit {
         
         job.results = res;
         job.status = 'done';
-        
-        this.aggregateStats.total += res.stats.total || 0;
-        this.aggregateStats.valid += res.stats.valid || 0;
-        this.aggregateStats.invalid += res.stats.invalid || 0;
-        this.aggregateStats.duplicates += res.stats.duplicates || 0;
 
       } catch (error: any) {
         job.status = 'error';
@@ -396,12 +445,19 @@ export class DataValidationComponent implements OnInit {
 
     this.isValidating = false;
     
+    this.recalculateStats();
+    
     if (this.aggregateStats.total > 0 || !queueHasErrors) {
        this.currentStep = 2; // Trigger UI to move to Step 2
-       if (queueHasErrors) {
-         this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
+       
+       if (processedAtLeastOne) {
+         if (queueHasErrors) {
+           this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
+         } else {
+           this.toastr.success(`Queue Validation Complete!`, 'Done');
+         }
        } else {
-         this.toastr.success(`Queue Validation Complete!`, 'Done');
+         this.toastr.info(`All items in the queue are already up-to-date.`, 'No New Validation Needed');
        }
     } else {
        this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
