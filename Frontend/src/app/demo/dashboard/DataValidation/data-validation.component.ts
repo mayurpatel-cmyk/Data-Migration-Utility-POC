@@ -19,7 +19,7 @@ interface ValidationJob {
   csvHeaders: string[];
   mappings: any[];
   dedupeKey: string;
-  results?: any; 
+  results?: any;
   status?: 'pending' | 'validating' | 'done' | 'error';
 }
 
@@ -35,13 +35,13 @@ export class DataValidationComponent implements OnInit {
   private validationApi = inject(ValidationApiService);
   private migrationService = inject(MigrationService);
   private dataTransfer = inject(DataTransferService);
-  private cdr = inject(ChangeDetectorRef); 
+  private cdr = inject(ChangeDetectorRef);
 
   currentStep = 1;
   selectedFile: File | null = null;
   workbook: WorkBook | null = null;
   availableSheets: string[] = [];
-  
+
   // Current Form State
   selectedSheetName = '';
   csvHeaders: string[] = [];
@@ -50,7 +50,7 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
-  
+
   // Updated Mapping Interface to handle Dropdown UI state
   mappings: { csvField: string, sfField: string, type: string, isDropdownOpen?: boolean, searchQuery?: string }[] = [];
 
@@ -64,6 +64,9 @@ export class DataValidationComponent implements OnInit {
   isValidating = false;
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
   showingValidPreview: { [key: number]: boolean } = {};
+  selectedErrorJobIndex: number = -1;
+  errorCurrentPage: number = 1;
+  errorPageSize: number = 50;
 
   toggleValidPreview(index: number) {
     this.showingValidPreview[index] = !this.showingValidPreview[index];
@@ -76,14 +79,14 @@ export class DataValidationComponent implements OnInit {
   ngOnInit() {
     this.migrationService.getAllObjects().subscribe(objs => {
       this.sfObjects = objs;
-      this.cdr.detectChanges(); 
+      this.cdr.detectChanges();
     });
   }
 
   // --- DROPDOWN UI LOGIC ---
   @HostListener('document:click', ['$event'])
   clickout(event: Event) {
-      this.closeAllDropdowns();
+    this.closeAllDropdowns();
   }
 
   closeAllDropdowns() {
@@ -107,6 +110,43 @@ export class DataValidationComponent implements OnInit {
     if (mapping.isDropdownOpen) mapping.searchQuery = '';
   }
 
+  // Get a list of only the jobs that actually have errors for the dropdown
+  get errorJobs() {
+    return this.validationQueue
+      .map((job, index) => ({ job, index }))
+      .filter(item => item.job.results?.invalidRecords?.length > 0);
+  }
+
+  // Slice the records for the current page
+  get paginatedErrorRecords() {
+    if (this.selectedErrorJobIndex === -1 || !this.validationQueue[this.selectedErrorJobIndex]) return [];
+    const records = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords;
+    const start = (this.errorCurrentPage - 1) * this.errorPageSize;
+    return records.slice(start, start + this.errorPageSize);
+  }
+
+  // Calculate total pages for the selected object
+  get errorTotalPages() {
+    if (this.selectedErrorJobIndex === -1 || !this.validationQueue[this.selectedErrorJobIndex]) return 1;
+    const total = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords.length;
+    return Math.ceil(total / this.errorPageSize) || 1;
+  }
+
+  // Get the upper bound number for the "Showing X to Y" text
+  get currentErrorMaxBound() {
+    if (this.selectedErrorJobIndex === -1) return 0;
+    const total = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords.length;
+    return Math.min(this.errorCurrentPage * this.errorPageSize, total);
+  }
+
+  nextErrorPage() {
+    if (this.errorCurrentPage < this.errorTotalPages) this.errorCurrentPage++;
+  }
+
+  prevErrorPage() {
+    if (this.errorCurrentPage > 1) this.errorCurrentPage--;
+  }
+
   getSfFieldMeta(fieldName: string): any {
     if (!fieldName) return null;
     return this.sfFields.find((f) => f.name === fieldName);
@@ -114,10 +154,10 @@ export class DataValidationComponent implements OnInit {
 
   getMissingRequiredFields(): string[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    
+
     // Get an array of all SF fields the user has currently mapped
     const currentlyMapped = this.mappings.map(m => m.sfField).filter(val => val !== '');
-    
+
     // Filter SF fields to find ones that are required BUT missing from the mapped list
     const missingFields = this.sfFields.filter(f => {
       // A field is required if SF explicitly flags it, or if it can't be null, doesn't have a default, and is createable
@@ -170,7 +210,7 @@ export class DataValidationComponent implements OnInit {
     const file = event.target.files[0];
     if (!file) return;
     this.selectedFile = file;
-    
+
     const reader = new FileReader();
     reader.onload = (e: any) => {
       const data = new Uint8Array(e.target.result);
@@ -179,7 +219,7 @@ export class DataValidationComponent implements OnInit {
       if (this.availableSheets.length > 0) {
         this.onSheetSelect(this.availableSheets[0]);
       }
-      this.cdr.detectChanges(); 
+      this.cdr.detectChanges();
     };
     reader.readAsArrayBuffer(file);
   }
@@ -193,7 +233,7 @@ export class DataValidationComponent implements OnInit {
       // Reset mappings if sheet changes
       this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
     }
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
   }
 
   onObjectChange() {
@@ -201,7 +241,7 @@ export class DataValidationComponent implements OnInit {
     this.migrationService.getObjectFields(this.selectedObject).subscribe((res: any) => {
       this.sfFields = res.fields || res;
       this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
-      this.cdr.detectChanges(); 
+      this.cdr.detectChanges();
     });
   }
 
@@ -226,7 +266,7 @@ export class DataValidationComponent implements OnInit {
     if (s1.length < s2.length) { longer = s2; shorter = s1; }
     const longerLength = longer.length;
     if (longerLength === 0) return 1.0;
-    
+
     const costs = new Array();
     for (let i = 0; i <= longer.length; i++) {
       let lastValue = i;
@@ -272,7 +312,7 @@ export class DataValidationComponent implements OnInit {
             if (normalCsv === normalName || normalCsv === normalLabel) {
               bestMatch = field;
               highestScore = 1.0;
-              break; 
+              break;
             }
 
             const labelScore = this.getSimilarity(normalCsv, normalLabel);
@@ -370,7 +410,7 @@ export class DataValidationComponent implements OnInit {
     });
 
     this.toastr.success(`${this.selectedObject} added to validation queue!`, 'Queued');
-    
+
     // Reset Form for next selection
     this.selectedObject = '';
     this.dedupeKey = '';
@@ -405,11 +445,11 @@ export class DataValidationComponent implements OnInit {
         });
 
         // 5. Ensure we are on Step 1 and scroll to top
-        this.currentStep = 1; 
+        this.currentStep = 1;
         this.isLoadingObjects = false;
         this.cdr.detectChanges();
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        
+
         this.toastr.info(`You can now edit the mapping rules for ${this.selectedObject}.`, 'Edit Mode');
       },
       error: () => {
@@ -453,13 +493,13 @@ export class DataValidationComponent implements OnInit {
         records: job.rawData,
         mappings: job.mappings,
         dedupeKey: job.dedupeKey,
-        validCountries: { "united states": "US", "canada": "CA" }, 
+        validCountries: { "united states": "US", "canada": "CA" },
         validStates: { "california": "CA", "new york": "NY" }
       };
 
       try {
         const res = await firstValueFrom(this.validationApi.validateData(payload));
-        
+
         job.results = res;
         job.status = 'done';
 
@@ -477,30 +517,35 @@ export class DataValidationComponent implements OnInit {
           this.toastr.error(`An unexpected error occurred while validating ${job.targetObject}.`, 'Validation Failed');
         }
       }
-      
+
+      // Auto-select the first job with errors for the dropdown
+      const firstErrorIdx = this.validationQueue.findIndex(j => j.results?.invalidRecords?.length > 0);
+      this.selectedErrorJobIndex = firstErrorIdx !== -1 ? firstErrorIdx : -1;
+      this.errorCurrentPage = 1;
+
       this.cdr.detectChanges();
     }
 
     this.isValidating = false;
-    
+
     this.recalculateStats();
-    
+
     if (this.aggregateStats.total > 0 || !queueHasErrors) {
-       this.currentStep = 2; // Trigger UI to move to Step 2
-       
-       if (processedAtLeastOne) {
-         if (queueHasErrors) {
-           this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
-         } else {
-           this.toastr.success(`Queue Validation Complete!`, 'Done');
-         }
-       } else {
-         this.toastr.info(`All items in the queue are already up-to-date.`, 'No New Validation Needed');
-       }
+      this.currentStep = 2; // Trigger UI to move to Step 2
+
+      if (processedAtLeastOne) {
+        if (queueHasErrors) {
+          this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
+        } else {
+          this.toastr.success(`Queue Validation Complete!`, 'Done');
+        }
+      } else {
+        this.toastr.info(`All items in the queue are already up-to-date.`, 'No New Validation Needed');
+      }
     } else {
-       this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
+      this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
     }
-    
+
     this.cdr.detectChanges();
   }
 
@@ -519,7 +564,7 @@ export class DataValidationComponent implements OnInit {
     });
 
     if (!hasData) return;
-    
+
     const wbout = write(newWorkbook, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([wbout], { type: 'application/octet-stream' });
     const link = document.createElement('a');
@@ -527,7 +572,7 @@ export class DataValidationComponent implements OnInit {
     link.download = `Cleaned_Batch_Data.xlsx`;
     link.click();
   }
-  
+
   recalculateStats() {
     let totalValid = 0;
     let totalInvalid = 0;
@@ -565,22 +610,22 @@ export class DataValidationComponent implements OnInit {
       records: recordsToTest,
       mappings: job.mappings,
       dedupeKey: job.dedupeKey,
-      validCountries: { "united states": "US", "canada": "CA" }, 
+      validCountries: { "united states": "US", "canada": "CA" },
       validStates: { "california": "CA", "new york": "NY" }
     };
 
     try {
       const res: any = await firstValueFrom(this.validationApi.validateData(payload));
-      
+
       // 1. Move newly fixed records into the valid bucket
       job.results.validRecords = [...(job.results.validRecords || []), ...res.validRecords];
-      
+
       // 2. Overwrite the invalid bucket with records that STILL have errors
       job.results.invalidRecords = res.invalidRecords;
-      
+
       // 3. Update the global stats UI
       this.recalculateStats();
-      
+
       if (res.stats.valid > 0) {
         this.toastr.success(`Successfully fixed ${res.stats.valid} records!`, 'Errors Resolved');
       } else {
@@ -593,6 +638,12 @@ export class DataValidationComponent implements OnInit {
     }
 
     this.isValidating = false;
+    // If no errors remain for this object, auto-switch to the next one
+    if (job.results.invalidRecords.length === 0) {
+      const nextErrorIdx = this.validationQueue.findIndex(j => j.results?.invalidRecords?.length > 0);
+      this.selectedErrorJobIndex = nextErrorIdx !== -1 ? nextErrorIdx : -1;
+      this.errorCurrentPage = 1;
+    }
     this.cdr.detectChanges();
   }
 
@@ -623,22 +674,29 @@ export class DataValidationComponent implements OnInit {
     link.click();
   }
 
-routeToMigration() {
+  markAsEdited(record: any, fieldName: string) {
+    if (!record._editedFields) {
+      record._editedFields = {};
+    }
+    record._editedFields[fieldName] = true;
+  }
+
+  routeToMigration() {
     const validJobs = this.validationQueue.filter(j => j.results && j.results.validRecords && j.results.validRecords.length > 0);
-    
+
     if (validJobs.length === 0) {
       this.toastr.warning('No valid records to migrate! Please check the Error Logs.', 'Cannot Route');
       return;
     }
-    
+
     this.dataTransfer.setValidatedData(
-      validJobs, 
+      validJobs,
       `Cleaned_${this.selectedFile?.name || 'Batch.xlsx'}`,
-      '' 
+      ''
     );
-    
+
     this.toastr.info('Routing queue to Migration engine...', 'Transferring');
-    
+
     // Force absolute routing path
     this.router.navigateByUrl('/data-import').then(success => {
       if (!success) {

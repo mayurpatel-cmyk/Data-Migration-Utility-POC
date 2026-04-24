@@ -19,7 +19,8 @@
   <div class="col-sm-12">
     <app-card cardTitle="Step 2: Upload Data & Select Target">
       <div class="d-flex justify-content-end mb-3 border-bottom pb-3">
-        <button class="btn btn-outline-info d-flex align-items-center gap-2 shadow-sm" (click)="showMigrationInstructions()">
+        <button class="btn btn-outline-info d-flex align-items-center gap-2 shadow-sm"
+          (click)="showMigrationInstructions()">
           <i class="feather icon-help-circle"></i> Read Migration Guidelines
         </button>
       </div>
@@ -71,7 +72,8 @@
               </div>
 
               @if (isObjectDropdownOpen) {
-              <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
+              <div
+                class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
                 style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
                 <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
@@ -142,8 +144,10 @@
 
         @if (['insert', 'update', 'upsert'].includes(operationMode)) {
 
-        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
-          <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> External ID Key (Optional for Insert/Update, Required for Upsert)</label>
+        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle position-relative"
+          [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
+          <label class="fw-bold mb-1"><i class="feather icon-key text-primary"></i> External ID Key (Optional for
+            Insert/Update, Required for Upsert)</label>
 
           @if (isLoadingFields) {
           <div class="text-primary small mt-1"><span class="spinner-border spinner-border-sm me-2"></span>Loading
@@ -157,7 +161,8 @@
             </div>
 
             @if (isUpsertKeyDropdownOpen) {
-            <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+            <div
+              class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
               style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
               <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                 <div class="input-group input-group-sm">
@@ -166,8 +171,9 @@
                     [(ngModel)]="upsertKeySearchQuery" autofocus>
                 </div>
               </div>
-              <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1" (click)="selectUpsertKey('')">
-                 <i class="feather icon-x-circle me-1"></i> -- No External ID --
+              <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1"
+                (click)="selectUpsertKey('')">
+                <i class="feather icon-x-circle me-1"></i> -- No External ID --
               </div>
               @for (field of getFilteredUpsertKeys(); track field.name) {
               <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
@@ -239,8 +245,11 @@
 
           @if (['insert', 'update', 'upsert'].includes(operationMode)) {
 
-          <div class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative" [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
-            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID Key:</label>
+          <div
+            class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative"
+            [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
+            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID
+              Key:</label>
 
             @if (isLoadingFields) {
             <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
@@ -253,7 +262,8 @@
               </div>
 
               @if (isUpsertKeyDropdownOpen) {
-              <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute end-0 mt-1 bg-white"
+              <div
+                class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute end-0 mt-1 bg-white"
                 style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
                 <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
                   <div class="input-group input-group-sm">
@@ -262,8 +272,9 @@
                       [(ngModel)]="upsertKeySearchQuery" autofocus>
                   </div>
                 </div>
-                <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1" (click)="selectUpsertKey('')">
-                   <i class="feather icon-x-circle me-1"></i> -- No External ID --
+                <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1"
+                  (click)="selectUpsertKey('')">
+                  <i class="feather icon-x-circle me-1"></i> -- No External ID --
                 </div>
                 @for (field of getFilteredUpsertKeys(); track field.name) {
                 <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
@@ -295,7 +306,8 @@
         </div>
         }
 
-        <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
+        <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative"
+          [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
             Target Salesforce Object</label>
 
@@ -380,12 +392,12 @@
       </div>
       }
 
-     <div class="d-flex justify-content-between align-items-end mb-2 px-1">
+      <div class="d-flex justify-content-between align-items-end mb-2 px-1">
         <div class="text-muted small fw-bold">
           Mapped: <span class="text-primary">{{ getConfirmedCount(mappings) }} / {{ mappings.length }}</span> columns
         </div>
         <div class="d-flex flex-wrap gap-2">
-          
+
           <!-- <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2 shadow-sm"
                   (click)="loadMappingTemplate()" [disabled]="isLoadingFields">
             <i class="feather icon-download"></i> Load Template
@@ -397,15 +409,14 @@
           </button> -->
 
           @if (getConfirmedCount(mappings) > 0) {
-            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
-                    (click)="clearAllMappings()">
-              <i class="feather icon-trash-2"></i> Clear All
-            </button>
+          <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
+            (click)="clearAllMappings()">
+            <i class="feather icon-trash-2"></i> Clear All
+          </button>
           }
 
           <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
-                  (click)="autoMapFields()"
-                  [disabled]="isLoadingFields">
+            (click)="autoMapFields()" [disabled]="isLoadingFields">
             <i class="feather icon-cpu"></i> Auto-Map Fields
           </button>
         </div>
@@ -422,7 +433,7 @@
           <tbody>
             @for (mapping of mappings; track mapping.csvField) {
             <tr class="position-relative"
-                [style.z-index]="(mapping.isDropdownOpen || mapping.isParentDropdownOpen) ? '1060' : 'auto'">
+              [style.z-index]="(mapping.isDropdownOpen || mapping.isParentDropdownOpen) ? '1060' : 'auto'">
 
               <td class="fw-bold text-primary ps-4 align-middle">
                 <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
@@ -442,7 +453,8 @@
                   </div>
 
                   @if (mapping.isDropdownOpen) {
-                  <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                  <div
+                    class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
                     style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
                     <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
@@ -646,22 +658,21 @@
                 <td class="text-muted">
                   <strong class="text-dark">{{ getConfirmedCount(item.mappings) }}</strong> fields mapped
                 </td>
-                 <td>
+                <td>
                   <div class="d-flex justify-content-end align-items-center gap-2">
-                    
+
                     <div class="btn-group shadow-sm me-2">
-                      <button class="btn btn-sm btn-light border-secondary-subtle px-2" 
-                              (click)="moveQueueItemUp($index)" 
-                              [disabled]="$index === 0" 
-                              title="Move Up in Queue">
-                        <i class="feather icon-chevron-up text-dark fw-bold"></i><span class="ms-1 d-inline-block" style="line-height: 1;">&#8593;</span>
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2"
+                        (click)="moveQueueItemUp($index)" [disabled]="$index === 0" title="Move Up in Queue">
+                        <i class="feather icon-chevron-up text-dark fw-bold"></i><span class="ms-1 d-inline-block"
+                          style="line-height: 1;">&#8593;</span>
                       </button>
-                      
-                      <button class="btn btn-sm btn-light border-secondary-subtle px-2" 
-                              (click)="moveQueueItemDown($index)" 
-                              [disabled]="$index === migrationQueue.length - 1" 
-                              title="Move Down in Queue">
-                        <i class="feather icon-chevron-down text-dark fw-bold"></i><span class="ms-1 d-inline-block" style="line-height: 1;">&#8595;</span>
+
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2"
+                        (click)="moveQueueItemDown($index)" [disabled]="$index === migrationQueue.length - 1"
+                        title="Move Down in Queue">
+                        <i class="feather icon-chevron-down text-dark fw-bold"></i><span class="ms-1 d-inline-block"
+                          style="line-height: 1;">&#8595;</span>
                       </button>
                     </div>
 
@@ -736,15 +747,16 @@
 
 @if (isMigrating) {
 <div class="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
-     style="z-index: 9999; cursor: not-allowed; background-color: rgba(255, 255, 255, 0.5); backdrop-filter: blur(5px);">
+  style="z-index: 9999; cursor: not-allowed; background-color: rgba(255, 255, 255, 0.5); backdrop-filter: blur(5px);">
   <div class="text-center">
     <div class="spinner-wrapper mb-4">
-      <div class="spinner-border text-primary" style="width: 4rem; height: 4rem; border-width: 0.25em;" role="status"></div>
+      <div class="spinner-border text-primary" style="width: 4rem; height: 4rem; border-width: 0.25em;" role="status">
+      </div>
     </div>
-    
+
     <div class="status-card bg-white p-4 rounded-4 shadow-lg border border-primary-subtle" style="min-width: 400px;">
       <h4 class="fw-bold text-dark mb-2">Executing Data Migration</h4>
-      
+
       <div class="active-job-highlight py-2 px-3 bg-primary-subtle rounded-pill mb-3">
         <span class="text-primary fw-bold">
           <i class="feather icon-activity me-2"></i> {{ activeJobStatus }}
@@ -752,10 +764,10 @@
       </div>
 
       <div class="progress mb-2" style="height: 10px;">
-        <div class="progress-bar progress-bar-striped progress-bar-animated" 
-             [style.width.%]="(completedJobsCount / migrationQueue.length) * 100"></div>
+        <div class="progress-bar progress-bar-striped progress-bar-animated"
+          [style.width.%]="(completedJobsCount / migrationQueue.length) * 100"></div>
       </div>
-      
+
       <p class="text-muted small mb-0">
         Processed {{ completedJobsCount }} of {{ migrationQueue.length }} objects
       </p>
@@ -771,13 +783,15 @@
         <i class="feather icon-info fs-3"></i>
         <div>
           Review your entire migration batch below. You are about to migrate data into <strong>{{
-          getAllMigrationPlans().length }}</strong> object(s). They will be processed in the order shown below.
+            getAllMigrationPlans().length }}</strong> object(s). They will be processed in the order shown below.
         </div>
       </div>
 
-      <div class="d-flex flex-wrap justify-content-between align-items-center bg-primary-subtle p-3 rounded border border-primary shadow-sm mb-4">
+      <div
+        class="d-flex flex-wrap justify-content-between align-items-center bg-primary-subtle p-3 rounded border border-primary shadow-sm mb-4">
         <div class="d-flex align-items-center gap-3 mb-2 mb-md-0">
-          <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm" style="width: 40px; height: 40px;">
+          <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm"
+            style="width: 40px; height: 40px;">
             <i class="feather icon-sliders fs-5"></i>
           </div>
           <div>
@@ -787,17 +801,13 @@
         </div>
 
         <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle">
-  <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Record Size:</label>
-  <input type="number"
-         class="form-control form-control-sm border-primary border-2 fw-bold text-primary"
-         [(ngModel)]="batchSize"
-         [disabled]="isMigrating"
-         min="10"
-         max="10000"
-         step="1000"
-         style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
-  <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10000)</span></span>
-</div>
+          <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Record
+            Size:</label>
+          <input type="number" class="form-control form-control-sm border-primary border-2 fw-bold text-primary"
+            [(ngModel)]="batchSize" [disabled]="isMigrating" min="10" max="10000" step="1000"
+            style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
+          <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10000)</span></span>
+        </div>
       </div>
 
       @for (plan of getAllMigrationPlans(); track $index) {
@@ -852,31 +862,31 @@
 
 
 
-     <div class="d-flex flex-wrap justify-content-between align-items-center mt-4 pt-3 border-top gap-3">
-        
+      <div class="d-flex flex-wrap justify-content-between align-items-center mt-4 pt-3 border-top gap-3">
+
         <div class="d-flex gap-2">
-          <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" 
-                  [disabled]="isMigrating" (click)="currentStep = 3">
+          <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" [disabled]="isMigrating"
+            (click)="currentStep = 3">
             <i class="feather icon-arrow-left"></i> Back to Mapping
           </button>
-          
-          <button class="btn btn-outline-info shadow-sm d-flex align-items-center gap-2" 
-                  [disabled]="isMigrating" (click)="downloadMappingReceipt()">
+
+          <button class="btn btn-outline-info shadow-sm d-flex align-items-center gap-2" [disabled]="isMigrating"
+            (click)="downloadMappingReceipt()">
             <i class="feather icon-printer"></i> Export Mapping Report
           </button>
         </div>
 
         <button class="btn shadow-lg d-flex align-items-center gap-2 px-4 fw-bold"
-          [class.btn-danger]="isDeleteOnlyBatch"
-          [class.btn-success]="!isDeleteOnlyBatch"
-          [disabled]="isMigrating"
+          [class.btn-danger]="isDeleteOnlyBatch" [class.btn-success]="!isDeleteOnlyBatch" [disabled]="isMigrating"
           (click)="startMigration()">
 
           @if (isMigrating) {
-            <span class="spinner-border spinner-border-sm"></span> Executing {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }}...
+          <span class="spinner-border spinner-border-sm"></span> Executing {{ isDeleteOnlyBatch ? 'Deletion' :
+          'Migration' }}...
           } @else {
-            <i class="feather" [class.icon-trash-2]="isDeleteOnlyBatch" [class.icon-check-circle]="!isDeleteOnlyBatch"></i>
-            Confirm & Start {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Batch
+          <i class="feather" [class.icon-trash-2]="isDeleteOnlyBatch"
+            [class.icon-check-circle]="!isDeleteOnlyBatch"></i>
+          Confirm & Start {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Batch
           }
 
         </button>
@@ -905,7 +915,8 @@
         <div class="animation-container py-3">
           <i class="feather icon-alert-circle text-warning" style="font-size: 5rem;"></i>
           <h2 class="text-warning mt-3 fw-bold">Partial {{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Complete</h2>
-          <p class="text-muted fs-5 mt-2">Some records were processed, but <strong>{{ migrationSummary.failed }}</strong>
+          <p class="text-muted fs-5 mt-2">Some records were processed, but <strong>{{ migrationSummary.failed
+              }}</strong>
             records encountered errors.</p>
         </div>
         }

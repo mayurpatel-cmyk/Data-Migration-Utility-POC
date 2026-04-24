@@ -2,7 +2,7 @@
 import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { read, utils, WorkBook ,write } from 'xlsx';
+import { read, utils, WorkBook, write } from 'xlsx';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
@@ -50,7 +50,7 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
   private eRef = inject(ElementRef);
-  private route = inject(ActivatedRoute); 
+  private route = inject(ActivatedRoute);
   private router = inject(Router);
   private authService = inject(AuthService);
   private dataTransfer = inject(DataTransferService);
@@ -103,76 +103,76 @@ export class DefaultComponent implements OnInit {
   completedJobsCount: number = 0;
 
 
-ngOnInit() {
-    const transferred = this.dataTransfer.getValidatedData(); 
-  
+  ngOnInit() {
+    const transferred = this.dataTransfer.getValidatedData();
+
     // Check if we have an array of jobs transferred from Validation
     if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
-       console.log("📥 Received Clean Data from Validation:", transferred.data);
-       
-       const newWorkbook = utils.book_new();
-       this.availableSheets = [];
-       
-       // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
-       transferred.data.forEach((job: any, index: number) => {
-          const sheetName = (job.sheetName || `Sheet${index+1}`).substring(0, 31);
-          const worksheet = utils.json_to_sheet(job.results.validRecords);
-          
-          utils.book_append_sheet(newWorkbook, worksheet, sheetName);
-          this.availableSheets.push(sheetName);
-       });
-       
-       // Bind the new workbook and file to the UI
-       this.workbook = newWorkbook;
-       this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      console.log("📥 Received Clean Data from Validation:", transferred.data);
 
-       // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
-       
-       this.migrationQueue = []; // Reset just in case
+      const newWorkbook = utils.book_new();
+      this.availableSheets = [];
 
-       transferred.data.forEach((job: any, index: number) => {
-         // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
-         const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
-             csvField: m.csvField,
-             sfField: m.sfField,
-             type: m.type,
-             // Note: Relationship lookup fields won't be fully auto-resolved here because 
-             // we don't have the parent object data from Step 1, but standard fields will map perfectly.
-             relationalExtIdField: '', 
-             parentObjectName: undefined
-         }));
+      // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
+      transferred.data.forEach((job: any, index: number) => {
+        const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
+        const worksheet = utils.json_to_sheet(job.results.validRecords);
 
-         // Push directly into the execution queue
-         this.migrationQueue.push({
-             sheetName: (job.sheetName || `Sheet${index+1}`).substring(0, 31),
-             targetObject: job.targetObject,
-             csvHeaders: Object.keys(job.results.validRecords[0] || {}),
-             mappings: enhancedMappings,
-             operationMode: 'insert', // Default to insert, user can change later if needed
-             targetExtIdField: job.dedupeKey || ''
-         });
-       });
+        utils.book_append_sheet(newWorkbook, worksheet, sheetName);
+        this.availableSheets.push(sheetName);
+      });
 
-       // 2. We skip Step 2 and Step 3 completely!
-       // Take them directly to the final review screen
-       this.currentStep = 3;
-       this.selectedObject = '';
-       
-       this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
-       this.cdr.detectChanges();
+      // Bind the new workbook and file to the UI
+      this.workbook = newWorkbook;
+      this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+      // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
+
+      this.migrationQueue = []; // Reset just in case
+
+      transferred.data.forEach((job: any, index: number) => {
+        // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
+        const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
+          csvField: m.csvField,
+          sfField: m.sfField,
+          type: m.type,
+          // Note: Relationship lookup fields won't be fully auto-resolved here because 
+          // we don't have the parent object data from Step 1, but standard fields will map perfectly.
+          relationalExtIdField: '',
+          parentObjectName: undefined
+        }));
+
+        // Push directly into the execution queue
+        this.migrationQueue.push({
+          sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
+          targetObject: job.targetObject,
+          csvHeaders: Object.keys(job.results.validRecords[0] || {}),
+          mappings: enhancedMappings,
+          operationMode: 'insert', // Default to insert, user can change later if needed
+          targetExtIdField: job.dedupeKey || ''
+        });
+      });
+
+      // 2. We skip Step 2 and Step 3 completely!
+      // Take them directly to the final review screen
+      this.currentStep = 3;
+      this.selectedObject = '';
+
+      this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
+      this.cdr.detectChanges();
 
     } else {
-       // Only show pop-up instructions if arriving manually
-       setTimeout(() => {
-         this.showMigrationInstructions();
-       }, 0);
+      // Only show pop-up instructions if arriving manually
+      setTimeout(() => {
+        this.showMigrationInstructions();
+      }, 0);
     }
 
     // --- OAUTH LOGIC ALWAYS RUNS ---
     let hasInitialized = false;
 
     this.route.queryParams.subscribe(params => {
-      if (hasInitialized) return; 
+      if (hasInitialized) return;
 
       const token = params['token'];
       const instanceUrl = params['instanceUrl'];
@@ -183,7 +183,7 @@ ngOnInit() {
       setTimeout(() => {
         if (token && instanceUrl) {
           console.log('OAuth Callback Detected: Saving session...');
-          
+
           if (name) {
             localStorage.setItem('sf_user_name', name);
             this.displayName.set(name);
@@ -200,22 +200,22 @@ ngOnInit() {
             this.toastr.success('Connection Verified!', 'Welcome');
             this.loadSalesforceObjects();
           });
-          
+
         } else if (this.authService.isLoggedIn()) {
           const savedName = localStorage.getItem('sf_user_name');
           if (savedName) this.displayName.set(savedName);
-          
+
           this.loadSalesforceObjects();
         } else {
           this.router.navigate(['/login']);
         }
-      }, 0); 
+      }, 0);
     });
   }
 
   private loadSalesforceObjects() {
     this.isLoadingObjects = true;
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
 
     this.migrationService.getAllObjects().subscribe({
       next: (objects) => {
@@ -230,10 +230,10 @@ ngOnInit() {
           this.isLoadingObjects = false;
           this.cdr.detectChanges();
         });
-        
+
         if (err.status === 401) {
           this.toastr.error('Session expired. Please log in again.');
-          this.authService.logout(); 
+          this.authService.logout();
         } else {
           this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
         }
@@ -412,7 +412,7 @@ ngOnInit() {
 
   @HostListener('document:click', ['$event'])
   clickout(event: Event) {
-      this.closeAllDropdowns();
+    this.closeAllDropdowns();
   }
 
   getSfFieldMeta(fieldName: string): any {
@@ -467,7 +467,7 @@ ngOnInit() {
   onOperationModeChange() {
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
       const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
-      
+
       if (extIds.length === 1) {
         this.selectUpsertKey(extIds[0].name);
       }
@@ -482,7 +482,7 @@ ngOnInit() {
       const item = this.migrationQueue.splice(index, 1)[0];
       // Insert it one position higher
       this.migrationQueue.splice(index - 1, 0, item);
-      
+
       // Reset previews to prevent UI glitches when rows shift
       this.previewingItemIndex = null;
       this.showPreview = false;
@@ -496,7 +496,7 @@ ngOnInit() {
       const item = this.migrationQueue.splice(index, 1)[0];
       // Insert it one position lower
       this.migrationQueue.splice(index + 1, 0, item);
-      
+
       // Reset previews to prevent UI glitches when rows shift
       this.previewingItemIndex = null;
       this.showPreview = false;
@@ -532,13 +532,13 @@ ngOnInit() {
         targetExtIdField: this.targetExtIdField,
         mappings: activeMappings
       };
-      
+
       let templates = JSON.parse(localStorage.getItem('sf_mapping_templates') || '[]');
       // Overwrite if name already exists
       templates = templates.filter((t: any) => t.name !== templateName);
       templates.push({ name: templateName, data: template });
       localStorage.setItem('sf_mapping_templates', JSON.stringify(templates));
-      
+
       this.toastr.success(`Template "${templateName}" saved successfully!`, 'Template Saved');
     }
   }
@@ -568,10 +568,10 @@ ngOnInit() {
       const t = objectTemplates.find((x: any) => x.name === selectedName).data;
       this.operationMode = t.operationMode;
       this.targetExtIdField = t.targetExtIdField;
-      
+
       // Clear existing mappings
       this.mappings.forEach(m => { m.sfField = ''; m.parentObjectName = undefined; m.relationalExtIdField = ''; });
-      
+
       // Apply saved mappings
       t.mappings.forEach((savedMap: any) => {
         const match = this.mappings.find(m => m.csvField === savedMap.csvField);
@@ -579,14 +579,14 @@ ngOnInit() {
           match.sfField = savedMap.sfField;
           match.parentObjectName = savedMap.parentObjectName;
           match.relationalExtIdField = savedMap.relationalExtIdField;
-          
+
           // Trigger parent field load if it was a relational mapping
           if (match.parentObjectName) {
-             this.onSfFieldChange(match);
+            this.onSfFieldChange(match);
           }
         }
       });
-      
+
       this.toastr.success(`Loaded "${selectedName}"!`, 'Template Loaded');
       this.cdr.detectChanges();
     }
@@ -606,7 +606,7 @@ ngOnInit() {
     if (s1.length < s2.length) { longer = s2; shorter = s1; }
     const longerLength = longer.length;
     if (longerLength === 0) return 1.0;
-    
+
     const costs = new Array();
     for (let i = 0; i <= longer.length; i++) {
       let lastValue = i;
@@ -652,7 +652,7 @@ ngOnInit() {
               mapping.sfField = savedSfField.name;
               memoryCount++;
               this.onSfFieldChange(mapping);
-              return; 
+              return;
             }
           }
 
@@ -666,7 +666,7 @@ ngOnInit() {
             if (normalCsv === normalName || normalCsv === normalLabel) {
               bestMatch = field;
               highestScore = 1.0;
-              break; 
+              break;
             }
 
             const labelScore = this.getSimilarity(normalCsv, normalLabel);
@@ -764,7 +764,7 @@ ngOnInit() {
     return fields.sort((a, b) => {
       if (a.isRequired && !b.isRequired) return -1;
       if (!a.isRequired && b.isRequired) return 1;
-      
+
       const valA = (a.label || a.name || '').toLowerCase();
       const valB = (b.label || b.name || '').toLowerCase();
       return valA.localeCompare(valB);
@@ -964,7 +964,7 @@ ngOnInit() {
 
   goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
-    
+
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
@@ -998,8 +998,8 @@ ngOnInit() {
       }
 
       const enhancedMappings = this.confirmedMappings.map((mapping) => {
-      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-       return {
+        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+        return {
           ...mapping,
           type: fieldMeta?.type,
           referenceTo: fieldMeta?.referenceTo,
@@ -1050,7 +1050,7 @@ ngOnInit() {
     // Loop through the queue and extract every mapped field
     this.migrationQueue.forEach(job => {
       const activeMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
-      
+
       activeMappings.forEach(m => {
         // Handle potential commas in the CSV column headers to prevent formatting breaks
         const safeCsvCol = `"${m.csvField.replace(/"/g, '""')}"`;
@@ -1068,14 +1068,14 @@ ngOnInit() {
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    
+
     // Name the file with today's date for good record-keeping
     const dateStr = new Date().toISOString().split('T')[0];
     link.download = `Salesforce_Mapping_Receipt_${dateStr}.csv`;
-    
+
     link.click();
     window.URL.revokeObjectURL(url);
-    
+
     this.toastr.info('Mapping receipt downloaded. Keep this for your audit records!', 'Receipt Generated');
   }
 
@@ -1162,7 +1162,7 @@ ngOnInit() {
       }
     }).then(async (result) => {
       if (result.isConfirmed) {
-        
+
         this.isMigrating = true;
         this.completedJobsCount = 0;
         this.activeJobStatus = `Initializing sequence for ${this.migrationQueue.length} objects...`;
@@ -1173,102 +1173,102 @@ ngOnInit() {
         let allFailures: any[] = [];
         let allSuccesses: any[] = [];
 
-try {
-  // Process objects sequentially
-  for (let i = 0; i < this.migrationQueue.length; i++) {
-    const job = this.migrationQueue[i];
-    
-    this.activeJobStatus = `Preparing ${job.targetObject}...`;
-    this.cdr.detectChanges();
+        try {
+          // Process objects sequentially
+          for (let i = 0; i < this.migrationQueue.length; i++) {
+            const job = this.migrationQueue[i];
 
-    const worksheet = this.workbook!.Sheets[job.sheetName];
-    const rawData: any[] = utils.sheet_to_json(worksheet);
-    const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+            this.activeJobStatus = `Preparing ${job.targetObject}...`;
+            this.cdr.detectChanges();
 
-    // Sort if relational mapping exists
-    if (relationalMapping) {
-      const parentCsvColumn = relationalMapping.csvField;
-      rawData.sort((a, b) => {
-        const valA = String(a[parentCsvColumn] || '');
-        const valB = String(b[parentCsvColumn] || '');
-        return valA.localeCompare(valB);
-      });
-    }
+            const worksheet = this.workbook!.Sheets[job.sheetName];
+            const rawData: any[] = utils.sheet_to_json(worksheet);
+            const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
 
-    // --- NEW: Frontend Chunking Logic ---
-    const totalRecords = rawData.length;
-    const totalBatches = Math.ceil(totalRecords / this.batchSize);
+            // Sort if relational mapping exists
+            if (relationalMapping) {
+              const parentCsvColumn = relationalMapping.csvField;
+              rawData.sort((a, b) => {
+                const valA = String(a[parentCsvColumn] || '');
+                const valB = String(b[parentCsvColumn] || '');
+                return valA.localeCompare(valB);
+              });
+            }
 
-    // Loop through each batch for this specific object
-    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-  const startRecord = batchIndex * this.batchSize;
-  const endRecord = startRecord + this.batchSize;
-  const batchRecords = rawData.slice(startRecord, endRecord);
+            // --- NEW: Frontend Chunking Logic ---
+            const totalRecords = rawData.length;
+            const totalBatches = Math.ceil(totalRecords / this.batchSize);
 
-  // 1. SHOW PROCESSING STATUS
-  this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
-  this.cdr.detectChanges();
+            // Loop through each batch for this specific object
+            for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+              const startRecord = batchIndex * this.batchSize;
+              const endRecord = startRecord + this.batchSize;
+              const batchRecords = rawData.slice(startRecord, endRecord);
 
-  const singleBatchPayload = [{
-    targetObject: job.targetObject,
-    records: batchRecords, 
-    mappings: job.mappings,
-    targetExtIdField: job.targetExtIdField,
-    operationMode: job.operationMode,
-    batchSize: this.batchSize 
-  }];
+              // 1. SHOW PROCESSING STATUS
+              this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
+              this.cdr.detectChanges();
 
-     const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
+              const singleBatchPayload = [{
+                targetObject: job.targetObject,
+                records: batchRecords,
+                mappings: job.mappings,
+                targetExtIdField: job.targetExtIdField,
+                operationMode: job.operationMode,
+                batchSize: this.batchSize
+              }];
 
-  // 2. SHOW COMPLETED STATUS
-  this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
-  this.cdr.detectChanges();
-  
-  // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
-  await new Promise(resolve => setTimeout(resolve, 600));
+              const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
 
-  // Tally up the results
-  totalSuccess += response.stats?.success || 0;
-  totalFailed += response.stats?.failed || 0;
-  if (response.failures) allFailures = allFailures.concat(response.failures);
-  if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
-}
-    // --- End Frontend Chunking ---
+              // 2. SHOW COMPLETED STATUS
+              this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
+              this.cdr.detectChanges();
 
-    this.completedJobsCount++;
-    this.activeJobStatus = `Completed: ${job.targetObject}`;
-    this.cdr.detectChanges();
-    
-    // Brief visual pause before the next job starts
-    await new Promise(resolve => setTimeout(resolve, 800));
-  }
+              // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
+              await new Promise(resolve => setTimeout(resolve, 600));
 
-  // All Jobs Finished (Keep your existing finish logic here)
-  this.isMigrating = false;
-  this.migrationSummary = { success: totalSuccess, failed: totalFailed };
-  this.failedRecords = allFailures;
-  this.successfulRecords = allSuccesses;
+              // Tally up the results
+              totalSuccess += response.stats?.success || 0;
+              totalFailed += response.stats?.failed || 0;
+              if (response.failures) allFailures = allFailures.concat(response.failures);
+              if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+            }
+            // --- End Frontend Chunking ---
 
-  const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
+            this.completedJobsCount++;
+            this.activeJobStatus = `Completed: ${job.targetObject}`;
+            this.cdr.detectChanges();
 
-  if (totalSuccess > 0 && totalFailed === 0) {
-    this.toastr.success(msg, 'Migration Complete!');
-  } else if (totalSuccess > 0 && totalFailed > 0) {
-    this.toastr.warning(msg, 'Partial Migration');
-  } else {
-    this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
-  }
+            // Brief visual pause before the next job starts
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
 
-  this.currentStep = 5;
-  this.autoNavigate();
-  this.cdr.detectChanges();
+          // All Jobs Finished (Keep your existing finish logic here)
+          this.isMigrating = false;
+          this.migrationSummary = { success: totalSuccess, failed: totalFailed };
+          this.failedRecords = allFailures;
+          this.successfulRecords = allSuccesses;
 
-} catch (error: any) {
-  this.isMigrating = false;
-  const errMsg = error.error?.message || error.message || 'Check console for details';
-  this.toastr.error(errMsg, 'Server Error');
-  this.cdr.detectChanges();
-}
+          const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
+
+          if (totalSuccess > 0 && totalFailed === 0) {
+            this.toastr.success(msg, 'Migration Complete!');
+          } else if (totalSuccess > 0 && totalFailed > 0) {
+            this.toastr.warning(msg, 'Partial Migration');
+          } else {
+            this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
+          }
+
+          this.currentStep = 5;
+          this.autoNavigate();
+          this.cdr.detectChanges();
+
+        } catch (error: any) {
+          this.isMigrating = false;
+          const errMsg = error.error?.message || error.message || 'Check console for details';
+          this.toastr.error(errMsg, 'Server Error');
+          this.cdr.detectChanges();
+        }
       }
     });
   }
@@ -1435,7 +1435,7 @@ try {
     this.previewData = [];
     this.previewHeaders = [];
     this.previewingItemIndex = null;
-    
+
     // reset real time vars
     this.activeJobStatus = '';
     this.completedJobsCount = 0;
@@ -1476,7 +1476,7 @@ try {
     return issueFound;
   }
 
- overrideGoToReview() {
+  overrideGoToReview() {
 
     if (this.operationMode === 'upsert') {
       if (this.hasOrderingIssue()) {

@@ -12,7 +12,7 @@ exports.validateData = async (req, res) => {
     if (targetObject && req.sfConn) {
       try {
         const describeMeta = await req.sfConn.sobject(targetObject).describe();
-        
+
         describeMeta.fields.forEach(field => {
           sfRules[field.name] = {
             type: field.type,
@@ -31,8 +31,8 @@ exports.validateData = async (req, res) => {
             autoNumber: field.autoNumber,
             // Grab active picklist values (lowercase for easy matching)
             restrictedPicklist: field.restrictedPicklist,
-            picklistValues: field.picklistValues 
-              ? field.picklistValues.filter(p => p.active).map(p => p.value.toLowerCase()) 
+            picklistValues: field.picklistValues
+              ? field.picklistValues.filter(p => p.active).map(p => p.value.toLowerCase())
               : []
           };
         });
@@ -54,7 +54,7 @@ exports.validateData = async (req, res) => {
       signal: controller.signal
     });
 
-    clearTimeout(timeoutId); 
+    clearTimeout(timeoutId);
 
     if (!response.ok) throw new Error(`Python service status: ${response.status}`);
     const pythonData = await response.json();
