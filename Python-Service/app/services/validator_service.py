@@ -171,6 +171,8 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
             is_invalid = parsed_dates.isna() & ~is_empty
 
+            df[csv_col] = df[csv_col].astype(object)
+
             if sf_type == 'date':
                 df.loc[~is_invalid & ~is_empty, csv_col] = parsed_dates[~is_invalid & ~is_empty].dt.strftime('%Y-%m-%d')
             else:
@@ -185,6 +187,8 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             # Salesforce expects HH:mm:ss.SSSZ
             parsed_times = pd.to_datetime(df[csv_col], errors='coerce')
             is_invalid = parsed_times.isna() & ~is_empty
+
+            df[csv_col] = df[csv_col].astype(object)
             
             df.loc[~is_invalid & ~is_empty, csv_col] = parsed_times[~is_invalid & ~is_empty].dt.strftime('%H:%M:%S.000Z')
             df.loc[is_invalid, '_errors'] += f"[{csv_col}: Invalid Time Format.] "
@@ -207,21 +211,28 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
 
             
 
-    #  Safely replace BOTH NaN and NaT with None so JSON serialization doesn't crash FastAPI
-    df = df.astype(object).where(pd.notnull(df), None)
+# Safely replace BOTH NaN and NaT with None so JSON serialization doesn't crash FastAPI
+    # Using .replace is generally safer and more definitive than .where() for JSON prep
+    df = df.astype(object).replace({np.nan: None, pd.NaT: None})
 
     valid_df = df[valid_mask].drop(columns=['_errors'])
     invalid_df = df[~valid_mask]
 
+    # --- FIX: Avoid iterrows() to prevent Pandas from coercing None back into NaN ---
     invalid_records_output = []
-    for index, row in invalid_df.iterrows():
-        error_msg = str(row['_errors']).strip()
-        row_data = row.drop(labels=['_errors']).to_dict()
-        invalid_records_output.append({
-            "originalRow": row_data,
-            "errors": error_msg,
-            "rowNumber": index + 2 
-        })
+    
+    if not invalid_df.empty:
+        # Convert the dataframe to a list of dicts all at once
+        invalid_row_dicts = invalid_df.drop(columns=['_errors']).to_dict(orient="records")
+        invalid_errors = invalid_df['_errors'].tolist()
+        invalid_indices = invalid_df.index.tolist()
+
+        for i in range(len(invalid_row_dicts)):
+            invalid_records_output.append({
+                "originalRow": invalid_row_dicts[i],
+                "errors": str(invalid_errors[i]).strip(),
+                "rowNumber": invalid_indices[i] + 2 
+            })
 
     return {
         "stats": {
