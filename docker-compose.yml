@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: migration-backend
+    ports:
+      - "3000:3000"
+    # This ensures your backend restarts automatically if it crashes
+    restart: unless-stopped 
+
+  python-service:
+    build: 
+      context: ./Python-Service
+      dockerfile: Dockerfile
+    container_name: migration-python
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  frontend:
+    build: 
+      context: ./Frontend
+      dockerfile: Dockerfile
+    container_name: migration-frontend
+    ports:
+      - "8080:80"
+    # The frontend usually depends on the backend APIs to be up first
+    depends_on:
+      - backend
+      - python-service
+    restart: unless-stopped

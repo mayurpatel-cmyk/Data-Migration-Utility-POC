@@ -42,3 +42,11 @@ py -m pip install -r requirements.txt (Windows)
 2. FRONTEND: ng serve
 3. PYTHON(Linux): uvicorn app.main:app --reload --port 8000
 4. PYTHON(Windows): py -m uvicorn app.main:app --reload --port 8000
+
+## Container Application
+docker build -t test-backend .
+docker run -p 3000:3000 test-backend
+
+1. To build and start everything at once:-  docker-compose up --build
+2. To run them in the background:- docker-compose up -d --build
+3. To stop and remove all of them at once:- docker-compose down

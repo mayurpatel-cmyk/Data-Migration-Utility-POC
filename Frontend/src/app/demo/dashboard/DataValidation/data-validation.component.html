@@ -419,6 +419,16 @@
       </div>
       }
 
+      @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
+        <div class="mt-4 p-5 text-center bg-success-subtle border border-success rounded-4 shadow-sm">
+          <div class="mb-3">
+            <i class="feather icon-check-circle text-success" style="font-size: 4rem;"></i>
+          </div>
+          <h3 class="text-success-emphasis fw-bold">Validation 100% Successful!</h3>
+          <p class="text-muted mb-0">All <strong>{{ aggregateStats.valid }}</strong> records passed Salesforce schema checks and are ready to be migrated.</p>
+        </div>
+      }
+
       <div class="d-flex flex-wrap justify-content-between align-items-center mt-5 border-top pt-3 gap-3">
         <div class="d-flex gap-2">
           <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" (click)="currentStep = 1">
