@@ -1037,6 +1037,48 @@ ngOnInit() {
     return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
+  // --- DOWNLOAD MAPPING RECEIPT (AUDIT LOG) ---
+  downloadMappingReceipt() {
+    if (this.migrationQueue.length === 0) {
+      this.toastr.warning('There are no mappings to export.', 'Empty Queue');
+      return;
+    }
+
+    // Create the CSV Headers
+    let csvContent = 'Target Object,Source Sheet,Operation Mode,External ID Key,CSV Column,Salesforce Field,Relational Lookup Key\n';
+
+    // Loop through the queue and extract every mapped field
+    this.migrationQueue.forEach(job => {
+      const activeMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
+      
+      activeMappings.forEach(m => {
+        // Handle potential commas in the CSV column headers to prevent formatting breaks
+        const safeCsvCol = `"${m.csvField.replace(/"/g, '""')}"`;
+        const safeSfField = `"${m.sfField.replace(/"/g, '""')}"`;
+        const relation = m.type === 'reference' && m.relationalExtIdField ? `Linked via ${m.relationalExtIdField}` : 'N/A';
+        const safeExtId = job.targetExtIdField || 'N/A';
+
+        // Append the row
+        csvContent += `"${job.targetObject}","${job.sheetName}","${job.operationMode}","${safeExtId}",${safeCsvCol},${safeSfField},"${relation}"\n`;
+      });
+    });
+
+    // Trigger the browser download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    // Name the file with today's date for good record-keeping
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.download = `Salesforce_Mapping_Receipt_${dateStr}.csv`;
+    
+    link.click();
+    window.URL.revokeObjectURL(url);
+    
+    this.toastr.info('Mapping receipt downloaded. Keep this for your audit records!', 'Receipt Generated');
+  }
+
   // --- UPGRADED: Sequential Batch Processing ---
   startMigration() {
     this.showPreview = false;

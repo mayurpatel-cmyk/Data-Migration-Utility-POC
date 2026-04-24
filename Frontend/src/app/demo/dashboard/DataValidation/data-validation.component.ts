@@ -107,6 +107,28 @@ export class DataValidationComponent implements OnInit {
     if (mapping.isDropdownOpen) mapping.searchQuery = '';
   }
 
+  getSfFieldMeta(fieldName: string): any {
+    if (!fieldName) return null;
+    return this.sfFields.find((f) => f.name === fieldName);
+  }
+
+  getMissingRequiredFields(): string[] {
+    if (!this.sfFields || this.sfFields.length === 0) return [];
+    
+    // Get an array of all SF fields the user has currently mapped
+    const currentlyMapped = this.mappings.map(m => m.sfField).filter(val => val !== '');
+    
+    // Filter SF fields to find ones that are required BUT missing from the mapped list
+    const missingFields = this.sfFields.filter(f => {
+      // A field is required if SF explicitly flags it, or if it can't be null, doesn't have a default, and is createable
+      const isStrictlyRequired = f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
+      return isStrictlyRequired && !currentlyMapped.includes(f.name);
+    });
+
+    // Return the readable labels of the missing fields
+    return missingFields.map(f => f.label || f.name);
+  }
+
   getSfObjectLabel(objName: string): string {
     if (!objName) return '';
     const obj = this.sfObjects.find((o) => o.name === objName);
@@ -305,6 +327,22 @@ export class DataValidationComponent implements OnInit {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field before queueing.', 'No Mappings');
+      return;
+    }
+
+    // for Required Fields
+    const missingReqFields = this.getMissingRequiredFields();
+    if (missingReqFields.length > 0) {
+      Swal.fire({
+        title: 'Missing Required Fields!',
+        html: `Salesforce requires the following fields to create a <b>${this.selectedObject}</b>, but you haven't mapped them:<br><br>
+               <div class="text-danger fw-bold text-start p-3 bg-light border rounded mt-2" style="max-height: 150px; overflow-y: auto;">
+                 <i class="feather icon-alert-triangle me-1"></i> ${missingReqFields.join('<br><i class="feather icon-alert-triangle me-1"></i> ')}
+               </div><br>
+               <span class="small text-muted">Please map these columns or select "-- Ignore --" if you plan to update existing records instead.</span>`,
+        icon: 'error',
+        confirmButtonColor: '#0d6efd'
+      });
       return;
     }
 

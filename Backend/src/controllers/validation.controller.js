@@ -2,7 +2,7 @@ const logger = require('../utils/logger')(__filename);
 
 exports.validateData = async (req, res) => {
   const email = req.headers['user-email'];
-  const targetObject = req.body.targetObject; // Grab the object name
+  const targetObject = req.body.targetObject;
 
   try {
     logger.info(`Sending ${req.body.records.length} records to Python Data Engine...`);
@@ -13,7 +13,6 @@ exports.validateData = async (req, res) => {
       try {
         const describeMeta = await req.sfConn.sobject(targetObject).describe();
         
-        // Compress the massive Describe payload into a lightweight dictionary
         describeMeta.fields.forEach(field => {
           sfRules[field.name] = {
             type: field.type,
@@ -28,7 +27,7 @@ exports.validateData = async (req, res) => {
             idLookup: field.idLookup,
             createable: field.createable,
             updateable: field.updateable,
-            calculated: field.calculated, // Is it a Formula field?
+            calculated: field.calculated,
             autoNumber: field.autoNumber,
             // Grab active picklist values (lowercase for easy matching)
             restrictedPicklist: field.restrictedPicklist,

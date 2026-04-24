@@ -83,13 +83,13 @@
           </div>
         </div>
 
-        <div class="border rounded shadow-sm bg-white" style="overflow: visible !important;">
+      <div class="border rounded shadow-sm bg-white" style="overflow: visible !important;">
           <table class="table table-hover table-bordered align-middle mb-0" style="overflow: visible;">
             <thead class="table-light position-sticky top-0" style="z-index: 105;">
               <tr>
-                <th width="45%" class="py-3 ps-4">CSV Header</th>
-                <th width="55%" class="py-3">Salesforce Data Type Rule</th>
-              </tr>
+                <th width="30%" class="py-3 ps-4">CSV Header</th>
+                <th width="35%" class="py-3">Salesforce Field Mapping</th>
+                <th width="35%" class="py-3">Salesforce Rules & Limits</th> </tr>
             </thead>
             <tbody>
               @for (mapping of mappings; track mapping.csvField) {
@@ -140,6 +140,45 @@
                     }
                   </div>
                 </td>
+
+                <td class="bg-light">
+                  @if (mapping.sfField) {
+                    @if (getSfFieldMeta(mapping.sfField); as meta) {
+                      <div class="d-flex flex-wrap gap-1">
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2">
+                          {{ meta.type | uppercase }}
+                        </span>
+                        
+                        @if (meta.length && meta.type !== 'boolean' && meta.type !== 'date') {
+                          <span class="badge bg-white text-secondary border border-secondary-subtle px-2">
+                            Max: {{ meta.length }}
+                          </span>
+                        }
+
+                        @if (meta.isRequired || (!meta.nillable && meta.createable)) {
+                          <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 shadow-sm">
+                            <i class="feather icon-alert-circle"></i> Required
+                          </span>
+                        }
+
+                        @if (meta.unique || meta.externalId) {
+                          <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 shadow-sm">
+                            <i class="feather icon-key"></i> Unique
+                          </span>
+                        }
+
+                        @if (meta.type === 'reference') {
+                          <span class="badge bg-info-subtle text-info border border-info-subtle px-2">
+                            <i class="feather icon-link"></i> Lookup
+                          </span>
+                        }
+                      </div>
+                    }
+                  } @else {
+                    <span class="text-muted small fst-italic"><i class="feather icon-arrow-left me-1"></i> Map a field to view its rules</span>
+                  }
+                </td>
+
               </tr>
               }
             </tbody>
