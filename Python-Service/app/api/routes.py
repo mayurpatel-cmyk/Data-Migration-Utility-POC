@@ -78,8 +78,6 @@ async def validate_batch(
     mappings = payload.get("mappings", [])
     dedupe_key = payload.get("dedupeKey", "")
     sheet_name = payload.get("sheetName", "")
-    dynamic_country_map = payload.get("validCountries", {})
-    dynamic_state_map = payload.get("validStates", {})
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "") # <--- PREPARED: For UI Date Selection later
 
@@ -145,7 +143,7 @@ async def validate_batch(
                     
                     result = process_validation_batch(
                         records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
-                        country_map=dynamic_country_map, state_map=dynamic_state_map, sf_rules=sf_rules,
+                         sf_rules=sf_rules,
                         date_format=date_format
                     )
                     
@@ -165,7 +163,7 @@ async def validate_batch(
                 
                 result = process_validation_batch(
                     records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
-                    country_map=dynamic_country_map, state_map=dynamic_state_map, sf_rules=sf_rules,
+                     sf_rules=sf_rules,
                     date_format=date_format
                 )
                 
@@ -210,17 +208,13 @@ async def revalidate_batch_json(request: Request):
     records = payload.get("records", [])
     mappings = payload.get("mappings", [])
     dedupe_key = payload.get("dedupeKey", "")
-    dynamic_country_map = payload.get("validCountries", {})
-    dynamic_state_map = payload.get("validStates", {})
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
 
     result = process_validation_batch(
         records=records, 
         mappings=mappings, 
-        dedupe_key=dedupe_key, 
-        country_map=dynamic_country_map, 
-        state_map=dynamic_state_map, 
+        dedupe_key=dedupe_key,  
         sf_rules=sf_rules,
         date_format=date_format
     )

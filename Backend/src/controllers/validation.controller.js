@@ -144,6 +144,8 @@ exports.revalidateData = async (req, res) => {
             updateable: field.updateable,
             calculated: field.calculated,
             autoNumber: field.autoNumber,
+            controllerName: field.controllerName,
+            dependentValues: buildDependentPicklistMap(field, describeMeta.fields),
             restrictedPicklist: field.restrictedPicklist,
             picklistValues: field.picklistValues 
               ? field.picklistValues.filter(p => p.active).map(p => p.value.toLowerCase()) 

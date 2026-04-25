@@ -488,8 +488,6 @@ onObjectChange() {
         mappings: job.mappings,
         dedupeKey: job.dedupeKey,
         dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
-        validCountries: { "united states": "US", "canada": "CA" },
-        validStates: { "california": "CA", "new york": "NY" }
       };
       
       formData.append('config', JSON.stringify(config));
@@ -603,8 +601,6 @@ onObjectChange() {
       mappings: job.mappings,
       dedupeKey: job.dedupeKey,
       dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
-      validCountries: { "united states": "US", "canada": "CA" },
-      validStates: { "california": "CA", "new york": "NY" }
     };
 
     try {

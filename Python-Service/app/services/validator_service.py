@@ -1,8 +1,33 @@
 import pandas as pd
 import numpy as np
+import pycountry
 from app.utils.constants import is_valid_email
 
-def process_validation_batch(records: list, mappings: list, dedupe_key: str, country_map: dict, state_map: dict, sf_rules: dict, date_format: str = "") -> dict:
+def build_iso_maps():
+    c_map = {}
+    for c in pycountry.countries:
+        c_map[c.name.lower()] = c.alpha_2
+        if hasattr(c, 'official_name') and c.official_name:
+            c_map[c.official_name.lower()] = c.alpha_2
+    
+    # Add common aliases users frequently type in CSVs
+    c_map.update({
+        'usa': 'US', 'uk': 'GB', 'uae': 'AE', 
+        'united states of america': 'US', 'great britain': 'GB',
+        'south korea': 'KR', 'north korea': 'KP', 'russia': 'RU'
+    })
+
+    s_map = {}
+    for s in pycountry.subdivisions:
+        # ISO-3166-2 codes look like 'US-CA'. Salesforce StateCode expects just 'CA'.
+        s_map[s.name.lower()] = s.code.split('-')[-1]
+        
+    return c_map, s_map
+
+# Build these massive dictionaries exactly once when the server boots
+SF_COUNTRY_MAP, SF_STATE_MAP = build_iso_maps()
+
+def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_rules: dict, date_format: str = "") -> dict:
     if not records:
         return {"stats": {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}, "validRecords": [], "invalidRecords": []}
 
@@ -21,13 +46,16 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             df.loc[is_duplicate, '_errors'] += f"[{dedupe_key}: Duplicate Record. A prior row already uses this exact value.] "
             valid_mask &= ~is_duplicate
 
-    clean_country_map = {str(k).lower(): str(v) for k, v in country_map.items()}
-    clean_state_map = {str(k).lower(): str(v) for k, v in state_map.items()}
+    # ==========================================
+    # NEW: Detect Multi-Currency Org
+    # ==========================================
+    is_multi_currency_org = 'CurrencyIsoCode' in sf_rules
+    iso_code_mapped = any(m.get('sfField') == 'CurrencyIsoCode' for m in mappings)
 
     for mapping in mappings:
         csv_col = mapping.get('csvField')
         sf_field = mapping.get('sfField')
-        column_date_format = mapping.get('dateFormat', '')
+        column_date_format = mapping.get('dateFormat', '') 
         
         if csv_col not in df.columns or not sf_field:
             continue
@@ -68,10 +96,10 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
         if sf_type in ['string', 'textarea', 'phone', 'url']:
             max_len = field_rules.get('length', 255 if sf_type != 'textarea' else 32768)
             
-            if 'country' in sf_field.lower() and clean_country_map:
-                df[csv_col] = df[csv_col].astype(str).str.lower().map(clean_country_map).fillna(df[csv_col])
-            elif ('state' in sf_field.lower() or 'province' in sf_field.lower()) and clean_state_map:
-                df[csv_col] = df[csv_col].astype(str).str.lower().map(clean_state_map).fillna(df[csv_col])
+            if 'country' in sf_field.lower():
+                df[csv_col] = df[csv_col].astype(str).str.lower().map(SF_COUNTRY_MAP).fillna(df[csv_col])
+            elif ('state' in sf_field.lower() or 'province' in sf_field.lower()):
+                df[csv_col] = df[csv_col].astype(str).str.lower().map(SF_STATE_MAP).fillna(df[csv_col])
                 
             df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str[:max_len]
             
@@ -83,10 +111,36 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             valid_values = field_rules.get('picklistValues', [])
             is_restricted = field_rules.get('restrictedPicklist', True) 
             
+            # Standard Picklist Validation
             if valid_values and is_restricted:
                 is_invalid_picklist = ~df[csv_col].astype(str).str.lower().str.strip().isin(valid_values) & ~is_empty
                 df.loc[is_invalid_picklist, '_errors'] += f"[{csv_col}: Invalid Picklist Value. This field is restricted.] "
                 valid_mask &= ~is_invalid_picklist
+
+            # ==========================================
+            # NEW: Dependent Picklist Validation
+            # ==========================================
+            if field_rules.get('controllerName') and field_rules.get('dependentValues'):
+                controller_sf_name = field_rules.get('controllerName')
+                # Find which CSV column the user mapped the controller to
+                controller_csv_col = next((m.get('csvField') for m in mappings if m.get('sfField') == controller_sf_name), None)
+                
+                if controller_csv_col and controller_csv_col in df.columns:
+                    dep_map = field_rules.get('dependentValues')
+                    
+                    def is_valid_dependency(row):
+                        dep_val = str(row[csv_col]).strip().lower()
+                        if pd.isna(row[csv_col]) or dep_val in ['none', 'nan', '', '<na>']: return True
+                        
+                        ctrl_val = str(row[controller_csv_col]).strip().lower()
+                        allowed_values = dep_map.get(ctrl_val, [])
+                        return dep_val in allowed_values
+                    
+                    is_valid_dep = df.apply(is_valid_dependency, axis=1)
+                    is_invalid_dep = ~is_valid_dep & ~is_empty
+                    
+                    df.loc[is_invalid_dep, '_errors'] += f"[{csv_col}: Invalid dependent picklist value. It is not allowed for the selected '{controller_sf_name}' in this row.] "
+                    valid_mask &= ~is_invalid_dep
 
         elif sf_type == 'multipicklist':
             df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
@@ -118,9 +172,6 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             df.loc[is_invalid_email, '_errors'] += f"[{csv_col}: Invalid Email format.] "
             valid_mask &= ~is_invalid_email
 
-        # ==========================================
-        # FIX: BOOLEAN EDGE CASE
-        # ==========================================
         elif sf_type == 'boolean':
             lower_col = df[csv_col].astype(str).str.lower().str.strip()
             is_true = lower_col.isin(['true', '1', 'yes', 'y'])
@@ -168,9 +219,13 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, cou
             df.loc[is_invalid_precision, '_errors'] += f"[{csv_col}: Number too large. Limit is {max_int_digits} integer digits.] "
             valid_mask &= ~is_invalid_precision
 
-        # ==========================================
-        # FIX: DATE FORMATTING ENFORCEMENT
-        # ==========================================
+            # ==========================================
+            # NEW: Multi-Currency Validation Enforcement
+            # ==========================================
+            if sf_type == 'currency' and is_multi_currency_org and not iso_code_mapped:
+                df.loc[~is_empty, '_errors'] += f"[{csv_col}: Multi-Currency Org Detected. You mapped a currency amount, but forgot to map the 'CurrencyIsoCode' field. Salesforce may reject this row.] "
+                valid_mask &= is_empty
+
         elif sf_type in ['date', 'datetime']:
             # Apply the specific format if the user selected one
             if column_date_format:
