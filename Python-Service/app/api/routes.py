@@ -3,6 +3,7 @@ import os
 import tempfile
 import shutil
 import pandas as pd
+from openpyxl import load_workbook # <--- ADDED: For memory-efficient Excel streaming
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
 from app.services.validator_service import process_validation_batch
 
@@ -13,37 +14,36 @@ router = APIRouter()
 # ==========================================
 @router.post("/api/python/extract-headers")
 async def extract_headers(file: UploadFile = File(...)):
-    """
-    Reads ONLY the headers of a massive CSV or XLSX file 
-    without loading the actual data into memory.
-    """
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    ext = os.path.splitext(file.filename)[1].lower()
+    
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    temp_file_name = temp_file.name
+    temp_file.close() 
     
     try:
-        # Save the file temporarily
-        with open(temp_file.name, "wb") as buffer:
+        with open(temp_file_name, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         sheets = []
         headers_map = {}
 
-        if file.filename.endswith('.csv'):
-            # nrows=0 tells Pandas to ONLY read the column names, using almost 0 memory
-            df = pd.read_csv(temp_file.name, nrows=0)
+        if ext == '.csv':
+            df = pd.read_csv(temp_file_name, nrows=0)
             sheets = ["Sheet1"]
             headers_map["Sheet1"] = df.columns.tolist()
             
-        elif file.filename.endswith(('.xlsx', '.xls')):
-            # Read sheet names first
-            xls = pd.ExcelFile(temp_file.name)
-            sheets = xls.sheet_names
-            
-            # Extract headers for each sheet
+        elif ext in ['.xlsx', '.xls']:
+            # FIX: Stream headers safely without loading the whole file
+            wb = load_workbook(temp_file_name, read_only=True, data_only=True)
+            sheets = wb.sheetnames
             for sheet in sheets:
-                df = pd.read_excel(xls, sheet_name=sheet, nrows=0)
-                headers_map[sheet] = df.columns.tolist()
+                ws = wb[sheet]
+                # Grab just the very first row for headers
+                first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), [])
+                headers_map[sheet] = [str(h) if h is not None else f"Unnamed_{i}" for i, h in enumerate(first_row)]
+            wb.close()
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or XLSX.")
+            raise HTTPException(status_code=400, detail="Unsupported file format.")
 
         return {
             "sheets": sheets,
@@ -54,10 +54,12 @@ async def extract_headers(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
         
     finally:
-        # Always clean up the temporary file
         file.file.close()
-        if os.path.exists(temp_file.name):
-            os.remove(temp_file.name)
+        if os.path.exists(temp_file_name):
+            try:
+                os.remove(temp_file_name)
+            except PermissionError:
+                pass
 
 
 # ==========================================
@@ -75,13 +77,20 @@ async def validate_batch(
 
     mappings = payload.get("mappings", [])
     dedupe_key = payload.get("dedupeKey", "")
+    sheet_name = payload.get("sheetName", "")
     dynamic_country_map = payload.get("validCountries", {})
     dynamic_state_map = payload.get("validStates", {})
     sf_rules = payload.get("sfRules", {})
+    date_format = payload.get("dateFormat", "") # <--- PREPARED: For UI Date Selection later
 
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    ext = os.path.splitext(file.filename)[1].lower()
+
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    temp_file_name = temp_file.name
+    temp_file.close()
+
     try:
-        with open(temp_file.name, "wb") as buffer:
+        with open(temp_file_name, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         total_count = 0
@@ -89,27 +98,85 @@ async def validate_batch(
         total_invalid_count = 0
         total_duplicates = 0
         all_invalid_records = []
+        all_valid_records = []
 
-        # Process the file in safe chunks of 10,000 rows
-        chunk_iterator = pd.read_csv(temp_file.name, chunksize=10000)
+        if ext == '.csv':
+            chunk_iterator = pd.read_csv(temp_file_name, chunksize=10000)
+            
+            for chunk_df in chunk_iterator:
+                chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
+                chunk_records = chunk_df.to_dict(orient="records")
+                
+                result = process_validation_batch(
+                    records=chunk_records, mappings=mappings, dedupe_key=dedupe_key, 
+                    country_map=dynamic_country_map, state_map=dynamic_state_map, sf_rules=sf_rules,
+                    date_format=date_format
+                )
+                
+                total_count += result["stats"]["total"]
+                total_valid += result["stats"]["valid"]
+                total_invalid_count += result["stats"]["invalid"]
+                total_duplicates += result["stats"]["duplicates"]
+                all_invalid_records.extend(result["invalidRecords"])
+                all_valid_records.extend(result["validRecords"])
 
-        for chunk_df in chunk_iterator:
-            chunk_records = chunk_df.replace({pd.NA: None}).to_dict(orient="records")
+        elif ext in ['.xlsx', '.xls']:
+            # FIX: Open the Excel file in read-only streaming mode to prevent RAM spikes
+            wb = load_workbook(temp_file_name, read_only=True, data_only=True)
+            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+            
+            rows_iter = ws.iter_rows(values_only=True)
+            headers_raw = next(rows_iter, [])
+            headers = [str(h) if h is not None else f"Unnamed_{i}" for i, h in enumerate(headers_raw)]
 
-            result = process_validation_batch(
-                records=chunk_records, 
-                mappings=mappings, 
-                dedupe_key=dedupe_key, 
-                country_map=dynamic_country_map, 
-                state_map=dynamic_state_map, 
-                sf_rules=sf_rules
-            )
-
-            total_count += result["stats"]["total"]
-            total_valid += result["stats"]["valid"]
-            total_invalid_count += result["stats"]["invalid"]
-            total_duplicates += result["stats"]["duplicates"]
-            all_invalid_records.extend(result["invalidRecords"])
+            chunk_records = []
+            
+            # Manually stream and chunk the rows
+            for row in rows_iter:
+                # Skip entirely blank rows at the bottom of sheets
+                if not any(row): continue 
+                
+                chunk_records.append(dict(zip(headers, row)))
+                
+                # Yield when we hit 10,000 records
+                if len(chunk_records) == 10000:
+                    chunk_df = pd.DataFrame(chunk_records)
+                    chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
+                    
+                    result = process_validation_batch(
+                        records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
+                        country_map=dynamic_country_map, state_map=dynamic_state_map, sf_rules=sf_rules,
+                        date_format=date_format
+                    )
+                    
+                    total_count += result["stats"]["total"]
+                    total_valid += result["stats"]["valid"]
+                    total_invalid_count += result["stats"]["invalid"]
+                    total_duplicates += result["stats"]["duplicates"]
+                    all_invalid_records.extend(result["invalidRecords"])
+                    all_valid_records.extend(result["validRecords"])
+                    
+                    chunk_records = [] # Reset for next batch
+            
+            # Process the final leftover records
+            if chunk_records:
+                chunk_df = pd.DataFrame(chunk_records)
+                chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
+                
+                result = process_validation_batch(
+                    records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
+                    country_map=dynamic_country_map, state_map=dynamic_state_map, sf_rules=sf_rules,
+                    date_format=date_format
+                )
+                
+                total_count += result["stats"]["total"]
+                total_valid += result["stats"]["valid"]
+                total_invalid_count += result["stats"]["invalid"]
+                total_duplicates += result["stats"]["duplicates"]
+                all_invalid_records.extend(result["invalidRecords"])
+                all_valid_records.extend(result["validRecords"])
+                
+            wb.close()
 
         return {
             "stats": {
@@ -118,15 +185,20 @@ async def validate_batch(
                 "invalid": total_invalid_count,
                 "duplicates": total_duplicates
             },
-            "invalidRecords": all_invalid_records
+            "invalidRecords": all_invalid_records,
+            "validRecords": all_valid_records
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+        
     finally:
         file.file.close()
-        if os.path.exists(temp_file.name):
-            os.remove(temp_file.name)
+        if os.path.exists(temp_file_name):
+            try:
+                os.remove(temp_file_name)
+            except PermissionError:
+                pass
 
 
 # ==========================================
@@ -141,6 +213,7 @@ async def revalidate_batch_json(request: Request):
     dynamic_country_map = payload.get("validCountries", {})
     dynamic_state_map = payload.get("validStates", {})
     sf_rules = payload.get("sfRules", {})
+    date_format = payload.get("dateFormat", "")
 
     result = process_validation_batch(
         records=records, 
@@ -148,7 +221,8 @@ async def revalidate_batch_json(request: Request):
         dedupe_key=dedupe_key, 
         country_map=dynamic_country_map, 
         state_map=dynamic_state_map, 
-        sf_rules=sf_rules
+        sf_rules=sf_rules,
+        date_format=date_format
     )
     
     return result

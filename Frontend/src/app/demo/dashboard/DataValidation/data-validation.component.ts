@@ -51,9 +51,9 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
+  selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  // Updated Mapping Interface to handle Dropdown UI state
-  mappings: { csvField: string, sfField: string, type: string, isDropdownOpen?: boolean, searchQuery?: string }[] = [];
+ mappings: { csvField: string, sfField: string, type: string, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -74,7 +74,7 @@ export class DataValidationComponent implements OnInit {
   }
 
   getPreviewRecords(records: any[]): any[] {
-    return records ? records.slice(0, 50) : []; // Limit preview to 50 rows for performance
+    return records ? records.slice(0, 50) : [];
   }
 
   ngOnInit() {
@@ -84,7 +84,6 @@ export class DataValidationComponent implements OnInit {
     });
   }
 
-  // --- DROPDOWN UI LOGIC ---
   @HostListener('document:click', ['$event'])
   clickout(event: Event) {
     this.closeAllDropdowns();
@@ -111,14 +110,12 @@ export class DataValidationComponent implements OnInit {
     if (mapping.isDropdownOpen) mapping.searchQuery = '';
   }
 
-  // Get a list of only the jobs that actually have errors for the dropdown
   get errorJobs() {
     return this.validationQueue
       .map((job, index) => ({ job, index }))
       .filter(item => item.job.results?.invalidRecords?.length > 0);
   }
 
-  // Slice the records for the current page
   get paginatedErrorRecords() {
     if (this.selectedErrorJobIndex === -1 || !this.validationQueue[this.selectedErrorJobIndex]) return [];
     const records = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords;
@@ -126,14 +123,12 @@ export class DataValidationComponent implements OnInit {
     return records.slice(start, start + this.errorPageSize);
   }
 
-  // Calculate total pages for the selected object
   get errorTotalPages() {
     if (this.selectedErrorJobIndex === -1 || !this.validationQueue[this.selectedErrorJobIndex]) return 1;
     const total = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords.length;
     return Math.ceil(total / this.errorPageSize) || 1;
   }
 
-  // Get the upper bound number for the "Showing X to Y" text
   get currentErrorMaxBound() {
     if (this.selectedErrorJobIndex === -1) return 0;
     const total = this.validationQueue[this.selectedErrorJobIndex].results.invalidRecords.length;
@@ -155,18 +150,11 @@ export class DataValidationComponent implements OnInit {
 
   getMissingRequiredFields(): string[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-
-    // Get an array of all SF fields the user has currently mapped
     const currentlyMapped = this.mappings.map(m => m.sfField).filter(val => val !== '');
-
-    // Filter SF fields to find ones that are required BUT missing from the mapped list
     const missingFields = this.sfFields.filter(f => {
-      // A field is required if SF explicitly flags it, or if it can't be null, doesn't have a default, and is createable
       const isStrictlyRequired = f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
       return isStrictlyRequired && !currentlyMapped.includes(f.name);
     });
-
-    // Return the readable labels of the missing fields
     return missingFields.map(f => f.label || f.name);
   }
 
@@ -206,52 +194,54 @@ export class DataValidationComponent implements OnInit {
     this.updateFieldType(mapping, fieldName);
   }
 
-  // --- DATA LOADING LOGIC ---
-async onFileSelected(event: any) {
-  const file = event.target.files[0];
-  if (!file) return;
-  this.selectedFile = file;
-  this.availableSheets = [];
-  this.csvHeaders = [];
+  async onFileSelected(event: any) {
+    const file = event.target.files[0];
+    if (!file) return;
+    this.selectedFile = file;
+    this.availableSheets = [];
+    this.csvHeaders = [];
 
-  // 1. Create FormData to send just the file
-  const formData = new FormData();
-  formData.append('file', file);
-
-  try {
-    // 2. Call a new backend endpoint specifically for extracting headers fast
-    this.toastr.info('Extracting file headers...', 'Reading File');
-    
-    // Assuming you add an 'extractHeaders' method to your api service
-    const res: any = await firstValueFrom(this.validationApi.extractHeaders(formData));
-    
-    this.availableSheets = res.sheets; // e.g., ["Sheet1", "Sheet2"]
-    
-    // Store headers per sheet. Example: { "Sheet1": ["Name", "Email"], "Sheet2": ["ID", "Phone"] }
-    this.allHeadersMap = res.headersMap; 
-    
-    if (this.availableSheets.length > 0) {
-      this.onSheetSelect(this.availableSheets[0]);
+    // ADDED: 50MB Warning for Excel files
+    if ((file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) && file.size > 50 * 1024 * 1024) {
+      this.toastr.warning(
+        'Large Excel files process slowly. For best performance, consider converting this file to .CSV before uploading.', 
+        'Large File Warning', 
+        { timeOut: 8000 }
+      );
     }
-  } catch (error) {
-    this.toastr.error('Failed to read file headers. The file might be corrupted.');
-  }
-}
 
-onSheetSelect(sheetName: string) {
-  this.selectedSheetName = sheetName;
-  // Grab the headers for this specific sheet returned from the backend
-  this.csvHeaders = this.allHeadersMap[sheetName] || [];
-  
-  // Notice we are NO LONGER setting this.rawData = ... (We don't want 500k rows in UI)
-  this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
-  this.cdr.detectChanges();
-}
-  onObjectChange() {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      this.toastr.info('Extracting file headers...', 'Reading File');
+      const res: any = await firstValueFrom(this.validationApi.extractHeaders(formData));
+      
+      this.availableSheets = res.sheets; 
+      this.allHeadersMap = res.headersMap; 
+      
+      if (this.availableSheets.length > 0) {
+        this.onSheetSelect(this.availableSheets[0]);
+      }
+    } catch (error) {
+      this.toastr.error('Failed to read file headers. The file might be corrupted.');
+    }
+  }
+
+ onSheetSelect(sheetName: string) {
+    this.selectedSheetName = sheetName;
+    this.csvHeaders = this.allHeadersMap[sheetName] || [];
+    // Added dateFormat to initialization
+    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '' }));
+    this.cdr.detectChanges();
+  }
+
+onObjectChange() {
     if (!this.selectedObject) return;
     this.migrationService.getObjectFields(this.selectedObject).subscribe((res: any) => {
       this.sfFields = res.fields || res;
-      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
+      // Added dateFormat to initialization
+      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '' }));
       this.cdr.detectChanges();
     });
   }
@@ -267,7 +257,6 @@ onSheetSelect(sheetName: string) {
     }
   }
 
-  // --- AUTO-MAP LOGIC ---
   getConfirmedCount(): number {
     return this.mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
@@ -373,7 +362,6 @@ onSheetSelect(sheetName: string) {
     });
   }
 
-  // --- QUEUE LOGIC ---
   addToQueue() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -381,7 +369,6 @@ onSheetSelect(sheetName: string) {
       return;
     }
 
-    // for Required Fields
     const missingReqFields = this.getMissingRequiredFields();
     if (missingReqFields.length > 0) {
       Swal.fire({
@@ -403,7 +390,6 @@ onSheetSelect(sheetName: string) {
       return;
     }
 
-    // Clean up mapping objects before passing them to the validation engine
     const cleanMappings = activeMappings.map(m => ({
       csvField: m.csvField,
       sfField: m.sfField,
@@ -422,7 +408,6 @@ onSheetSelect(sheetName: string) {
 
     this.toastr.success(`${this.selectedObject} added to validation queue!`, 'Queued');
 
-    // Reset Form for next selection
     this.selectedObject = '';
     this.dedupeKey = '';
     this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
@@ -430,32 +415,24 @@ onSheetSelect(sheetName: string) {
   }
 
   editQueuedItem(index: number) {
-    // 1. Remove the item from the queue
     const itemToEdit = this.validationQueue.splice(index, 1)[0];
-
-    // 2. Restore the basic form state
     this.selectedSheetName = itemToEdit.sheetName;
     this.selectedObject = itemToEdit.targetObject;
     this.rawData = [...itemToEdit.rawData];
     this.csvHeaders = [...itemToEdit.csvHeaders];
     this.dedupeKey = itemToEdit.dedupeKey || '';
 
-    // 3. Fetch the SF fields for this object to repopulate the dropdowns
-    this.isLoadingObjects = true; // Optional: If you have a loading spinner state
+    this.isLoadingObjects = true;
     this.migrationService.getObjectFields(this.selectedObject).subscribe({
       next: (res: any) => {
         this.sfFields = res.fields || res;
-
-        // 4. Reconstruct the full mappings array (including unmapped fields)
         this.mappings = this.csvHeaders.map(header => {
-          // Find if this header was previously mapped
           const existing = itemToEdit.mappings.find(m => m.csvField === header);
           return existing
             ? { ...existing, isDropdownOpen: false, searchQuery: '' }
             : { csvField: header, sfField: '', type: 'string', isDropdownOpen: false, searchQuery: '' };
         });
 
-        // 5. Ensure we are on Step 1 and scroll to top
         this.currentStep = 1;
         this.isLoadingObjects = false;
         this.cdr.detectChanges();
@@ -470,7 +447,7 @@ onSheetSelect(sheetName: string) {
     });
   }
 
- removeFromQueue(index: number) {
+  removeFromQueue(index: number) {
     const removedItem = this.validationQueue.splice(index, 1)[0];
     this.toastr.info(`Removed ${removedItem.targetObject} from the queue.`, 'Item Removed');
 
@@ -488,90 +465,83 @@ onSheetSelect(sheetName: string) {
     }
   }
 
-async runValidationQueue() {
-  if (this.validationQueue.length === 0) return;
+  async runValidationQueue() {
+    if (this.validationQueue.length === 0) return;
 
-  this.isValidating = true;
-  
-  // 1. ADD THESE TWO LINES HERE
-  let queueHasErrors = false;
-  let processedAtLeastOne = false;
+    this.isValidating = true;
+    let queueHasErrors = false;
+    let processedAtLeastOne = false;
 
-  for (const job of this.validationQueue) {
-    if (job.status === 'done') continue;
-    
-    // 2. MARK AS PROCESSED HERE
-    processedAtLeastOne = true;
-    
-    job.status = 'validating';
-    this.cdr.detectChanges();
+    for (const job of this.validationQueue) {
+      if (job.status === 'done') continue;
+      
+      processedAtLeastOne = true;
+      job.status = 'validating';
+      this.cdr.detectChanges();
 
-    const formData = new FormData();
-    formData.append('file', this.selectedFile as Blob, this.selectedFile!.name);
+      const formData = new FormData();
+      formData.append('file', this.selectedFile as Blob, this.selectedFile!.name);
 
-    // Package your mappings and rules into a stringified JSON object
-    const config = {
-      targetObject: job.targetObject,
-      sheetName: job.sheetName,
-      mappings: job.mappings,
-      dedupeKey: job.dedupeKey,
-      validCountries: { "united states": "US", "canada": "CA" },
-      validStates: { "california": "CA", "new york": "NY" }
-    };
-    
-    formData.append('config', JSON.stringify(config));
+      const config = {
+        targetObject: job.targetObject,
+        sheetName: job.sheetName,
+        mappings: job.mappings,
+        dedupeKey: job.dedupeKey,
+        dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
+        validCountries: { "united states": "US", "canada": "CA" },
+        validStates: { "california": "CA", "new york": "NY" }
+      };
+      
+      formData.append('config', JSON.stringify(config));
 
-    try {
-      // Send the file + config to Python
-      const res: any = await firstValueFrom(this.validationApi.validateData(formData));
-      job.results = res; 
-      job.status = 'done';
+      try {
+        const res: any = await firstValueFrom(this.validationApi.validateData(formData));
+        job.results = res; 
+        job.status = 'done';
 
-    } catch (error: any) {
-      job.status = 'error';
-      queueHasErrors = true;
+      } catch (error: any) {
+        job.status = 'error';
+        queueHasErrors = true;
 
-      if (error.name === 'TimeoutError') {
-        this.toastr.error(`Batch for ${job.targetObject} timed out (exceeded 5 minutes). The file is too large.`, 'Timeout Warning');
-      } else if (error.status === 504) {
-        this.toastr.error(`The Data Engine timed out processing ${job.targetObject}. Try splitting the file.`, 'Server Timeout');
-      } else if (error.error && error.error.message) {
-        this.toastr.error(error.error.message, `Error: ${job.targetObject}`);
-      } else {
-        this.toastr.error(`An unexpected error occurred while validating ${job.targetObject}.`, 'Validation Failed');
+        if (error.name === 'TimeoutError') {
+          this.toastr.error(`Batch for ${job.targetObject} timed out. The file is too large.`, 'Timeout Warning');
+        } else if (error.status === 504) {
+          this.toastr.error(`The Data Engine timed out processing ${job.targetObject}. Try splitting the file.`, 'Server Timeout');
+        } else if (error.error && error.error.message) {
+          this.toastr.error(error.error.message, `Error: ${job.targetObject}`);
+        } else {
+          this.toastr.error(`An unexpected error occurred while validating ${job.targetObject}.`, 'Validation Failed');
+        }
       }
+
+      const firstErrorIdx = this.validationQueue.findIndex(j => j.results?.invalidRecords?.length > 0);
+      this.selectedErrorJobIndex = firstErrorIdx !== -1 ? firstErrorIdx : -1;
+      this.errorCurrentPage = 1;
+
+      this.cdr.detectChanges();
     }
 
-    // Auto-select the first job with errors for the dropdown
-    const firstErrorIdx = this.validationQueue.findIndex(j => j.results?.invalidRecords?.length > 0);
-    this.selectedErrorJobIndex = firstErrorIdx !== -1 ? firstErrorIdx : -1;
-    this.errorCurrentPage = 1;
+    this.isValidating = false;
+    this.recalculateStats();
 
-    this.cdr.detectChanges();
-  }
+    if (this.aggregateStats.total > 0 || !queueHasErrors) {
+      this.currentStep = 2; 
 
-  this.isValidating = false;
-
-  this.recalculateStats();
-
-  if (this.aggregateStats.total > 0 || !queueHasErrors) {
-    this.currentStep = 2; // Trigger UI to move to Step 2
-
-    if (processedAtLeastOne) {
-      if (queueHasErrors) {
-        this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
+      if (processedAtLeastOne) {
+        if (queueHasErrors) {
+          this.toastr.warning(`Queue finished, but some objects failed.`, 'Partial Completion');
+        } else {
+          this.toastr.success(`Queue Validation Complete!`, 'Done');
+        }
       } else {
-        this.toastr.success(`Queue Validation Complete!`, 'Done');
+        this.toastr.info(`All items in the queue are already up-to-date.`, 'No New Validation Needed');
       }
     } else {
-      this.toastr.info(`All items in the queue are already up-to-date.`, 'No New Validation Needed');
+      this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
     }
-  } else {
-    this.toastr.error('Validation completely failed. Check the browser console.', 'Failed');
-  }
 
-  this.cdr.detectChanges();
-}
+    this.cdr.detectChanges();
+  }
 
   downloadCleanData() {
     const newWorkbook = utils.book_new();
@@ -580,7 +550,6 @@ async runValidationQueue() {
     this.validationQueue.forEach((job, index) => {
       if (job.results?.validRecords?.length > 0) {
         const worksheet = utils.json_to_sheet(job.results.validRecords);
-        // Ensure sheet names are unique and within Excel's 31-char limit
         const sheetTitle = (job.sheetName || `Clean_${job.targetObject}`).substring(0, 31);
         utils.book_append_sheet(newWorkbook, worksheet, sheetTitle);
         hasData = true;
@@ -626,7 +595,6 @@ async runValidationQueue() {
     this.toastr.info(`Re-validating ${job.targetObject} records...`, 'Processing');
     this.cdr.detectChanges();
 
-    // Extract the user-edited rows
     const recordsToTest = job.results.invalidRecords.map((ir: any) => ir.originalRow);
 
     const payload = {
@@ -634,6 +602,7 @@ async runValidationQueue() {
       records: recordsToTest,
       mappings: job.mappings,
       dedupeKey: job.dedupeKey,
+      dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
       validCountries: { "united states": "US", "canada": "CA" },
       validStates: { "california": "CA", "new york": "NY" }
     };
@@ -641,13 +610,8 @@ async runValidationQueue() {
     try {
       const res: any = await firstValueFrom(this.validationApi.revalidateData(payload));
 
-      // 1. Move newly fixed records into the valid bucket
       job.results.validRecords = [...(job.results.validRecords || []), ...res.validRecords];
-
-      // 2. Overwrite the invalid bucket with records that STILL have errors
       job.results.invalidRecords = res.invalidRecords;
-
-      // 3. Update the global stats UI
       this.recalculateStats();
 
       if (res.stats.valid > 0) {
@@ -662,7 +626,6 @@ async runValidationQueue() {
     }
 
     this.isValidating = false;
-    // If no errors remain for this object, auto-switch to the next one
     if (job.results.invalidRecords.length === 0) {
       const nextErrorIdx = this.validationQueue.findIndex(j => j.results?.invalidRecords?.length > 0);
       this.selectedErrorJobIndex = nextErrorIdx !== -1 ? nextErrorIdx : -1;
@@ -721,7 +684,6 @@ async runValidationQueue() {
 
     this.toastr.info('Routing queue to Migration engine...', 'Transferring');
 
-    // Force absolute routing path
     this.router.navigateByUrl('/data-import').then(success => {
       if (!success) {
         console.error("Angular Router failed to navigate to /data-import");

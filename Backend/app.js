@@ -31,7 +31,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/sf',sfRoutes );
 app.use('/api/migrate-data',migrateRoutes );
-app.use('/api/validate-data', validationRoutes);
+app.use('/api/validation', validationRoutes);
 
 
 // Export the app
