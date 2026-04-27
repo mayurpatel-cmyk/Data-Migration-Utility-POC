@@ -63,6 +63,9 @@ exports.validateData = async (req, res) => {
             calculated: field.calculated,
             autoNumber: field.autoNumber,
             controllerName: field.controllerName,
+            precision: field.precision,
+            scale: field.scale,
+            referenceTo: field.referenceTo,
             dependentValues: buildDependentPicklistMap(field, describeMeta.fields),
             restrictedPicklist: field.restrictedPicklist,
             picklistValues: field.picklistValues 

@@ -53,7 +53,7 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -231,7 +231,7 @@ export class DataValidationComponent implements OnInit {
  onSheetSelect(sheetName: string) {
     this.selectedSheetName = sheetName;
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true })); // <-- Added isActive
+    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
     this.cdr.detectChanges();
   }
 
@@ -239,9 +239,34 @@ export class DataValidationComponent implements OnInit {
     if (!this.selectedObject) return;
     this.migrationService.getObjectFields(this.selectedObject).subscribe((res: any) => {
       this.sfFields = res.fields || res;
-      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true })); // <-- Added isActive
+      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
       this.cdr.detectChanges();
     });
+  }
+
+  applyMassUpdate(job: any, csvField: string, value: string | undefined) {
+    if (value === undefined) value = '';
+    
+    // Check if there are actually records to update
+    if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
+
+    // Loop through ALL error records (not just the current page) and apply the value
+    job.results.invalidRecords.forEach((record: any) => {
+      record.originalRow[csvField] = value;
+      this.markAsEdited(record, csvField);
+    });
+
+    this.toastr.success(`Updated '${csvField}' across all ${job.results.invalidRecords.length} error records.`, 'Mass Update Applied');
+    this.cdr.detectChanges();
+  }
+
+  hasErrorsInColumn(job: any, csvField: string): boolean {
+    if (!job || !job.results || !job.results.invalidRecords) return false;
+    
+    // Python returns errors formatted exactly like: "[Email: Invalid format.]"
+    // We search the array to see if this column caused any of the failures.
+    const searchStr = `[${csvField}:`; 
+    return job.results.invalidRecords.some((record: any) => record.errors.includes(searchStr));
   }
 
   get allMappingsActive(): boolean {
@@ -453,7 +478,7 @@ export class DataValidationComponent implements OnInit {
           const existing = itemToEdit.mappings.find(m => m.csvField === header);
           return existing
             ? { ...existing, isDropdownOpen: false, searchQuery: '' }
-            : { csvField: header, sfField: '', type: 'string', isDropdownOpen: false, searchQuery: '' };
+            : { csvField: header, sfField: '', type: 'string', isDropdownOpen: false, searchQuery: '',massUpdateValue: '',dateFormat: '', };
         });
 
         this.currentStep = 1;

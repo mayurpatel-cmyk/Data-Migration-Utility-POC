@@ -405,17 +405,41 @@
           <div class="card-body p-0">
             <div class="table-responsive" style="max-height: 450px; overflow-y: auto;">
               <table class="table table-sm table-bordered align-middle mb-0" style="min-width: 800px;">
-                <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
+               <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
                   <tr>
-                    <th width="30%" class="text-danger fw-bold py-2 ps-3">Salesforce Error Rule</th>
+                    <th width="30%" class="text-danger fw-bold py-2 ps-3 align-middle bg-white">Salesforce Error Rule</th>
+                    
                     @for (mapping of selectedJob.mappings; track mapping.csvField) {
-                    <th class="py-2 align-middle" style="min-width: 160px;">
+                    <th class="py-2 align-middle transition-all" style="min-width: 180px;"
+                        [class.bg-danger-subtle]="hasErrorsInColumn(selectedJob, mapping.csvField)"
+                        [class.bg-white]="!hasErrorsInColumn(selectedJob, mapping.csvField)">
+                      
                       <div class="d-flex justify-content-between align-items-center gap-2">
                         <div>
-                          <span class="d-block text-dark fw-bold lh-1">{{ mapping.csvField }}</span>
+                          <span class="d-block fw-bold lh-1" 
+                                [class.text-danger]="hasErrorsInColumn(selectedJob, mapping.csvField)"
+                                [class.text-dark]="!hasErrorsInColumn(selectedJob, mapping.csvField)">
+                            {{ mapping.csvField }}
+                          </span>
                           <small class="text-primary" style="font-family: monospace;">{{ mapping.sfField }}</small>
                         </div>
+                        
+                        @if (hasErrorsInColumn(selectedJob, mapping.csvField)) {
+                          <span class="badge bg-danger shadow-sm"><i class="feather icon-alert-circle"></i> Error</span>
+                        }
                       </div>
+                      
+                      @if (hasErrorsInColumn(selectedJob, mapping.csvField)) {
+                      <div class="input-group input-group-sm mt-2 shadow-sm">
+                        <input type="text" class="form-control border-danger-subtle" placeholder="Fix all {{mapping.csvField}}..." 
+                               [(ngModel)]="mapping.massUpdateValue">
+                        <button class="btn btn-danger px-2" type="button" title="Apply to all error rows"
+                                (click)="applyMassUpdate(selectedJob, mapping.csvField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
+                          <i class="feather icon-check"></i>
+                        </button>
+                      </div>
+                      }
+
                     </th>
                     }
                   </tr>
