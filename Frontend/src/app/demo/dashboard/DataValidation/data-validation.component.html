@@ -114,114 +114,137 @@
 
         <div class="border rounded shadow-sm bg-white" style="overflow: visible !important;">
           <table class="table table-hover table-bordered align-middle mb-0" style="overflow: visible;">
-            <thead class="table-light position-sticky top-0" style="z-index: 105;">
+           <thead class="table-light position-sticky top-0" style="z-index: 105;">
               <tr>
-                <th width="30%" class="py-3 ps-4">CSV Header</th>
+                <th width="30%" class="py-3 ps-4 align-middle">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="form-check m-0 p-0 d-flex align-items-center">
+                      <input class="form-check-input m-0 cursor-pointer shadow-sm border-secondary" 
+                             type="checkbox" 
+                             [checked]="allMappingsActive" 
+                             (change)="toggleAllMappings($event)"
+                             style="width: 1.2rem; height: 1.2rem;" 
+                             title="Select/Deselect All Columns">
+                    </div>
+                    <span>CSV Header</span>
+                  </div>
+                </th>
                 <th width="35%" class="py-3">Salesforce Field Mapping</th>
                 <th width="35%" class="py-3">Salesforce Rules & Limits</th>
               </tr>
             </thead>
             <tbody>
               @for (mapping of mappings; track mapping.csvField) {
-              <tr class="position-relative" [style.z-index]="mapping.isDropdownOpen ? '1060' : 'auto'">
+              <tr class="position-relative" [style.z-index]="mapping.isDropdownOpen ? '1060' : 'auto'"
+                  [class.opacity-50]="!mapping.isActive" [class.bg-light]="!mapping.isActive">
 
-                <td class="fw-bold text-dark ps-4 align-middle">
-                  <i class="feather icon-file-text me-2 text-muted"></i> {{ mapping.csvField }}
+                <td class="fw-bold ps-4 align-middle" [class.text-dark]="mapping.isActive" [class.text-muted]="!mapping.isActive">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="form-check m-0 p-0 d-flex align-items-center">
+                      <input class="form-check-input m-0 cursor-pointer shadow-sm border-secondary" type="checkbox" 
+                             [(ngModel)]="mapping.isActive" (change)="toggleMappingActive(mapping)"
+                             style="width: 1.2rem; height: 1.2rem;">
+                    </div>
+                    <span><i class="feather icon-file-text me-1"></i> {{ mapping.csvField }}</span>
+                  </div>
                 </td>
 
                 <td>
-                  <div class="position-relative" (click)="$event.stopPropagation()">
-                    <div class="form-select form-select-sm cursor-pointer bg-white"
-                      (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
-                      {{ getSfFieldLabel(mapping.sfField) || '-- Ignore --' }}
-                    </div>
+                  @if (mapping.isActive) {
+                    <div class="position-relative" (click)="$event.stopPropagation()">
+                      <div class="form-select form-select-sm cursor-pointer bg-white"
+                        (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
+                        {{ getSfFieldLabel(mapping.sfField) || '-- Select Field --' }}
+                      </div>
 
-                    @if (mapping.isDropdownOpen) {
-                    <div
-                      class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
-                      style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
+                      @if (mapping.isDropdownOpen) {
+                      <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                        style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
 
-                      <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                        <div class="input-group input-group-sm">
-                          <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                          <input type="text" class="form-control" placeholder="Search by label or API name..."
-                            [(ngModel)]="mapping.searchQuery" autofocus>
+                        <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Search by label or API name..."
+                              [(ngModel)]="mapping.searchQuery" autofocus>
+                          </div>
                         </div>
-                      </div>
 
-                      <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1"
-                        (click)="selectField(mapping, '')">
-                        <i class="feather icon-x-circle me-1"></i> -- Ignore this column --
-                      </div>
+                        @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                          (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.sfField === field.name">
+                          {{ field.label }}
+                          <div class="small text-muted" style="font-family: monospace;">{{ field.name }} ({{ field.type }})</div>
+                        </div>
+                        }
 
-                      @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap"
-                        (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.sfField === field.name">
-                        {{ field.label }}
-                        <div class="small text-muted" style="font-family: monospace;">{{ field.name }} ({{ field.type
-                          }})</div>
-                      </div>
-                      }
-
-                      @if (getFilteredSfFields(mapping.searchQuery).length === 0) {
-                      <div class="text-center p-3 text-muted small">
-                        No fields found matching "{{ mapping.searchQuery }}"
+                        @if (getFilteredSfFields(mapping.searchQuery).length === 0) {
+                        <div class="text-center p-3 text-muted small">
+                          No fields found matching "{{ mapping.searchQuery }}"
+                        </div>
+                        }
                       </div>
                       }
                     </div>
-                    }
-                  </div>
+                  } @else {
+                    <div class="form-select form-select-sm bg-light text-muted" style="cursor: not-allowed;">
+                      <i class="feather icon-x-circle me-1"></i> -- Ignored --
+                    </div>
+                  }
                 </td>
 
                 <td class="bg-light">
-                  @if (mapping.sfField) {
-                  @if (getSfFieldMeta(mapping.sfField); as meta) {
-                  <div class="d-flex flex-column gap-2">
-                    <div class="d-flex flex-wrap gap-1">
-                      <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2">
-                        {{ meta.type | uppercase }}
-                      </span>
+                  @if (mapping.isActive) {
+                    @if (mapping.sfField) {
+                      @if (getSfFieldMeta(mapping.sfField); as meta) {
+                      <div class="d-flex flex-column gap-2">
+                        <div class="d-flex flex-wrap gap-1">
+                          <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2">
+                            {{ meta.type | uppercase }}
+                          </span>
 
-                      @if (meta.length && meta.type !== 'boolean' && meta.type !== 'date') {
-                      <span class="badge bg-white text-secondary border border-secondary-subtle px-2">
-                        Max: {{ meta.length }}
-                      </span>
-                      }
+                          @if (meta.length && meta.type !== 'boolean' && meta.type !== 'date') {
+                          <span class="badge bg-white text-secondary border border-secondary-subtle px-2">
+                            Max: {{ meta.length }}
+                          </span>
+                          }
 
-                      @if (meta.isRequired || (!meta.nillable && meta.createable)) {
-                      <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 shadow-sm">
-                        <i class="feather icon-alert-circle"></i> Required
-                      </span>
-                      }
+                          @if (meta.isRequired || (!meta.nillable && meta.createable)) {
+                          <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 shadow-sm">
+                            <i class="feather icon-alert-circle"></i> Required
+                          </span>
+                          }
 
-                      @if (meta.unique || meta.externalId) {
-                      <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 shadow-sm">
-                        <i class="feather icon-key"></i> Unique
-                      </span>
-                      }
+                          @if (meta.unique || meta.externalId) {
+                          <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 shadow-sm">
+                            <i class="feather icon-key"></i> Unique
+                          </span>
+                          }
 
-                      @if (meta.type === 'reference') {
-                      <span class="badge bg-info-subtle text-info border border-info-subtle px-2">
-                        <i class="feather icon-link"></i> Lookup
-                      </span>
-                      }
-                    </div>
+                          @if (meta.type === 'reference') {
+                          <span class="badge bg-info-subtle text-info border border-info-subtle px-2">
+                            <i class="feather icon-link"></i> Lookup
+                          </span>
+                          }
+                        </div>
 
-                    @if (meta.type === 'date' || meta.type === 'datetime') {
-                      <div class="bg-white p-2 border rounded shadow-sm">
-                        <label class="small fw-bold text-muted mb-1"><i class="feather icon-calendar"></i> CSV Date Format</label>
-                        <select class="form-select form-select-sm border-secondary-subtle" [(ngModel)]="mapping.dateFormat">
-                          <option value="">Auto-Detect (US Default)</option>
-                          <option value="%m/%d/%Y">MM/DD/YYYY (US format)</option>
-                          <option value="%d/%m/%Y">DD/MM/YYYY (UK/India format)</option>
-                          <option value="%Y-%m-%d">YYYY-MM-DD (ISO format)</option>
-                        </select>
+                        @if (meta.type === 'date' || meta.type === 'datetime') {
+                          <div class="bg-white p-2 border rounded shadow-sm">
+                            <label class="small fw-bold text-muted mb-1"><i class="feather icon-calendar"></i> CSV Date Format</label>
+                            <select class="form-select form-select-sm border-secondary-subtle" [(ngModel)]="mapping.dateFormat">
+                              <option value="">Auto-Detect (US Default)</option>
+                              <option value="%m/%d/%Y">MM/DD/YYYY (US format)</option>
+                              <option value="%d/%m/%Y">DD/MM/YYYY (UK/India format)</option>
+                              <option value="%Y-%m-%d">YYYY-MM-DD (ISO format)</option>
+                            </select>
+                          </div>
+                        }
                       </div>
+                      }
+                    } @else {
+                      <span class="text-muted small fst-italic"><i class="feather icon-arrow-left me-1"></i> Map a field to view its rules</span>
                     }
-                  </div>
-                  }
                   } @else {
-                  <span class="text-muted small fst-italic"><i class="feather icon-arrow-left me-1"></i> Map a field to view its rules</span>
+                    <span class="text-muted small fst-italic"><i class="feather icon-slash me-1"></i> Column will not be migrated</span>
                   }
                 </td>
 

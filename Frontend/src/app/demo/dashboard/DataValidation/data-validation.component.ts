@@ -53,7 +53,7 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
- mappings: { csvField: string, sfField: string, type: string, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -231,18 +231,41 @@ export class DataValidationComponent implements OnInit {
  onSheetSelect(sheetName: string) {
     this.selectedSheetName = sheetName;
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
-    // Added dateFormat to initialization
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '' }));
+    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true })); // <-- Added isActive
     this.cdr.detectChanges();
   }
 
-onObjectChange() {
+  onObjectChange() {
     if (!this.selectedObject) return;
     this.migrationService.getObjectFields(this.selectedObject).subscribe((res: any) => {
       this.sfFields = res.fields || res;
-      // Added dateFormat to initialization
-      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '' }));
+      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true })); // <-- Added isActive
       this.cdr.detectChanges();
+    });
+  }
+
+  get allMappingsActive(): boolean {
+    return this.mappings.length > 0 && this.mappings.every(m => m.isActive);
+  }
+
+  toggleMappingActive(mapping: any) {
+    // If the user unchecks the box, clear the mapped field
+    if (!mapping.isActive) {
+      mapping.sfField = '';
+      mapping.isDropdownOpen = false;
+    }
+  }
+
+  toggleAllMappings(event: any) {
+    const isChecked = event.target.checked;
+    this.mappings.forEach(mapping => {
+      mapping.isActive = isChecked;
+      
+      // If deselecting all, wipe out their field mappings for safety
+      if (!isChecked) {
+        mapping.sfField = '';
+        mapping.isDropdownOpen = false;
+      }
     });
   }
 

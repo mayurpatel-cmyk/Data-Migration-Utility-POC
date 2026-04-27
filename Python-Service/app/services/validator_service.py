@@ -38,13 +38,14 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
     valid_mask = pd.Series(True, index=df.index)
 
     duplicates_removed = 0
-    if dedupe_key and dedupe_key in df.columns:
-        is_duplicate = df.duplicated(subset=[dedupe_key], keep='first')
-        duplicates_removed = int(is_duplicate.sum())
+
+    is_duplicate = df.duplicated(keep='first') 
+    duplicates_removed = int(is_duplicate.sum())
+    
+    if duplicates_removed > 0:
         
-        if duplicates_removed > 0:
-            df.loc[is_duplicate, '_errors'] += f"[{dedupe_key}: Duplicate Record. A prior row already uses this exact value.] "
-            valid_mask &= ~is_duplicate
+        df.loc[is_duplicate, '_errors'] += "[Row: Duplicate Record. This exact row appears multiple times in the file.] "
+        valid_mask &= ~is_duplicate
 
     # ==========================================
     # NEW: Detect Multi-Currency Org
