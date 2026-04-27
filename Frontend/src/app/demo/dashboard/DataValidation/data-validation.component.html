@@ -89,6 +89,28 @@
             </button>
           </div>
         </div>
+          @if (getMissingRequiredFields().length > 0) {
+          <div class="alert alert-warning d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-warning-subtle">
+            <i class="feather icon-alert-triangle fs-4 me-3 text-warning"></i>
+            <div>
+              <h6 class="fw-bold mb-1 text-warning-emphasis" style="font-size: 0.85rem;">Salesforce Strictly Requires These Fields:</h6>
+              <div class="d-flex flex-wrap gap-1">
+                @for (reqField of getMissingRequiredFields(); track reqField) {
+                  <span class="badge bg-warning text-dark border border-warning-subtle shadow-sm">{{ reqField }}</span>
+                }
+              </div>
+            </div>
+          </div>
+        } @else {
+          <div class="alert alert-success d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-success-subtle">
+            <i class="feather icon-check-circle fs-5 me-2 text-success"></i>
+            <span class="fw-bold text-success-emphasis small">All Salesforce required fields are mapped!</span>
+          </div>
+        }
+
+        <div class="text-muted small fw-bold mb-2 px-1">
+          Mapped: <span class="text-primary">{{ getConfirmedCount() }} / {{ mappings.length }}</span> columns
+        </div>
 
         <div class="border rounded shadow-sm bg-white" style="overflow: visible !important;">
           <table class="table table-hover table-bordered align-middle mb-0" style="overflow: visible;">
