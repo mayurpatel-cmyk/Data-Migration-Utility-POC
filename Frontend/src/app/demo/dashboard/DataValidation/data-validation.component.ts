@@ -53,7 +53,7 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string, isRequired?: boolean }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string, isRequired?: boolean, picklistValues?: string[] }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -295,17 +295,25 @@ export class DataValidationComponent implements OnInit {
 
   applyMassUpdate(job: any, csvField: string, value: string | undefined) {
     if (value === undefined) value = '';
-    
-    // Check if there are actually records to update
-    if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
+    if (!job?.results?.invalidRecords) return;
 
-    // Loop through ALL error records (not just the current page) and apply the value
+    let updatedCount = 0;
+
+    // Loop through ALL error records, but ONLY apply the fix if that specific cell failed!
     job.results.invalidRecords.forEach((record: any) => {
-      record.originalRow[csvField] = value;
-      this.markAsEdited(record, csvField);
+      if (this.hasCellError(record, csvField)) {
+        record.originalRow[csvField] = value;
+        this.markAsEdited(record, csvField);
+        updatedCount++;
+      }
     });
 
-    this.toastr.success(`Updated '${csvField}' across all ${job.results.invalidRecords.length} error records.`, 'Mass Update Applied');
+    if (updatedCount > 0) {
+      this.toastr.success(`Updated '${csvField}' across ${updatedCount} records. Correct data was left untouched!`, 'Smart Update Applied');
+    } else {
+      this.toastr.info(`No records had an error in '${csvField}', so nothing was changed.`, 'No Updates Needed');
+    }
+    
     this.cdr.detectChanges();
   }
 
@@ -495,13 +503,18 @@ export class DataValidationComponent implements OnInit {
       const meta = this.getSfFieldMeta(m.sfField);
       const isReq = meta ? (meta.isRequired || (!meta.nillable && meta.createable && !meta.defaultedOnCreate)) : false;
 
+      const picklistVals = meta && meta.picklistValues 
+        ? meta.picklistValues.filter((p: any) => p.active).map((p: any) => p.value.toLowerCase()) 
+        : [];
+
       return {
         csvField: m.csvField,
         sfField: m.sfField,
         type: m.type,
         dateFormat: m.dateFormat || '',
         isActive: true,
-        isRequired: isReq
+        isRequired: isReq,
+        picklistValues: picklistVals
       };
     });
 
@@ -614,8 +627,7 @@ export class DataValidationComponent implements OnInit {
         targetObject: job.targetObject,
         sheetName: job.sheetName,
         mappings: job.mappings,
-        dedupeKey: job.dedupeKey,
-        dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
+        dedupeKey: job.dedupeKey
       };
       
       formData.append('config', JSON.stringify(config));
@@ -673,7 +685,7 @@ export class DataValidationComponent implements OnInit {
     const newWorkbook = utils.book_new();
     let hasData = false;
 
-    this.validationQueue.forEach((job, index) => {
+    this.validationQueue.forEach((job) => {
       if (job.results?.validRecords?.length > 0) {
         const worksheet = utils.json_to_sheet(job.results.validRecords);
         const sheetTitle = (job.sheetName || `Clean_${job.targetObject}`).substring(0, 31);
@@ -682,7 +694,10 @@ export class DataValidationComponent implements OnInit {
       }
     });
 
-    if (!hasData) return;
+    if (!hasData) {
+      this.toastr.warning('No valid data available to download.', 'Empty');
+      return;
+    }
 
     const wbout = write(newWorkbook, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([wbout], { type: 'application/octet-stream' });
@@ -715,31 +730,35 @@ export class DataValidationComponent implements OnInit {
 
   async revalidateJob(jobIndex: number) {
     const job = this.validationQueue[jobIndex];
-    if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
+    if (!job?.results?.invalidRecords?.length) return;
 
     this.isValidating = true;
     this.toastr.info(`Re-validating ${job.targetObject} records...`, 'Processing');
     this.cdr.detectChanges();
 
-    const recordsToTest = job.results.invalidRecords.map((ir: any) => ir.originalRow);
+    // Deep copy the records so we don't accidentally mutate live data
+    const recordsToTest = JSON.parse(JSON.stringify(job.results.invalidRecords.map((ir: any) => ir.originalRow)));
 
     const payload = {
       targetObject: job.targetObject,
       records: recordsToTest,
       mappings: job.mappings,
-      dedupeKey: job.dedupeKey,
-      dateFormat: this.selectedDateFormat, // <-- ADDED: Send Date Format to Python
+      dedupeKey: job.dedupeKey
     };
 
     try {
       const res: any = await firstValueFrom(this.validationApi.revalidateData(payload));
 
-      job.results.validRecords = [...(job.results.validRecords || []), ...res.validRecords];
-      job.results.invalidRecords = res.invalidRecords;
+      const previousValid = job.results.validRecords || [];
+      const newValid = res.validRecords || [];
+      
+      job.results.validRecords = [...previousValid, ...newValid]; // Combine them safely!
+      job.results.invalidRecords = res.invalidRecords || [];
+      
       this.recalculateStats();
 
-      if (res.stats.valid > 0) {
-        this.toastr.success(`Successfully fixed ${res.stats.valid} records!`, 'Errors Resolved');
+      if (newValid.length > 0) {
+        this.toastr.success(`Successfully fixed ${newValid.length} records!`, 'Errors Resolved');
       } else {
         this.toastr.warning('Records still contain errors. Please review them.', 'Still Invalid');
       }

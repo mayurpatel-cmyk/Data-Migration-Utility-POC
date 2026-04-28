@@ -144,23 +144,34 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
                     valid_mask &= ~is_invalid_dep
 
         elif sf_type == 'multipicklist':
+            # 1. Clean up common mistakes: Turn commas (,) and pipes (|) into Salesforce semicolons (;)
             df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
+          
+            has_junk = df[csv_col].astype(str).str.contains(r'[^a-zA-Z0-9\s;_-]', regex=True) & ~is_empty
+            if has_junk.any():
+                df.loc[has_junk, '_errors'] += f"[{csv_col}: Contains invalid special characters (e.g., #, @). Please use clean text separated by semicolons.] "
+                valid_mask &= ~has_junk
             
-            valid_values = field_rules.get('picklistValues', [])
-            is_restricted = field_rules.get('restrictedPicklist', True)
+            # 3. Try to get the rules from Salesforce
+            valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
             
-            if valid_values and is_restricted:
+            # 4. ONLY run strict validation if we successfully downloaded the rules from Salesforce
+            if valid_values:
                 def is_valid_multipicklist(val):
                     if pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'none': return True
                     items = [i.strip().lower() for i in str(val).split(';')]
                     return all(item in valid_values for item in items if item)
 
                 is_valid_multi = df[csv_col].apply(is_valid_multipicklist)
-                is_invalid_multi = ~is_valid_multi & ~is_empty
                 
-                df.loc[is_invalid_multi, '_errors'] += f"[{csv_col}: Invalid Multi-Select value. This field is restricted.] "
-                valid_mask &= ~is_invalid_multi
+                # We only want to flag invalid words if they haven't ALREADY been flagged for junk characters
+                is_invalid_multi = ~is_valid_multi & ~is_empty & ~has_junk
+                
+                if is_invalid_multi.any():
+                    df.loc[is_invalid_multi, '_errors'] += f"[{csv_col}: Invalid Multi-Select value. You must use exact allowed values separated by a semicolon (;)] "
+                    valid_mask &= ~is_invalid_multi
             
+            # 5. Format the final valid data perfectly for the Salesforce API
             df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s*;\s*', ';', regex=True)
 
         elif sf_type == 'email':
@@ -228,14 +239,20 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
                 valid_mask &= is_empty
 
         elif sf_type in ['date', 'datetime']:
-            # Apply the specific format if the user selected one
-            if column_date_format:
-                parsed_dates = pd.to_datetime(df[csv_col], format=column_date_format, errors='coerce')
-            else:
-                parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
+            # 1. Let Pandas auto-detect and parse standard string dates
+            parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
+
+            # 2. Catch and convert Excel Serial Dates (e.g., 44111)
+            cleaned_str = df[csv_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            is_serial_date = cleaned_str.str.isnumeric() & ~is_empty
+            
+            if is_serial_date.any():
+                excel_dates = pd.to_datetime(cleaned_str[is_serial_date].astype(float), unit='D', origin='1899-12-30', errors='coerce')
+                parsed_dates.update(excel_dates)
 
             is_invalid = parsed_dates.isna() & ~is_empty
 
+            # 3. Format exactly as Salesforce requires
             if sf_type == 'date':
                 df.loc[~is_invalid & ~is_empty, csv_col] = parsed_dates[~is_invalid & ~is_empty].dt.strftime('%Y-%m-%d')
             else:

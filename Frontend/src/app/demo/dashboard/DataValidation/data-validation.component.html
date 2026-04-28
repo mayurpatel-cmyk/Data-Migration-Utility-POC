@@ -236,18 +236,6 @@
                           </span>
                           }
                         </div>
-
-                        @if (meta.type === 'date' || meta.type === 'datetime') {
-                          <div class="bg-white p-2 border rounded shadow-sm">
-                            <label class="small fw-bold text-muted mb-1"><i class="feather icon-calendar"></i> CSV Date Format</label>
-                            <select class="form-select form-select-sm border-secondary-subtle" [(ngModel)]="mapping.dateFormat">
-                              <option value="">Auto-Detect (US Default)</option>
-                              <option value="%m/%d/%Y">MM/DD/YYYY (US format)</option>
-                              <option value="%d/%m/%Y">DD/MM/YYYY (UK/India format)</option>
-                              <option value="%Y-%m-%d">YYYY-MM-DD (ISO format)</option>
-                            </select>
-                          </div>
-                        }
                       </div>
                       }
                     } @else {
