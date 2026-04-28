@@ -438,8 +438,18 @@
                           <i class="feather icon-check"></i>
                         </button>
                       </div>
-                      }
 
+                      @if (getSfFieldMeta(mapping.sfField)?.type === 'picklist' || getSfFieldMeta(mapping.sfField)?.type === 'multipicklist') {
+                        <div class="mt-2 p-1 bg-white border border-danger-subtle rounded small text-muted" 
+                             style="font-size: 0.7rem; max-height: 50px; overflow-y: auto; line-height: 1.2;">
+                          <strong class="text-dark">Allowed Values:</strong> 
+                          {{ getSfFieldMeta(mapping.sfField)?.picklistValues?.join('; ') }}
+                        </div>
+                        <div class="text-muted mt-1" style="font-size: 0.65rem;">
+                          <em>* Separate multiple items with a semicolon (;)</em>
+                        </div>
+                      }
+                      }
                     </th>
                     }
                   </tr>

@@ -409,9 +409,9 @@ export class DataValidationComponent implements OnInit {
       }
     });
   }
-
+  
   addToQueue() {
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    const activeMappings = this.mappings.filter(m => m.isActive && m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Please map at least one field before queueing.', 'No Mappings');
       return;
@@ -425,7 +425,7 @@ export class DataValidationComponent implements OnInit {
                <div class="text-danger fw-bold text-start p-3 bg-light border rounded mt-2" style="max-height: 150px; overflow-y: auto;">
                  <i class="feather icon-alert-triangle me-1"></i> ${missingReqFields.join('<br><i class="feather icon-alert-triangle me-1"></i> ')}
                </div><br>
-               <span class="small text-muted">Please map these columns or select "-- Ignore --" if you plan to update existing records instead.</span>`,
+               <span class="small text-muted">Please map these columns or uncheck them to ignore.</span>`,
         icon: 'error',
         confirmButtonColor: '#0d6efd'
       });
@@ -441,7 +441,9 @@ export class DataValidationComponent implements OnInit {
     const cleanMappings = activeMappings.map(m => ({
       csvField: m.csvField,
       sfField: m.sfField,
-      type: m.type
+      type: m.type,
+      dateFormat: m.dateFormat || '',
+      isActive: true
     }));
 
     this.validationQueue.push({
@@ -458,7 +460,11 @@ export class DataValidationComponent implements OnInit {
 
     this.selectedObject = '';
     this.dedupeKey = '';
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string' }));
+    // Reset mapping table for the next job
+    this.mappings = this.csvHeaders.map(header => ({ 
+      csvField: header, sfField: '', type: 'string', 
+      dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: '' 
+    }));
     this.cdr.detectChanges();
   }
 
@@ -474,11 +480,26 @@ export class DataValidationComponent implements OnInit {
     this.migrationService.getObjectFields(this.selectedObject).subscribe({
       next: (res: any) => {
         this.sfFields = res.fields || res;
+        
         this.mappings = this.csvHeaders.map(header => {
-          const existing = itemToEdit.mappings.find(m => m.csvField === header);
+          const existing = itemToEdit.mappings.find((m: any) => m.csvField === header);
           return existing
-            ? { ...existing, isDropdownOpen: false, searchQuery: '' }
-            : { csvField: header, sfField: '', type: 'string', isDropdownOpen: false, searchQuery: '',massUpdateValue: '',dateFormat: '', };
+            ? { 
+                ...existing, 
+                isDropdownOpen: false, 
+                searchQuery: '', 
+                isActive: true // Turn the checkbox back on
+              }
+            : { 
+                csvField: header, 
+                sfField: '', 
+                type: 'string', 
+                isDropdownOpen: false, 
+                searchQuery: '',
+                dateFormat: '',          
+                massUpdateValue: '',
+                isActive: false 
+              };
         });
 
         this.currentStep = 1;
