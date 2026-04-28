@@ -148,9 +148,19 @@ export class DataValidationComponent implements OnInit {
     return this.sfFields.find((f) => f.name === fieldName);
   }
 
+  getTotalRequiredFieldsCount(): number {
+    if (!this.sfFields || this.sfFields.length === 0) return 0;
+    const requiredFields = this.sfFields.filter(f => {
+      return f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
+    });
+    return requiredFields.length;
+  }
+
   getMissingRequiredFields(): string[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    const currentlyMapped = this.mappings.map(m => m.sfField).filter(val => val !== '');
+    const currentlyMapped = this.mappings
+      .filter(m => m.isActive && m.sfField && m.sfField !== '')
+      .map(m => m.sfField);
     const missingFields = this.sfFields.filter(f => {
       const isStrictlyRequired = f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
       return isStrictlyRequired && !currentlyMapped.includes(f.name);
@@ -197,11 +207,15 @@ export class DataValidationComponent implements OnInit {
   async onFileSelected(event: any) {
     const file = event.target.files[0];
     if (!file) return;
+
+    // NEW: Take a snapshot of the user's current work before we overwrite the file
+    const previousMappings = [...this.mappings];
+    const previousSheet = this.selectedSheetName;
+
     this.selectedFile = file;
     this.availableSheets = [];
     this.csvHeaders = [];
 
-    // ADDED: 50MB Warning for Excel files
     if ((file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) && file.size > 50 * 1024 * 1024) {
       this.toastr.warning(
         'Large Excel files process slowly. For best performance, consider converting this file to .CSV before uploading.', 
@@ -221,17 +235,52 @@ export class DataValidationComponent implements OnInit {
       this.allHeadersMap = res.headersMap; 
       
       if (this.availableSheets.length > 0) {
-        this.onSheetSelect(this.availableSheets[0]);
+        // NEW: If they re-uploaded a file with the same sheet name, restore their work!
+        if (previousSheet && this.availableSheets.includes(previousSheet)) {
+          this.restoreSheetAndMappings(previousSheet, previousMappings);
+          this.toastr.success('File updated. Previous mappings restored!', 'Smart Upload');
+        } else {
+          // Otherwise, treat it as a brand new upload
+          this.onSheetSelect(this.availableSheets[0]);
+        }
       }
     } catch (error) {
       this.toastr.error('Failed to read file headers. The file might be corrupted.');
     }
   }
 
+  restoreSheetAndMappings(sheetName: string, previousMappings: any[]) {
+    this.selectedSheetName = sheetName;
+    this.csvHeaders = this.allHeadersMap[sheetName] || [];
+
+    this.mappings = this.csvHeaders.map(header => {
+      // Look to see if this column was mapped before the re-upload
+      const existing = previousMappings.find(m => m.csvField === header);
+      return existing 
+        ? { ...existing } // Keep everything (SF Field, Default Value, Skip rules, etc.)
+        : { 
+            csvField: header, 
+            sfField: '', 
+            type: 'string', 
+            dateFormat: '', 
+            isActive: true, 
+            massUpdateValue: ''
+          };
+    });
+    this.cdr.detectChanges();
+  }
+
  onSheetSelect(sheetName: string) {
     this.selectedSheetName = sheetName;
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
+    this.mappings = this.csvHeaders.map(header => ({ 
+      csvField: header, 
+      sfField: '', 
+      type: 'string', 
+      dateFormat: '', 
+      isActive: true, 
+      massUpdateValue: ''
+    }));
     this.cdr.detectChanges();
   }
 

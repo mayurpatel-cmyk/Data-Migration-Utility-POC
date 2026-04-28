@@ -89,7 +89,17 @@
             </button>
           </div>
         </div>
-          @if (getMissingRequiredFields().length > 0) {
+          @if (sfFields.length === 0 || isLoadingObjects) {
+          <div class="alert alert-secondary d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-secondary-subtle">
+            <span class="spinner-border spinner-border-sm me-2 text-primary"></span>
+            <span class="fw-bold text-secondary small">Loading Salesforce Rules...</span>
+          </div>
+        } @else if (getTotalRequiredFieldsCount() === 0) {
+          <div class="alert alert-info d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-info-subtle">
+            <i class="feather icon-info fs-5 me-2 text-info"></i>
+            <span class="fw-bold text-info-emphasis small">There are no strictly required fields for this Salesforce object.</span>
+          </div>
+        } @else if (getMissingRequiredFields().length > 0) {
           <div class="alert alert-warning d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-warning-subtle">
             <i class="feather icon-alert-triangle fs-4 me-3 text-warning"></i>
             <div>
@@ -104,7 +114,7 @@
         } @else {
           <div class="alert alert-success d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-success-subtle">
             <i class="feather icon-check-circle fs-5 me-2 text-success"></i>
-            <span class="fw-bold text-success-emphasis small">All Salesforce required fields are mapped!</span>
+            <span class="fw-bold text-success-emphasis small">All Salesforce required fields are successfully mapped!</span>
           </div>
         }
 
