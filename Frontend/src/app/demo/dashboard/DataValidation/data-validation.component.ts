@@ -53,7 +53,7 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string, isRequired?: boolean }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -197,11 +197,15 @@ export class DataValidationComponent implements OnInit {
   async onFileSelected(event: any) {
     const file = event.target.files[0];
     if (!file) return;
+
+    // NEW: Take a snapshot of the user's current work before we overwrite the file
+    const previousMappings = [...this.mappings];
+    const previousSheet = this.selectedSheetName;
+
     this.selectedFile = file;
     this.availableSheets = [];
     this.csvHeaders = [];
 
-    // ADDED: 50MB Warning for Excel files
     if ((file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) && file.size > 50 * 1024 * 1024) {
       this.toastr.warning(
         'Large Excel files process slowly. For best performance, consider converting this file to .CSV before uploading.', 
@@ -221,17 +225,52 @@ export class DataValidationComponent implements OnInit {
       this.allHeadersMap = res.headersMap; 
       
       if (this.availableSheets.length > 0) {
-        this.onSheetSelect(this.availableSheets[0]);
+        // NEW: If they re-uploaded a file with the same sheet name, restore their work!
+        if (previousSheet && this.availableSheets.includes(previousSheet)) {
+          this.restoreSheetAndMappings(previousSheet, previousMappings);
+          this.toastr.success('File updated. Previous mappings restored!', 'Smart Upload');
+        } else {
+          // Otherwise, treat it as a brand new upload
+          this.onSheetSelect(this.availableSheets[0]);
+        }
       }
     } catch (error) {
       this.toastr.error('Failed to read file headers. The file might be corrupted.');
     }
   }
 
+  restoreSheetAndMappings(sheetName: string, previousMappings: any[]) {
+    this.selectedSheetName = sheetName;
+    this.csvHeaders = this.allHeadersMap[sheetName] || [];
+
+    this.mappings = this.csvHeaders.map(header => {
+      // Look to see if this column was mapped before the re-upload
+      const existing = previousMappings.find(m => m.csvField === header);
+      return existing 
+        ? { ...existing } // Keep everything (SF Field, Default Value, Skip rules, etc.)
+        : { 
+            csvField: header, 
+            sfField: '', 
+            type: 'string', 
+            dateFormat: '', 
+            isActive: true, 
+            massUpdateValue: ''
+          };
+    });
+    this.cdr.detectChanges();
+  }
+
  onSheetSelect(sheetName: string) {
     this.selectedSheetName = sheetName;
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
-    this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
+    this.mappings = this.csvHeaders.map(header => ({ 
+      csvField: header, 
+      sfField: '', 
+      type: 'string', 
+      dateFormat: '', 
+      isActive: true, 
+      massUpdateValue: ''
+    }));
     this.cdr.detectChanges();
   }
 
@@ -340,20 +379,19 @@ export class DataValidationComponent implements OnInit {
 
     setTimeout(() => {
       let matchCount = 0;
-
-      const normalizeString = (str: string) => {
-        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
-      };
+      const normalizeString = (str: string) => String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
 
       this.mappings.forEach(mapping => {
-        if (!mapping.sfField) {
-          const rawCsv = mapping.csvField;
-          const normalCsv = normalizeString(rawCsv);
-
+        if (mapping.isActive && !mapping.sfField) {
+          const normalCsv = normalizeString(mapping.csvField);
           let bestMatch = null;
           let highestScore = 0;
 
+          const currentlyMappedSfFields = this.mappings.filter(m => m.sfField).map(m => m.sfField);
+
           for (const field of this.sfFields) {
+            if (currentlyMappedSfFields.includes(field.name)) continue;
+
             const normalName = normalizeString(field.name);
             const normalLabel = normalizeString(field.label);
 
@@ -363,10 +401,7 @@ export class DataValidationComponent implements OnInit {
               break;
             }
 
-            const labelScore = this.getSimilarity(normalCsv, normalLabel);
-            const nameScore = this.getSimilarity(normalCsv, normalName);
-            const bestFieldScore = Math.max(labelScore, nameScore);
-
+            const bestFieldScore = Math.max(this.getSimilarity(normalCsv, normalLabel), this.getSimilarity(normalCsv, normalName));
             if (bestFieldScore >= 0.8 && bestFieldScore > highestScore) {
               highestScore = bestFieldScore;
               bestMatch = field;
@@ -385,7 +420,6 @@ export class DataValidationComponent implements OnInit {
       } else {
         this.toastr.info(`Could not find any clear auto-map matches.`, 'No Matches');
       }
-
       this.cdr.detectChanges();
     });
   }
@@ -438,13 +472,19 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
-    const cleanMappings = activeMappings.map(m => ({
-      csvField: m.csvField,
-      sfField: m.sfField,
-      type: m.type,
-      dateFormat: m.dateFormat || '',
-      isActive: true
-    }));
+    const cleanMappings = activeMappings.map(m => {
+      const meta = this.getSfFieldMeta(m.sfField);
+      const isReq = meta ? (meta.isRequired || (!meta.nillable && meta.createable && !meta.defaultedOnCreate)) : false;
+
+      return {
+        csvField: m.csvField,
+        sfField: m.sfField,
+        type: m.type,
+        dateFormat: m.dateFormat || '',
+        isActive: true,
+        isRequired: isReq
+      };
+    });
 
     this.validationQueue.push({
       sheetName: this.selectedSheetName,
