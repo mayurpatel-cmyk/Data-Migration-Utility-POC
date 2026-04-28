@@ -69,7 +69,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
         str_col = df[csv_col].astype(str).str.strip().str.lower()
         is_empty = df[csv_col].isna() | (str_col == '') | (str_col == 'nan') | (str_col == 'none') | (str_col == '<na>') | (str_col == 'nat')
 
-        is_required = field_rules.get('required', False)
+        is_required = field_rules.get('required', mapping.get('isRequired', False))
         if is_required:
             df.loc[is_empty, '_errors'] += f"[{csv_col}: Field is required in Salesforce but is empty.] "
             valid_mask &= ~is_empty
@@ -78,11 +78,11 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
         is_external_id = field_rules.get('externalId', False)
         
         if is_unique or is_external_id:
-            is_col_duplicate = df.duplicated(subset=[csv_col], keep=False)
+            is_col_duplicate = str_col.duplicated(keep=False)
             invalid_duplicates = is_col_duplicate & ~is_empty
             
             if invalid_duplicates.any():
-                df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Must be Unique.] "
+                df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Duplicate value found inside the CSV. This field must be Unique.] "
                 valid_mask &= ~invalid_duplicates
 
         is_calculated = field_rules.get('calculated', False)

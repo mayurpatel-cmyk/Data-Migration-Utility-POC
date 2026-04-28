@@ -53,7 +53,7 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string, isRequired?: boolean }[] = [];
 
   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -389,20 +389,19 @@ export class DataValidationComponent implements OnInit {
 
     setTimeout(() => {
       let matchCount = 0;
-
-      const normalizeString = (str: string) => {
-        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
-      };
+      const normalizeString = (str: string) => String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
 
       this.mappings.forEach(mapping => {
-        if (!mapping.sfField) {
-          const rawCsv = mapping.csvField;
-          const normalCsv = normalizeString(rawCsv);
-
+        if (mapping.isActive && !mapping.sfField) {
+          const normalCsv = normalizeString(mapping.csvField);
           let bestMatch = null;
           let highestScore = 0;
 
+          const currentlyMappedSfFields = this.mappings.filter(m => m.sfField).map(m => m.sfField);
+
           for (const field of this.sfFields) {
+            if (currentlyMappedSfFields.includes(field.name)) continue;
+
             const normalName = normalizeString(field.name);
             const normalLabel = normalizeString(field.label);
 
@@ -412,10 +411,7 @@ export class DataValidationComponent implements OnInit {
               break;
             }
 
-            const labelScore = this.getSimilarity(normalCsv, normalLabel);
-            const nameScore = this.getSimilarity(normalCsv, normalName);
-            const bestFieldScore = Math.max(labelScore, nameScore);
-
+            const bestFieldScore = Math.max(this.getSimilarity(normalCsv, normalLabel), this.getSimilarity(normalCsv, normalName));
             if (bestFieldScore >= 0.8 && bestFieldScore > highestScore) {
               highestScore = bestFieldScore;
               bestMatch = field;
@@ -434,7 +430,6 @@ export class DataValidationComponent implements OnInit {
       } else {
         this.toastr.info(`Could not find any clear auto-map matches.`, 'No Matches');
       }
-
       this.cdr.detectChanges();
     });
   }
@@ -487,13 +482,19 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
-    const cleanMappings = activeMappings.map(m => ({
-      csvField: m.csvField,
-      sfField: m.sfField,
-      type: m.type,
-      dateFormat: m.dateFormat || '',
-      isActive: true
-    }));
+    const cleanMappings = activeMappings.map(m => {
+      const meta = this.getSfFieldMeta(m.sfField);
+      const isReq = meta ? (meta.isRequired || (!meta.nillable && meta.createable && !meta.defaultedOnCreate)) : false;
+
+      return {
+        csvField: m.csvField,
+        sfField: m.sfField,
+        type: m.type,
+        dateFormat: m.dateFormat || '',
+        isActive: true,
+        isRequired: isReq
+      };
+    });
 
     this.validationQueue.push({
       sheetName: this.selectedSheetName,
