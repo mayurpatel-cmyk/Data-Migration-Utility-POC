@@ -318,6 +318,15 @@ export class DataValidationComponent implements OnInit {
     return job.results.invalidRecords.some((record: any) => record.errors.includes(searchStr));
   }
 
+  // NEW: Checks if a SPECIFIC cell in a specific row has an error
+  hasCellError(record: any, csvField: string): boolean {
+    if (!record || !record.errors) return false;
+    // By adding the bracket and colon, it forces an exact match!
+    // E.g., it looks for "[Name:" instead of just "Name"
+    const searchStr = `[${csvField}:`; 
+    return record.errors.includes(searchStr);
+  }
+
   get allMappingsActive(): boolean {
     return this.mappings.length > 0 && this.mappings.every(m => m.isActive);
   }

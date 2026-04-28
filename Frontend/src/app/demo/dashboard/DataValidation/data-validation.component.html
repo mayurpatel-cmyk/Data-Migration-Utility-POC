@@ -478,7 +478,9 @@
                       <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all"
                         [(ngModel)]="record.originalRow[mapping.csvField]"
                         (ngModelChange)="markAsEdited(record, mapping.csvField)"
-                        [class.is-invalid]="record.errors.includes(mapping.csvField) && !record._editedFields?.[mapping.csvField]"
+                        
+                        [class.is-invalid]="hasCellError(record, mapping.csvField) && !record._editedFields?.[mapping.csvField]"
+                        
                         [class.bg-success-subtle]="record._editedFields?.[mapping.csvField]"
                         [class.border-success]="record._editedFields?.[mapping.csvField]"
                         [class.text-success-emphasis]="record._editedFields?.[mapping.csvField]">
