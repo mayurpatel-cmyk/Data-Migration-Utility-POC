@@ -242,12 +242,16 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
             # 1. Let Pandas auto-detect and parse standard string dates
             parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
 
-            # 2. Catch and convert Excel Serial Dates (e.g., 44111)
+            # 2. THE FIX: Catch Excel Serial Dates, but BLOCK giant numbers that crash Python
             cleaned_str = df[csv_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-            is_serial_date = cleaned_str.str.isnumeric() & ~is_empty
+            numeric_str = pd.to_numeric(cleaned_str, errors='coerce')
+            
+            # Excel dates are usually between 1 (Year 1900) and 2958465 (Year 9999). 
+            # If it's bigger than 3 million, it's a random phone number/ID, not a date!
+            is_serial_date = numeric_str.notna() & (numeric_str > 0) & (numeric_str < 3000000) & ~is_empty
             
             if is_serial_date.any():
-                excel_dates = pd.to_datetime(cleaned_str[is_serial_date].astype(float), unit='D', origin='1899-12-30', errors='coerce')
+                excel_dates = pd.to_datetime(numeric_str[is_serial_date], unit='D', origin='1899-12-30', errors='coerce')
                 parsed_dates.update(excel_dates)
 
             is_invalid = parsed_dates.isna() & ~is_empty
