@@ -749,8 +749,9 @@ export class DataValidationComponent implements OnInit {
     this.cdr.detectChanges();
 
     // Deep copy the records so we don't accidentally mutate live data
-    const recordsToTest = JSON.parse(JSON.stringify(job.results.invalidRecords.map((ir: any) => ir.originalRow)));
-
+    const recordsToTest = job.results.invalidRecords.map((ir: any) => {
+      return { ...ir.originalRow, _originalRowNumber: ir.rowNumber };
+    });
     const payload = {
       targetObject: job.targetObject,
       records: recordsToTest,

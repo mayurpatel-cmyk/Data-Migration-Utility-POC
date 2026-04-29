@@ -37,6 +37,12 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
     df['_errors'] = ""
     valid_mask = pd.Series(True, index=df.index)
 
+    if '_originalRowNumber' in df.columns:
+        row_numbers = df['_originalRowNumber'].tolist()
+        df = df.drop(columns=['_originalRowNumber']) # Remove it so it doesn't go to Salesforce!
+    else:
+        row_numbers = [(i + 2) for i in df.index]
+
     duplicates_removed = 0
 
     is_duplicate = df.duplicated(keep='first') 
@@ -70,7 +76,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
         sf_type = field_rules.get('type', mapping.get('type', 'string'))
         
         str_col = df[csv_col].astype(str).str.strip().str.lower()
-        is_empty = df[csv_col].isna() | (str_col == '') | (str_col == 'nan') | (str_col == 'none') | (str_col == '<na>') | (str_col == 'nat')
+        is_empty = df[csv_col].isna() | (str_col == '') | (str_col == '<na>') | (str_col == 'nat')
 
         is_required = field_rules.get('required', mapping.get('isRequired', False))
         if is_required:
@@ -312,7 +318,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
             invalid_records_output.append({
                 "originalRow": invalid_row_dicts[i],
                 "errors": str(invalid_errors[i]).strip(),
-                "rowNumber": invalid_indices[i] + 2 
+                "rowNumber": row_numbers[invalid_indices[i]] 
             })
 
     return {
