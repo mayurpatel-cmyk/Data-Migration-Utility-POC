@@ -60,7 +60,10 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
         
         if csv_col not in df.columns or not sf_field:
             continue
-            
+        # NEW: Skip all checks (format, length, etc.) if skipValidation is True
+        if mapping.get('skipValidation'):
+            continue
+         
         df[csv_col] = df[csv_col].astype(object)
             
         field_rules = sf_rules.get(sf_field, {})

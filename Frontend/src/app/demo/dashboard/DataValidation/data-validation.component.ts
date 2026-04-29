@@ -53,12 +53,21 @@ export class DataValidationComponent implements OnInit {
   dedupeKey = '';
   selectedDateFormat = ''; // <-- ADDED: For Date Format selection
 
-  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string, isRequired?: boolean, picklistValues?: string[] }[] = [];
+  mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string,
+    isRequired?: boolean, picklistValues?: string[],
+    parentObjectName?: string,
+    relationalExtIdField?: string,
+    isLoadingParentFields?: boolean,
+    isParentDropdownOpen?: boolean,
+    parentSearchQuery?: string
+   }[] = [];
 
-  // Dropdown UI Trackers
+   // Dropdown UI Trackers
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
   isLoadingObjects = false;
+
+  parentObjectFieldsCache: { [objectName: string]: any[] } = {};
 
   // Queue State
   validationQueue: ValidationJob[] = [];
@@ -202,6 +211,7 @@ export class DataValidationComponent implements OnInit {
     mapping.sfField = fieldName;
     mapping.isDropdownOpen = false;
     this.updateFieldType(mapping, fieldName);
+    this.onSfFieldChange(mapping);
   }
 
   async onFileSelected(event: any) {
@@ -218,8 +228,8 @@ export class DataValidationComponent implements OnInit {
 
     if ((file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) && file.size > 50 * 1024 * 1024) {
       this.toastr.warning(
-        'Large Excel files process slowly. For best performance, consider converting this file to .CSV before uploading.', 
-        'Large File Warning', 
+        'Large Excel files process slowly. For best performance, consider converting this file to .CSV before uploading.',
+        'Large File Warning',
         { timeOut: 8000 }
       );
     }
@@ -230,10 +240,10 @@ export class DataValidationComponent implements OnInit {
     try {
       this.toastr.info('Extracting file headers...', 'Reading File');
       const res: any = await firstValueFrom(this.validationApi.extractHeaders(formData));
-      
-      this.availableSheets = res.sheets; 
-      this.allHeadersMap = res.headersMap; 
-      
+
+      this.availableSheets = res.sheets;
+      this.allHeadersMap = res.headersMap;
+
       if (this.availableSheets.length > 0) {
         // NEW: If they re-uploaded a file with the same sheet name, restore their work!
         if (previousSheet && this.availableSheets.includes(previousSheet)) {
@@ -256,14 +266,14 @@ export class DataValidationComponent implements OnInit {
     this.mappings = this.csvHeaders.map(header => {
       // Look to see if this column was mapped before the re-upload
       const existing = previousMappings.find(m => m.csvField === header);
-      return existing 
+      return existing
         ? { ...existing } // Keep everything (SF Field, Default Value, Skip rules, etc.)
-        : { 
-            csvField: header, 
-            sfField: '', 
-            type: 'string', 
-            dateFormat: '', 
-            isActive: true, 
+        : {
+            csvField: header,
+            sfField: '',
+            type: 'string',
+            dateFormat: '',
+            isActive: true,
             massUpdateValue: ''
           };
     });
@@ -273,12 +283,12 @@ export class DataValidationComponent implements OnInit {
  onSheetSelect(sheetName: string) {
     this.selectedSheetName = sheetName;
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
-    this.mappings = this.csvHeaders.map(header => ({ 
-      csvField: header, 
-      sfField: '', 
-      type: 'string', 
-      dateFormat: '', 
-      isActive: true, 
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header,
+      sfField: '',
+      type: 'string',
+      dateFormat: '',
+      isActive: true,
       massUpdateValue: ''
     }));
     this.cdr.detectChanges();
@@ -295,7 +305,8 @@ export class DataValidationComponent implements OnInit {
 
   applyMassUpdate(job: any, csvField: string, value: string | undefined) {
     if (value === undefined) value = '';
-    if (!job?.results?.invalidRecords) return;
+   // Check if there are actually records to update
+    if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
 
     let updatedCount = 0;
 
@@ -313,16 +324,16 @@ export class DataValidationComponent implements OnInit {
     } else {
       this.toastr.info(`No records had an error in '${csvField}', so nothing was changed.`, 'No Updates Needed');
     }
-    
+
     this.cdr.detectChanges();
   }
 
   hasErrorsInColumn(job: any, csvField: string): boolean {
     if (!job || !job.results || !job.results.invalidRecords) return false;
-    
+
     // Python returns errors formatted exactly like: "[Email: Invalid format.]"
     // We search the array to see if this column caused any of the failures.
-    const searchStr = `[${csvField}:`; 
+    const searchStr = `[${csvField}:`;
     return job.results.invalidRecords.some((record: any) => record.errors.includes(searchStr));
   }
 
@@ -331,7 +342,7 @@ export class DataValidationComponent implements OnInit {
     if (!record || !record.errors) return false;
     // By adding the bracket and colon, it forces an exact match!
     // E.g., it looks for "[Name:" instead of just "Name"
-    const searchStr = `[${csvField}:`; 
+    const searchStr = `[${csvField}:`;
     return record.errors.includes(searchStr);
   }
 
@@ -351,7 +362,7 @@ export class DataValidationComponent implements OnInit {
     const isChecked = event.target.checked;
     this.mappings.forEach(mapping => {
       mapping.isActive = isChecked;
-      
+
       // If deselecting all, wipe out their field mappings for safety
       if (!isChecked) {
         mapping.sfField = '';
@@ -470,7 +481,7 @@ export class DataValidationComponent implements OnInit {
       }
     });
   }
-  
+
   addToQueue() {
     const activeMappings = this.mappings.filter(m => m.isActive && m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -503,8 +514,8 @@ export class DataValidationComponent implements OnInit {
       const meta = this.getSfFieldMeta(m.sfField);
       const isReq = meta ? (meta.isRequired || (!meta.nillable && meta.createable && !meta.defaultedOnCreate)) : false;
 
-      const picklistVals = meta && meta.picklistValues 
-        ? meta.picklistValues.filter((p: any) => p.active).map((p: any) => p.value.toLowerCase()) 
+      const picklistVals = meta && meta.picklistValues
+        ? meta.picklistValues.filter((p: any) => p.active).map((p: any) => p.value.toLowerCase())
         : [];
 
       return {
@@ -514,7 +525,8 @@ export class DataValidationComponent implements OnInit {
         dateFormat: m.dateFormat || '',
         isActive: true,
         isRequired: isReq,
-        picklistValues: picklistVals
+        picklistValues: picklistVals,
+        skipValidation: m.type === 'reference'
       };
     });
 
@@ -533,9 +545,9 @@ export class DataValidationComponent implements OnInit {
     this.selectedObject = '';
     this.dedupeKey = '';
     // Reset mapping table for the next job
-    this.mappings = this.csvHeaders.map(header => ({ 
-      csvField: header, sfField: '', type: 'string', 
-      dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: '' 
+    this.mappings = this.csvHeaders.map(header => ({
+      csvField: header, sfField: '', type: 'string',
+      dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: ''
     }));
     this.cdr.detectChanges();
   }
@@ -552,25 +564,25 @@ export class DataValidationComponent implements OnInit {
     this.migrationService.getObjectFields(this.selectedObject).subscribe({
       next: (res: any) => {
         this.sfFields = res.fields || res;
-        
+
         this.mappings = this.csvHeaders.map(header => {
           const existing = itemToEdit.mappings.find((m: any) => m.csvField === header);
           return existing
-            ? { 
-                ...existing, 
-                isDropdownOpen: false, 
-                searchQuery: '', 
+            ? {
+                ...existing,
+                isDropdownOpen: false,
+                searchQuery: '',
                 isActive: true // Turn the checkbox back on
               }
-            : { 
-                csvField: header, 
-                sfField: '', 
-                type: 'string', 
-                isDropdownOpen: false, 
+            : {
+                csvField: header,
+                sfField: '',
+                type: 'string',
+                isDropdownOpen: false,
                 searchQuery: '',
-                dateFormat: '',          
+                dateFormat: '',
                 massUpdateValue: '',
-                isActive: false 
+                isActive: false
               };
         });
 
@@ -615,7 +627,7 @@ export class DataValidationComponent implements OnInit {
 
     for (const job of this.validationQueue) {
       if (job.status === 'done') continue;
-      
+
       processedAtLeastOne = true;
       job.status = 'validating';
       this.cdr.detectChanges();
@@ -629,12 +641,12 @@ export class DataValidationComponent implements OnInit {
         mappings: job.mappings,
         dedupeKey: job.dedupeKey
       };
-      
+
       formData.append('config', JSON.stringify(config));
 
       try {
         const res: any = await firstValueFrom(this.validationApi.validateData(formData));
-        job.results = res; 
+        job.results = res;
         job.status = 'done';
 
       } catch (error: any) {
@@ -663,7 +675,7 @@ export class DataValidationComponent implements OnInit {
     this.recalculateStats();
 
     if (this.aggregateStats.total > 0 || !queueHasErrors) {
-      this.currentStep = 2; 
+      this.currentStep = 2;
 
       if (processedAtLeastOne) {
         if (queueHasErrors) {
@@ -751,10 +763,10 @@ export class DataValidationComponent implements OnInit {
 
       const previousValid = job.results.validRecords || [];
       const newValid = res.validRecords || [];
-      
+
       job.results.validRecords = [...previousValid, ...newValid]; // Combine them safely!
       job.results.invalidRecords = res.invalidRecords || [];
-      
+
       this.recalculateStats();
 
       if (newValid.length > 0) {
@@ -834,4 +846,66 @@ export class DataValidationComponent implements OnInit {
       }
     });
   }
+  onSfFieldChange(mapping: any) {
+  const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+
+  if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
+    const parentObj = fieldMeta.referenceTo[0];
+    mapping.parentObjectName = parentObj;
+
+    if (!this.parentObjectFieldsCache[parentObj]) {
+      mapping.isLoadingParentFields = true;
+      this.cdr.detectChanges();
+
+      this.migrationService.getObjectFields(parentObj).subscribe({
+        next: (response: any) => {
+          const fieldsArray = response.fields ? response.fields : response;
+          this.parentObjectFieldsCache[parentObj] = fieldsArray.sort((a: any, b: any) => (a.label || '').localeCompare(b.label || ''));
+          mapping.isLoadingParentFields = false;
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          mapping.isLoadingParentFields = false;
+          this.toastr.error(`Failed to load fields for parent object: ${parentObj}`);
+          this.cdr.detectChanges();
+        }
+      });
+    }
+  } else {
+    mapping.parentObjectName = undefined;
+    mapping.relationalExtIdField = '';
+  }
+}
+
+getParentFieldLabel(mapping: any, fieldName?: string): string {
+  if (!fieldName) return '';
+  if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
+  if (!mapping.parentObjectName) return fieldName;
+  const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+  const field = parentFields.find((f: any) => f.name === fieldName);
+  return field ? `${field.label} (${field.name})` : fieldName;
+}
+
+getFilteredParentFields(mapping: any): any[] {
+  if (!mapping.parentObjectName) return [];
+  const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+
+
+  if (!mapping.parentSearchQuery) return parentFields;
+  const query = mapping.parentSearchQuery.toLowerCase();
+  return parentFields.filter(f => f.label.toLowerCase().includes(query) || f.name.toLowerCase().includes(query));
+}
+
+toggleParentDropdown(mapping: any, event: Event) {
+  event.stopPropagation();
+  const wasOpen = mapping.isParentDropdownOpen;
+  this.closeAllDropdowns();
+  mapping.isParentDropdownOpen = !wasOpen;
+  if (mapping.isParentDropdownOpen) mapping.parentSearchQuery = '';
+}
+
+selectParentField(mapping: any, fieldName: string) {
+  mapping.relationalExtIdField = fieldName;
+  mapping.isParentDropdownOpen = false;
+}
 }
