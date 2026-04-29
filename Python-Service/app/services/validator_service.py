@@ -103,23 +103,44 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
             df.loc[~is_empty, '_errors'] += f"[{csv_col}: This field is strictly Read-Only in Salesforce (e.g., Formula). You cannot map data to it.] "
             valid_mask &= is_empty 
 
-        if sf_type in ['string', 'textarea', 'phone', 'url']:
-            max_len = field_rules.get('length', 255 if sf_type != 'textarea' else 32768)
+        elif sf_type in ['string', 'textarea', 'phone', 'url']:
             
+            # 1. THE FIX: ALWAYS trust the Angular UI limit first!
+            raw_len = mapping.get('maxLength')
+            
+            # If Angular doesn't know it, fall back to Node.js
+            if not raw_len:
+                raw_len = field_rules.get('length')
+                
+            # If neither knows, use Salesforce defaults
+            if not raw_len:
+                max_len = 32768 if sf_type == 'textarea' else 255
+            else:
+                max_len = int(float(raw_len)) # Safely turn string '80' into math number 80
+            
+            # 2. State & Country Mapping
             if 'country' in sf_field.lower():
                 df[csv_col] = df[csv_col].astype(str).str.lower().map(SF_COUNTRY_MAP).fillna(df[csv_col])
             elif ('state' in sf_field.lower() or 'province' in sf_field.lower()):
                 df[csv_col] = df[csv_col].astype(str).str.lower().map(SF_STATE_MAP).fillna(df[csv_col])
                 
-            df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str[:max_len]
+            # 3. COUNT THE LENGTH
+            str_lengths = df[csv_col].astype(str).str.len()
+            is_too_long = (str_lengths > max_len) & ~is_empty
             
+            if is_too_long.any():
+                df.loc[is_too_long, '_errors'] += f"[{csv_col}: Text is too long. Maximum allowed is {max_len} characters.] "
+                valid_mask &= ~is_too_long
+            
+            # 4. Standardize the valid rows to pure strings
+            df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str)
+            
+            # 5. URL Bouncer
             if sf_type == 'url':
-                
                 needs_http = ~df[csv_col].astype(str).str.startswith('http', na=False) & ~is_empty
                 df.loc[needs_http, csv_col] = 'https://' + df.loc[needs_http, csv_col].astype(str)
                 
                 url_regex = r'^https?://(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,63}(?:/[^\s]*)?$'
-                
                 is_invalid_url = ~df[csv_col].astype(str).str.match(url_regex) & ~is_empty
                 
                 if is_invalid_url.any():

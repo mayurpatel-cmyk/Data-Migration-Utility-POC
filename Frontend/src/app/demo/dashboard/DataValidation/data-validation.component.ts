@@ -59,7 +59,8 @@ export class DataValidationComponent implements OnInit {
     relationalExtIdField?: string,
     isLoadingParentFields?: boolean,
     isParentDropdownOpen?: boolean,
-    parentSearchQuery?: string
+    parentSearchQuery?: string,
+    maxLength?: number
    }[] = [];
 
    // Dropdown UI Trackers
@@ -518,6 +519,8 @@ export class DataValidationComponent implements OnInit {
         ? meta.picklistValues.filter((p: any) => p.active).map((p: any) => p.value.toLowerCase())
         : [];
 
+        const fieldLength = meta ? meta.length : null;
+
       return {
         csvField: m.csvField,
         sfField: m.sfField,
@@ -526,7 +529,8 @@ export class DataValidationComponent implements OnInit {
         isActive: true,
         isRequired: isReq,
         picklistValues: picklistVals,
-        skipValidation: m.type === 'reference'
+        skipValidation: m.type === 'reference',
+        maxLength: fieldLength
       };
     });
 
