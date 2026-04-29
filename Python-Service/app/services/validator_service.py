@@ -108,8 +108,17 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
             df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str[:max_len]
             
             if sf_type == 'url':
+                
                 needs_http = ~df[csv_col].astype(str).str.startswith('http', na=False) & ~is_empty
                 df.loc[needs_http, csv_col] = 'https://' + df.loc[needs_http, csv_col].astype(str)
+                
+                url_regex = r'^https?://(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,63}(?:/[^\s]*)?$'
+                
+                is_invalid_url = ~df[csv_col].astype(str).str.match(url_regex) & ~is_empty
+                
+                if is_invalid_url.any():
+                    df.loc[is_invalid_url, '_errors'] += f"[{csv_col}: Invalid URL format. Must be a valid web address (e.g., www.example.com).] "
+                    valid_mask &= ~is_invalid_url
 
         elif sf_type == 'picklist':
             valid_values = field_rules.get('picklistValues', [])
