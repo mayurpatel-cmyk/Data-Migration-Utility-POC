@@ -1083,7 +1083,7 @@ export class DefaultComponent implements OnInit {
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
-    if (this.batchSize > 10000) this.batchSize = 10000;
+    if (this.batchSize > 60000) this.batchSize = 60000;
     if (this.batchSize < 10) this.batchSize = 10;
 
     if (this.migrationQueue.length === 0) {

@@ -564,9 +564,16 @@
           <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" (click)="currentStep = 1">
             <i class="feather icon-arrow-left"></i> Back to Mapping
           </button>
+          
           @if (aggregateStats.invalid > 0) {
           <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
             <i class="feather icon-download"></i> Download Unfixed Errors
+          </button>
+          }
+
+          @if (aggregateStats.duplicates > 0) {
+          <button class="btn btn-outline-warning shadow-sm d-flex align-items-center gap-2 text-dark" (click)="downloadDuplicates()">
+            <i class="feather icon-copy"></i> Download Duplicates
           </button>
           }
 

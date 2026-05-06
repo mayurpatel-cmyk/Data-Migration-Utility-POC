@@ -326,11 +326,57 @@ class MigrationService {
     return result;
   }
 
-  // 4: CORE EXECUTION 
-  async executeUpsertBatch(conn, targetObjectOrJobs, records) {
-    // Global Polling Configuration (20 minutes timeout, 15 seconds interval)
+  async threadPoolExecutor(chunks, concurrencyLimit, workerFunction) {
+    const results = [];
+    const executingThreads = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      // Start the worker function (Logical Thread)
+      const threadPromise = workerFunction(chunk, i + 1);
+      results.push(threadPromise);
+
+      // If we reach our thread limit, pause and wait for at least one to finish
+      if (concurrencyLimit <= chunks.length) {
+        const executing = threadPromise.then(() => executingThreads.splice(executingThreads.indexOf(executing), 1));
+        executingThreads.push(executing);
+        if (executingThreads.length >= concurrencyLimit) {
+          await Promise.race(executingThreads);
+        }
+      }
+    }
+    // Wait for the remaining threads to finish
+    return Promise.all(results);
+  }
+
+  // --- Auto-Retry Wrapper for Salesforce API ---
+  async loadToSalesforceWithRetry(conn, targetObject, operation, options, records, maxRetries = 3) {
+    let attempt = 1;
+    while (attempt <= maxRetries) {
+      try {
+        // Execute the actual JSforce bulk API call
+        return await conn.bulk.load(targetObject, operation, options, records);
+      } catch (err) {
+        const isRowLock = err.message.includes('UNABLE_TO_LOCK_ROW');
+        if (isRowLock && attempt < maxRetries) {
+          logger.warn(`[${targetObject}] Row lock detected on attempt ${attempt}. Retrying in 5 seconds...`);
+          // Pause this specific thread for 5 seconds before trying again
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          attempt++;
+        } else {
+          // If it's a different error, or we ran out of retries, fail the batch
+          throw err;
+        }
+      }
+    }
+  }
+
+ async executeUpsertBatch(conn, targetObjectOrJobs, records) {
     conn.bulk.pollTimeout = 1200000; 
-    conn.bulk.pollInterval = 15000;
+    conn.bulk.pollInterval = 2000;
+
+    // Define exactly how many parallel threads we want to use for Salesforce Bulk API
+    const THREAD_COUNT = 6;
 
     try {
       const rawJobs = Array.isArray(targetObjectOrJobs)
@@ -349,7 +395,7 @@ class MigrationService {
             records: rawJobRecords, 
             mappings, 
             batchSize = 10000, 
-            operationMode = 'insert', // Defaults to 'insert'
+            operationMode = 'insert',
             deferReferencesTo = [], 
             isPass3Patch, 
             onlyReferencesTo = [],
@@ -358,7 +404,6 @@ class MigrationService {
 
         const BATCH_SIZE = parseInt(batchSize, 10) || 10000;
 
-        // --- DRY Error Handler for all catch blocks ---
         const handleBatchError = (err, chunk, stageName) => {
             const isTimeout = err.name === 'JobTimeoutError' || err.message.includes('polling time out');
             const prefix = isTimeout ? '[TIMEOUT]' : '[FATAL]';
@@ -376,25 +421,24 @@ class MigrationService {
             totalFailed += chunk.length;
         };
 
-        // SCENARIO 0: PASS 3 PATCH (Cross-Object Link)
+        // ==========================================
+        // SCENARIO 0: PASS 3 PATCH (Cross-Object Circular Patch)
+        // ==========================================
         if (isPass3Patch) {
-          if (!targetExtIdField) {
-            logger.error(`Cannot run Pass 3 Patch for ${targetObject} without an External ID.`);
-            continue;
-          }
-
-          logger.info(`[${targetObject}] Starting Pass 3: Cross-Object Circular Patch (Linking to ${onlyReferencesTo.join(', ')})`);
+          if (!targetExtIdField) continue;
           const patchPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, onlyReferencesTo, operationMode: 'upsert' });
           if (patchPayload.length === 0) continue;
 
           const payloadChunks = this.chunkArray(patchPayload, BATCH_SIZE);
-          let chunkCounter = 1;
+          logger.info(`[${targetObject}] Pass 3: Spawning ${THREAD_COUNT} threads for ${payloadChunks.length} batches.`);
 
-          for (const chunk of payloadChunks) {
+          // Run up to 6 batches concurrently
+          await this.threadPoolExecutor(payloadChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
             try {
-              logger.info(`[${targetObject}] Pass 3 Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
+              logger.info(`[${targetObject}] Thread executing Pass 3 Batch ${chunkCounter}/${payloadChunks.length}`);
               const patchRecords = chunk.map(p => p.sfRecord);
-              const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
+              //const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
+              const patchResults = await this.loadToSalesforceWithRetry(conn, targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
 
               patchResults.forEach((res, i) => {
                 if (!res.success) {
@@ -406,27 +450,31 @@ class MigrationService {
             } catch (err) {
                 handleBatchError(err, chunk, `Pass 3 Batch ${chunkCounter}`);
             }
-            chunkCounter++;
-          }
+          });
           continue;
         }
 
-        // SCENARIO 1: DELETE OPERATION (Standalone process)
+        // ==========================================
+        // SCENARIO 1: DELETE OPERATION
+        // ==========================================
         if (operationMode === 'delete') {
             const deletePayload = this.buildPayload(rawJobRecords, mappings, { targetObject, operationMode });
             if (deletePayload.length === 0) continue;
             
             const payloadChunks = this.chunkArray(deletePayload, BATCH_SIZE);
-            let chunkCounter = 1;
+            logger.info(`[${targetObject}] Delete: Spawning ${THREAD_COUNT} threads for ${payloadChunks.length} batches.`);
 
-            logger.info(`[${targetObject}] Starting Bulk DELETE: ${deletePayload.length} total records across ${payloadChunks.length} batches.`);
-            
-            for (const chunk of payloadChunks) {
+            await this.threadPoolExecutor(payloadChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
                 try {
-                    logger.info(`[${targetObject}] Delete Batch ${chunkCounter}/${payloadChunks.length} (${chunk.length} records)`);
+                    logger.info(`[${targetObject}] Thread executing Delete Batch ${chunkCounter}/${payloadChunks.length}`);
                     const deleteRecords = chunk.map(p => p.sfRecord);
-                    
-                    const finalResults = await conn.bulk.load(targetObject, "delete", { concurrencyMode }, deleteRecords);
+                    const finalResults = await this.loadToSalesforceWithRetry(
+                    conn,
+                    targetObject,
+                    "hardDelete",
+                    { concurrencyMode },
+                    deleteRecords
+                  );
 
                     finalResults.forEach((res, i) => {
                         const originalRecord = rawJobRecords[chunk[i].originalIndex];
@@ -442,22 +490,19 @@ class MigrationService {
                 } catch (err) {
                     handleBatchError(err, chunk, `Delete Batch ${chunkCounter}`);
                 }
-                chunkCounter++;
-            }
+            });
             continue; 
         }
 
-
+        // ==========================================
         // SCENARIO 2: INSERT / UPDATE / UPSERT
-
-        // Resolve Dynamic API Call type. (e.g. Updating via ExtID is handled via SF's "upsert" call)
+        // ==========================================
         let sfOperation = operationMode;
         let bulkOptions = { concurrencyMode };
 
         if (operationMode === 'update' && targetExtIdField && targetExtIdField !== 'Id') {
             sfOperation = 'upsert';
             bulkOptions.extIdField = targetExtIdField;
-            logger.info(`[${targetObject}] Using 'upsert' API for 'update' operation because External ID (${targetExtIdField}) was provided.`);
         } else if (operationMode === 'upsert') {
             sfOperation = 'upsert';
             bulkOptions.extIdField = targetExtIdField;
@@ -466,19 +511,18 @@ class MigrationService {
         const hasSelfReferencing = mappings.some(m => m.type === 'reference' && m.referenceTo && m.referenceTo.includes(targetObject));
 
         if (hasSelfReferencing) {
-            logger.info(`[${targetObject}] Detected Self-Referencing Lookup. Initiating Two-Pass Processing.`);
-
-            // PASS 1: Base Data
+            // PASS 1: Base Data (Threaded)
             const pass1Payload = this.buildPayload(rawJobRecords, mappings, { skipSelfReferencing: true, targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
             if (pass1Payload.length > 0) {
               const pass1Chunks = this.chunkArray(pass1Payload, BATCH_SIZE);
-              let chunkCounter = 1;
-
-              for (const chunk of pass1Chunks) {
+              logger.info(`[${targetObject}] Pass 1: Spawning ${THREAD_COUNT} threads for ${pass1Chunks.length} batches.`);
+              
+              await this.threadPoolExecutor(pass1Chunks, THREAD_COUNT, async (chunk, chunkCounter) => {
                 try {
-                  logger.info(`[${targetObject}] Pass 1 Batch ${chunkCounter}/${pass1Chunks.length} (${chunk.length} records) via API: ${sfOperation}`);
+                  logger.info(`[${targetObject}] Thread executing Pass 1 Batch ${chunkCounter}/${pass1Chunks.length}`);
                   const pass1Records = chunk.map(p => p.sfRecord);
-                  const pass1Results = await conn.bulk.load(targetObject, sfOperation, bulkOptions, pass1Records);
+                 //const pass1Results = await conn.bulk.load(targetObject, sfOperation, bulkOptions, pass1Records);
+                  const pass1Results = await this.loadToSalesforceWithRetry(conn, targetObject, sfOperation, bulkOptions, pass1Records);
 
                   pass1Results.forEach((res, i) => {
                     const originalRecord = rawJobRecords[chunk[i].originalIndex];
@@ -494,25 +538,23 @@ class MigrationService {
                 } catch (err) {
                     handleBatchError(err, chunk, `Pass 1 Batch ${chunkCounter}`);
                 }
-                chunkCounter++;
-              }
+              });
             }
 
-            // PASS 2: Self-Referencing Links
-            const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField, operationMode: 'upsert' }); // Force Upsert for secondary patch pass
+            // PASS 2: Self-Referencing Links (Threaded)
+            const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField, operationMode: 'upsert' });
             if (pass2Payload.length > 0) {
               const pass2Chunks = this.chunkArray(pass2Payload, BATCH_SIZE);
-              let chunkCounter = 1;
-              
-              // Secondary patch updates need an identifier. Either TargetExtId or Id. 
-              const patchOptions = { concurrencyMode };
-              if (targetExtIdField) patchOptions.extIdField = targetExtIdField;
+              const patchOptions = { concurrencyMode, ...(targetExtIdField && { extIdField: targetExtIdField }) };
 
-              for (const chunk of pass2Chunks) {
+              logger.info(`[${targetObject}] Pass 2: Spawning ${THREAD_COUNT} threads for ${pass2Chunks.length} batches.`);
+
+              await this.threadPoolExecutor(pass2Chunks, THREAD_COUNT, async (chunk, chunkCounter) => {
                 try {
-                  logger.info(`[${targetObject}] Pass 2 Batch ${chunkCounter}/${pass2Chunks.length} (${chunk.length} records) via API: upsert`);
+                  logger.info(`[${targetObject}] Thread executing Pass 2 Batch ${chunkCounter}/${pass2Chunks.length}`);
                   const pass2Records = chunk.map(p => p.sfRecord);
-                  const pass2Results = await conn.bulk.load(targetObject, "upsert", patchOptions, pass2Records);
+                  //const pass2Results = await conn.bulk.load(targetObject, "upsert", patchOptions, pass2Records);
+                  const pass2Results = await this.loadToSalesforceWithRetry(conn, targetObject, "upsert", patchOptions, pass2Records);
 
                   pass2Results.forEach((res, i) => {
                     if (!res.success) {
@@ -524,25 +566,23 @@ class MigrationService {
                 } catch (err) {
                     handleBatchError(err, chunk, `Pass 2 Batch ${chunkCounter}`);
                 }
-                chunkCounter++;
-              }
+              });
             }
 
         } else {
-            // STANDARD 1-PASS (Insert, Update, or Upsert)
+            // STANDARD 1-PASS (Insert, Update, or Upsert - Threaded)
             const standardPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
             if (standardPayload.length === 0) continue;
 
             const standardChunks = this.chunkArray(standardPayload, BATCH_SIZE);
-            let chunkCounter = 1;
+            logger.info(`[${targetObject}] Standard: Spawning ${THREAD_COUNT} threads for ${standardChunks.length} batches.`);
 
-            logger.info(`[${targetObject}] Starting Bulk ${sfOperation.toUpperCase()}: ${standardPayload.length} total records across ${standardChunks.length} batches.`);
-
-            for (const chunk of standardChunks) {
+            await this.threadPoolExecutor(standardChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
               try {
-                logger.info(`[${targetObject}] ${sfOperation} Batch ${chunkCounter}/${standardChunks.length} (${chunk.length} records)`);
+                logger.info(`[${targetObject}] Thread executing ${sfOperation} Batch ${chunkCounter}/${standardChunks.length}`);
                 const standardRecords = chunk.map(p => p.sfRecord);
-                const finalResults = await conn.bulk.load(targetObject, sfOperation, bulkOptions, standardRecords);
+                //const finalResults = await conn.bulk.load(targetObject, sfOperation, bulkOptions, standardRecords);
+                const finalResults = await this.loadToSalesforceWithRetry(conn, targetObject, sfOperation, bulkOptions, standardRecords);
 
                 finalResults.forEach((res, i) => {
                   const originalRecord = rawJobRecords[chunk[i].originalIndex];
@@ -558,8 +598,7 @@ class MigrationService {
               } catch (err) {
                   handleBatchError(err, chunk, `Standard ${sfOperation} Batch ${chunkCounter}`);
               }
-              chunkCounter++;
-            }
+            });
         }
       }
 
