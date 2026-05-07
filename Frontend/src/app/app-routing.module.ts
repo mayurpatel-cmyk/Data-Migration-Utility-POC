@@ -6,10 +6,10 @@ import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
 import { ConnectionComponent } from './demo/dashboard/Connection/connection.component';
 
 export const routes: Routes = [
-//         {
-//   path: 'api-mapping', 
-//   loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
-// },
+        {
+  path: 'api-mapping', 
+  loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+},
   {
     path: '',
     component: AdminComponent,
