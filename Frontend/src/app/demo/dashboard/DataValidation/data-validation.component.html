@@ -1,0 +1,599 @@
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 1: Upload & Build Validation Queue">
+
+      <div class="row g-4 mb-4">
+        <div class="col-md-6">
+          <label class="form-label fw-bold">1. Upload Raw Data (.csv, .xlsx)</label>
+          <input type="file" class="form-control border-primary" accept=".csv, .xlsx" (change)="onFileSelected($event)">
+
+          @if (selectedFile?.name?.endsWith('.xlsx') && selectedFile?.size > 50000000) {
+             <div class="text-warning small mt-2 fw-bold d-flex align-items-center gap-1">
+               <i class="feather icon-alert-triangle"></i> Excel > 50MB detected. CSV processes faster!
+             </div>
+          }
+
+          @if (availableSheets.length > 1) {
+          <div class="mt-3 p-3 bg-light rounded border">
+            <label class="form-label fw-bold text-primary">
+              <i class="feather icon-layers me-1"></i> Multiple Sheets Detected! Which sheet do you want to validate?
+            </label>
+            <select class="form-select border-primary" [(ngModel)]="selectedSheetName"
+              (ngModelChange)="onSheetSelect($event)">
+              <option value="" disabled selected>-- Select a Sheet --</option>
+              @for (sheet of availableSheets; track sheet) {
+              <option [value]="sheet">{{ sheet }}</option>
+              }
+            </select>
+          </div>
+          }
+        </div>
+
+        <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
+          <label class="form-label fw-bold">2. Target Salesforce Object</label>
+
+          <div class="position-relative" (click)="$event.stopPropagation()">
+            <div class="form-select cursor-pointer bg-white" [class.text-muted]="!selectedObject"
+              [class.opacity-50]="!selectedFile" (click)="selectedFile && toggleObjectDropdown($event)">
+              {{ getSfObjectLabel(selectedObject) || '-- Select Target Object --' }}
+            </div>
+
+            @if (isObjectDropdownOpen) {
+            <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
+              style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
+
+              <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                  <input type="text" class="form-control" placeholder="Search objects..."
+                    [(ngModel)]="objectSearchQuery" autofocus>
+                </div>
+              </div>
+
+              @for (obj of getFilteredSfObjects(); track obj.name) {
+              <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectTargetObject(obj.name)"
+                [class.bg-light]="selectedObject === obj.name">
+                {{ obj.label }}
+                <div class="small text-muted" style="font-family: monospace;">{{ obj.name }}</div>
+              </div>
+              }
+
+              @if (getFilteredSfObjects().length === 0) {
+              <div class="text-center p-3 text-muted small">No objects found matching "{{ objectSearchQuery }}"</div>
+              }
+            </div>
+            }
+          </div>
+        </div>
+      </div>
+
+      @if (selectedObject && csvHeaders.length > 0) {
+      <div class="bg-light p-3 rounded border mb-4 border-primary-subtle shadow-sm">
+        <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Map Rules for Target Object {{
+          getSfObjectLabel(selectedObject) }}</h6>
+
+        <div class="d-flex justify-content-between align-items-end mb-2 px-1">
+          <div class="text-muted small fw-bold">
+            Mapped: <span class="text-primary">{{ getConfirmedCount() }} / {{ mappings.length }}</span> columns
+          </div>
+          <div class="d-flex gap-2">
+            @if (getConfirmedCount() > 0) {
+            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
+              (click)="clearAllMappings()">
+              <i class="feather icon-trash-2"></i> Clear All
+            </button>
+            }
+            <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
+              (click)="autoMapFields()">
+              <i class="feather icon-cpu"></i> Auto-Map Fields
+            </button>
+          </div>
+        </div>
+          @if (sfFields.length === 0 || isLoadingObjects) {
+          <div class="alert alert-secondary d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-secondary-subtle">
+            <span class="spinner-border spinner-border-sm me-2 text-primary"></span>
+            <span class="fw-bold text-secondary small">Loading Salesforce Rules...</span>
+          </div>
+        } @else if (getTotalRequiredFieldsCount() === 0) {
+          <div class="alert alert-info d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-info-subtle">
+            <i class="feather icon-info fs-5 me-2 text-info"></i>
+            <span class="fw-bold text-info-emphasis small">There are no strictly required fields for this Salesforce object.</span>
+          </div>
+        } @else if (getMissingRequiredFields().length > 0) {
+          <div class="alert alert-warning d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-warning-subtle">
+            <i class="feather icon-alert-triangle fs-4 me-3 text-warning"></i>
+            <div>
+              <h6 class="fw-bold mb-1 text-warning-emphasis" style="font-size: 0.85rem;">Salesforce Strictly Requires These Fields:</h6>
+              <div class="d-flex flex-wrap gap-1">
+                @for (reqField of getMissingRequiredFields(); track reqField) {
+                  <span class="badge bg-warning text-dark border border-warning-subtle shadow-sm">{{ reqField }}</span>
+                }
+              </div>
+            </div>
+          </div>
+        } @else {
+          <div class="alert alert-success d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-success-subtle">
+            <i class="feather icon-check-circle fs-5 me-2 text-success"></i>
+            <span class="fw-bold text-success-emphasis small">All Salesforce required fields are successfully mapped!</span>
+          </div>
+        }
+
+        <div class="text-muted small fw-bold mb-2 px-1">
+          Mapped: <span class="text-primary">{{ getConfirmedCount() }} / {{ mappings.length }}</span> columns
+        </div>
+
+        <div class="border rounded shadow-sm bg-white" style="overflow: visible !important;">
+          <table class="table table-hover table-bordered align-middle mb-0" style="overflow: visible;">
+           <thead class="table-light position-sticky top-0" style="z-index: 105;">
+              <tr>
+                <th width="30%" class="py-3 ps-4 align-middle">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="form-check m-0 p-0 d-flex align-items-center">
+                      <input class="form-check-input m-0 cursor-pointer shadow-sm border-secondary"
+                             type="checkbox"
+                             [checked]="allMappingsActive"
+                             (change)="toggleAllMappings($event)"
+                             style="width: 1.2rem; height: 1.2rem;"
+                             title="Select/Deselect All Columns">
+                    </div>
+                    <span>CSV Header</span>
+                  </div>
+                </th>
+                <th width="35%" class="py-3">Salesforce Field Mapping</th>
+                <th width="35%" class="py-3">Salesforce Rules & Limits</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (mapping of mappings; track mapping.csvField) {
+              <tr class="position-relative" [style.z-index]="mapping.isDropdownOpen ? '1060' : 'auto'"
+                  [class.opacity-50]="!mapping.isActive" [class.bg-light]="!mapping.isActive">
+
+                <td class="fw-bold ps-4 align-middle" [class.text-dark]="mapping.isActive" [class.text-muted]="!mapping.isActive">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="form-check m-0 p-0 d-flex align-items-center">
+                      <input class="form-check-input m-0 cursor-pointer shadow-sm border-secondary" type="checkbox"
+                             [(ngModel)]="mapping.isActive" (change)="toggleMappingActive(mapping)"
+                             style="width: 1.2rem; height: 1.2rem;">
+                    </div>
+                    <span><i class="feather icon-file-text me-1"></i> {{ mapping.csvField }}</span>
+                  </div>
+                </td>
+
+                <td>
+                  @if (mapping.isActive) {
+                    <div class="position-relative" (click)="$event.stopPropagation()">
+                      <div class="form-select form-select-sm cursor-pointer bg-white"
+                        (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
+                        {{ getSfFieldLabel(mapping.sfField) || '-- Select Field --' }}
+                      </div>
+
+                      @if (mapping.isDropdownOpen) {
+                        <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                          style="max-height: 300px; overflow-y: auto; z-index: 9999; top: 100%;">
+
+                          <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                            <div class="input-group input-group-sm">
+                              <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                              <input type="text" class="form-control" placeholder="Search by label or API name..."
+                                [(ngModel)]="mapping.searchQuery" autofocus>
+                            </div>
+                          </div>
+
+                          @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
+                            <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                              (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.sfField === field.name">
+                              {{ field.label }}
+                              <div class="small text-muted" style="font-family: monospace;">{{ field.name }} ({{ field.type }})</div>
+                            </div>
+                          }
+                        </div>
+                      }
+                    </div>
+
+                    @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
+                      <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
+                        <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
+                          <i class="feather icon-link"></i> Parent Ext ID ({{ mapping.parentObjectName }}):
+                        </label>
+
+                        @if (mapping.isLoadingParentFields) {
+                          <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                        } @else {
+                          <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                            <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
+                              (click)="toggleParentDropdown(mapping, $event)"
+                              [class.text-muted]="!mapping.relationalExtIdField">
+                              {{ getParentFieldLabel(mapping, mapping.relationalExtIdField) || '-- Select External ID --' }}
+                            </div>
+
+                            @if (mapping.isParentDropdownOpen) {
+                              <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                                style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
+                                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                                  <div class="input-group input-group-sm">
+                                    <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                                    <input type="text" class="form-control" placeholder="Search parent fields..."
+                                      [(ngModel)]="mapping.parentSearchQuery" autofocus>
+                                  </div>
+                                </div>
+                                <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectParentField(mapping, 'Id')"
+                                  [class.bg-light]="mapping.relationalExtIdField === 'Id'">
+                                  <span class="fw-bold">Id</span>
+                                  <div class="small text-muted" style="font-family: monospace;">Standard Salesforce ID</div>
+                                </div>
+                                <hr class="my-1">
+                                @for (pField of getFilteredParentFields(mapping); track pField.name) {
+                                  <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                                    (click)="selectParentField(mapping, pField.name)"
+                                    [class.bg-light]="mapping.relationalExtIdField === pField.name">
+                                    {{ pField.label }}
+                                    <div class="small text-muted" style="font-family: monospace;">{{ pField.name }}</div>
+                                  </div>
+                                }
+                              </div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    }
+                  } @else {
+                    <div class="form-select form-select-sm bg-light text-muted" style="cursor: not-allowed;">
+                      <i class="feather icon-x-circle me-1"></i> -- Ignored --
+                    </div>
+                  }
+                </td>
+
+                <td class="bg-light">
+                  @if (mapping.isActive) {
+                    @if (mapping.sfField) {
+                      @if (getSfFieldMeta(mapping.sfField); as meta) {
+                      <div class="d-flex flex-column gap-2">
+                        <div class="d-flex flex-wrap gap-1">
+                          <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2">
+                            {{ meta.type | uppercase }}
+                          </span>
+
+                          @if (meta.length && meta.type !== 'boolean' && meta.type !== 'date') {
+                          <span class="badge bg-white text-secondary border border-secondary-subtle px-2">
+                            Max: {{ meta.length }}
+                          </span>
+                          }
+
+                          @if (meta.isRequired || (!meta.nillable && meta.createable)) {
+                          <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 shadow-sm">
+                            <i class="feather icon-alert-circle"></i> Required
+                          </span>
+                          }
+
+                          @if (meta.unique || meta.externalId) {
+                          <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 shadow-sm">
+                            <i class="feather icon-key"></i> Unique
+                          </span>
+                          }
+
+                          @if (meta.type === 'reference') {
+                          <span class="badge bg-info-subtle text-info border border-info-subtle px-2">
+                            <i class="feather icon-link"></i> Lookup
+                          </span>
+                          }
+                        </div>
+                      </div>
+                      }
+                    } @else {
+                      <span class="text-muted small fst-italic"><i class="feather icon-arrow-left me-1"></i> Map a field to view its rules</span>
+                    }
+                  } @else {
+                    <span class="text-muted small fst-italic"><i class="feather icon-slash me-1"></i> Column will not be migrated</span>
+                  }
+                </td>
+
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div class="text-end mt-3">
+          <button class="btn btn-outline-primary d-flex align-items-center gap-2 ms-auto shadow-sm"
+            (click)="addToQueue()">
+            <i class="feather icon-plus"></i> Add to Validation Queue
+          </button>
+        </div>
+      </div>
+      }
+
+      @if (validationQueue.length > 0) {
+      <div class="mt-4 pt-3 border-top">
+        <h6 class="fw-bold text-secondary mb-3"><i class="feather icon-layers"></i> Validation Queue ({{ validationQueue.length }})</h6>
+        <div class="table-responsive border rounded shadow-sm mb-3">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Source Sheet</th>
+                <th>Target Object</th>
+                <th>Mapped Fields</th>
+                <th>Status</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (job of validationQueue; track $index) {
+              <tr>
+                <td class="fw-bold text-muted"><i class="feather icon-file-text me-1"></i> {{ job.sheetName }}</td>
+                <td><span class="badge bg-primary-subtle text-primary border border-primary-subtle py-1 px-2">{{ job.targetObject }}</span></td>
+                <td class="small">{{ job.mappings.length }} mapped</td>
+                <td>
+                  @if (job.status === 'pending') { <span class="badge bg-secondary">Pending</span> }
+                  @if (job.status === 'validating') { <span class="badge bg-info text-dark"><span class="spinner-border spinner-border-sm me-1" style="width: 10px; height: 10px;"></span> Running...</span> }
+                  @if (job.status === 'done') { <span class="badge bg-success"><i class="feather icon-check"></i> Done</span> }
+                  @if (job.status === 'error') { <span class="badge bg-danger"><i class="feather icon-x"></i> Failed</span> }
+                </td>
+                <td class="text-end">
+                  <div class="d-flex justify-content-end align-items-center gap-2">
+                    <button class="btn btn-sm btn-light border-secondary-subtle text-secondary fw-bold d-flex align-items-center gap-1 shadow-sm px-3"
+                      (click)="editQueuedItem($index)" [disabled]="isValidating" title="Edit Mapping Rules">
+                      <i class="feather icon-edit-2"></i> Edit
+                    </button>
+                    <button class="btn btn-sm btn-danger d-flex align-items-center justify-content-center shadow-sm px-2"
+                      (click)="removeFromQueue($index)" [disabled]="isValidating" title="Remove from Queue">
+                      <i class="feather icon-trash-2"></i>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div class="text-end">
+          <button class="btn btn-primary btn-lg shadow d-flex align-items-center gap-2 ms-auto"
+            [disabled]="isValidating" (click)="runValidationQueue()">
+            @if (isValidating) {
+            <span class="spinner-border spinner-border-sm"></span> Processing Batch...
+            } @else {
+            <i class="feather icon-zap"></i> Run Validation
+            }
+          </button>
+        </div>
+      </div>
+      }
+
+    </app-card>
+  </div>
+</div>
+
+@if (currentStep === 2 && validationQueue.length > 0) {
+<div class="row mb-4">
+  <div class="col-sm-12">
+    <app-card cardTitle="Step 2: Batch Validation Results">
+
+      <div class="row text-center mb-4 g-3">
+        <div class="col-md-3">
+          <div class="p-3 border rounded bg-light transition-all">
+            <h6 class="text-muted small fw-bold">Total Processed</h6>
+            <h3 class="text-dark mb-0">{{ aggregateStats.total }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-success-subtle bg-success-subtle rounded transition-all">
+            <h6 class="text-success-emphasis small fw-bold">Ready to Migrate</h6>
+            <h3 class="text-success mb-0">{{ aggregateStats.valid }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-danger-subtle bg-danger-subtle rounded transition-all">
+            <h6 class="text-danger-emphasis small fw-bold">Failed Rules</h6>
+            <h3 class="text-danger mb-0">{{ aggregateStats.invalid }}</h3>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="p-3 border border-warning-subtle bg-warning-subtle rounded transition-all">
+            <h6 class="text-warning-emphasis small fw-bold">Duplicates Removed</h6>
+            <h3 class="text-warning mb-0">{{ aggregateStats.duplicates }}</h3>
+          </div>
+        </div>
+      </div>
+
+      @if (aggregateStats.invalid > 0 && selectedErrorJobIndex !== -1) {
+      <div class="mt-5 border-top pt-4">
+        <h4 class="fw-bold text-danger mb-3 d-flex align-items-center gap-2">
+          <i class="feather icon-edit-2"></i> Review & Fix Errors
+        </h4>
+
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+          <p class="text-muted small mb-0 w-50">
+            Fix formatting errors <strong class="text-dark">directly in the grid</strong> below, then click
+            <span class="badge bg-danger text-white mx-1 px-2 py-1 shadow-sm"><i class="feather icon-refresh-cw"></i>
+              Re-Validate</span>
+            to push them to your clean queue.
+          </p>
+
+          <div class="d-flex align-items-center gap-2 p-2 bg-light border rounded shadow-sm">
+            <i class="feather icon-filter text-primary"></i>
+            <label class="fw-bold small mb-0 text-nowrap">Select Object:</label>
+            <select class="form-select form-select-sm border-primary" style="min-width: 200px;"
+              [(ngModel)]="selectedErrorJobIndex" (change)="errorCurrentPage = 1">
+              @for (item of errorJobs; track item.index) {
+              <option [ngValue]="item.index">{{ item.job.targetObject }} ({{ item.job.results.invalidRecords.length }}
+                Errors)</option>
+              }
+            </select>
+          </div>
+        </div>
+
+        @if (validationQueue[selectedErrorJobIndex]; as selectedJob) {
+        <div class="card border border-danger-subtle shadow-sm mb-2">
+          <div class="card-header bg-danger-subtle d-flex justify-content-between align-items-center py-2">
+            <h6 class="m-0 text-danger-emphasis fw-bold d-flex align-items-center gap-2">
+              <i class="feather icon-box"></i> {{ selectedJob.targetObject }}
+              <span class="badge bg-danger rounded-pill">{{ selectedJob.results.invalidRecords.length }} Total
+                Errors</span>
+            </h6>
+
+            <button class="btn btn-sm btn-danger shadow-sm d-flex align-items-center gap-1 fw-bold"
+              (click)="revalidateJob(selectedErrorJobIndex)" [disabled]="isValidating">
+              @if (isValidating) {
+              <span class="spinner-border spinner-border-sm"></span> Checking...
+              } @else {
+              <i class="feather icon-refresh-cw"></i> Re-Validate {{ selectedJob.targetObject }}
+              }
+            </button>
+          </div>
+
+          <div class="card-body p-0">
+            <div class="table-responsive" style="max-height: 450px; overflow-y: auto;">
+              <table class="table table-sm table-bordered align-middle mb-0" style="min-width: 800px;">
+               <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
+                  <tr>
+                    <th width="30%" class="text-danger fw-bold py-2 ps-3 align-middle bg-white">Salesforce Error Rule</th>
+
+                    @for (mapping of selectedJob.mappings; track mapping.csvField) {
+                    <th class="py-2 align-middle transition-all" style="min-width: 180px;"
+                        [class.bg-danger-subtle]="hasErrorsInColumn(selectedJob, mapping.csvField)"
+                        [class.bg-white]="!hasErrorsInColumn(selectedJob, mapping.csvField)">
+
+                      <div class="d-flex justify-content-between align-items-center gap-2">
+                        <div>
+                          <span class="d-block fw-bold lh-1"
+                                [class.text-danger]="hasErrorsInColumn(selectedJob, mapping.csvField)"
+                                [class.text-dark]="!hasErrorsInColumn(selectedJob, mapping.csvField)">
+                            {{ mapping.csvField }}
+                          </span>
+                          <small class="text-primary" style="font-family: monospace;">{{ mapping.sfField }}</small>
+                        </div>
+
+                        @if (hasErrorsInColumn(selectedJob, mapping.csvField)) {
+                          <span class="badge bg-danger shadow-sm"><i class="feather icon-alert-circle"></i> Error</span>
+                        }
+                      </div>
+
+                      @if (hasErrorsInColumn(selectedJob, mapping.csvField)) {
+                      <div class="input-group input-group-sm mt-2 shadow-sm">
+                        <input type="text" class="form-control border-danger-subtle" placeholder="Fix all {{mapping.csvField}}..."
+                               [(ngModel)]="mapping.massUpdateValue">
+                        <button class="btn btn-danger px-2" type="button" title="Apply to all error rows"
+                                (click)="applyMassUpdate(selectedJob, mapping.csvField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
+                          <i class="feather icon-check"></i>
+                        </button>
+                      </div>
+
+                      @if (getSfFieldMeta(mapping.sfField)?.type === 'picklist' || getSfFieldMeta(mapping.sfField)?.type === 'multipicklist') {
+                        <div class="mt-2 p-1 bg-white border border-danger-subtle rounded small text-muted"
+                             style="font-size: 0.7rem; max-height: 50px; overflow-y: auto; line-height: 1.2;">
+                          <strong class="text-dark">Allowed Values:</strong>
+                          {{ getSfFieldMeta(mapping.sfField)?.picklistValues?.join('; ') }}
+                        </div>
+                        <div class="text-muted mt-1" style="font-size: 0.65rem;">
+                          <em>* Separate multiple items with a semicolon (;)</em>
+                        </div>
+                      }
+                      }
+                    </th>
+                    }
+                  </tr>
+                </thead>
+
+                <tbody class="small">
+                  @for (record of paginatedErrorRecords; track $index) {
+                  <tr>
+                    <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium ps-3"
+                      style="font-size: 0.8rem; line-height: 1.2;">
+                      {{ record.errors }}
+                    </td>
+
+                    @for (mapping of selectedJob.mappings; track mapping.csvField) {
+                    <td class="p-1">
+                      <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all"
+                        [disabled]="mapping.type === 'reference'"
+                        [(ngModel)]="record.originalRow[mapping.csvField]"
+                        (ngModelChange)="markAsEdited(record, mapping.csvField)"
+
+                        [class.is-invalid]="hasCellError(record, mapping.csvField) && !record._editedFields?.[mapping.csvField]"
+
+                        [class.bg-success-subtle]="record._editedFields?.[mapping.csvField]"
+                        [class.border-success]="record._editedFields?.[mapping.csvField]"
+                        [class.text-success-emphasis]="record._editedFields?.[mapping.csvField]">
+                    </td>
+                    }
+                  </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center bg-light p-2 border rounded shadow-sm">
+          <span class="small text-muted fw-bold ms-2">
+            Showing <span class="text-dark">{{ (errorCurrentPage - 1) * errorPageSize + 1 }}</span> to <span
+              class="text-dark">{{ currentErrorMaxBound }}</span> of <span class="text-dark">{{
+              selectedJob.results.invalidRecords.length }}</span> entries
+          </span>
+
+          <div class="btn-group shadow-sm">
+            <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1"
+              (click)="prevErrorPage()" [disabled]="errorCurrentPage === 1">
+              <i class="feather icon-chevron-left"></i> Prev
+            </button>
+            <button class="btn btn-sm btn-white border-secondary-subtle text-primary fw-bold px-3" disabled>
+              Page {{ errorCurrentPage }} of {{ errorTotalPages }}
+            </button>
+            <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1"
+              (click)="nextErrorPage()" [disabled]="errorCurrentPage === errorTotalPages">
+              Next <i class="feather icon-chevron-right"></i>
+            </button>
+          </div>
+        </div>
+        }
+      </div>
+      }
+
+      @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
+        <div class="mt-4 p-5 text-center bg-success-subtle border border-success rounded-4 shadow-sm">
+          <div class="mb-3">
+            <i class="feather icon-check-circle text-success" style="font-size: 4rem;"></i>
+          </div>
+          <h3 class="text-success-emphasis fw-bold">Validation 100% Successful!</h3>
+          <p class="text-muted mb-0">All <strong>{{ aggregateStats.valid }}</strong> records passed Salesforce schema checks and are ready to be migrated.</p>
+        </div>
+      }
+
+      <div class="d-flex flex-wrap justify-content-between align-items-center mt-5 border-top pt-3 gap-3">
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" (click)="currentStep = 1">
+            <i class="feather icon-arrow-left"></i> Back to Mapping
+          </button>
+          
+          @if (aggregateStats.invalid > 0) {
+          <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
+            <i class="feather icon-download"></i> Download Unfixed Errors
+          </button>
+          }
+
+          @if (aggregateStats.duplicates > 0) {
+          <button class="btn btn-outline-warning shadow-sm d-flex align-items-center gap-2 text-dark" (click)="downloadDuplicates()">
+            <i class="feather icon-copy"></i> Download Duplicates
+          </button>
+          }
+
+          @if (aggregateStats.valid > 0) {
+          <button class="btn btn-outline-success shadow-sm d-flex align-items-center gap-2"
+            (click)="downloadCleanData()">
+            <i class="feather icon-download-cloud"></i> Multi-Sheet Processed Data
+          </button>
+          }
+        </div>
+
+        @if (aggregateStats.valid > 0) {
+        <button class="btn btn-primary shadow-lg d-flex align-items-center gap-2 fw-bold px-4"
+          (click)="routeToMigration()">
+          <i class="feather icon-zap"></i> Push Queue to Migration Engine <i class="feather icon-arrow-right"></i>
+        </button>
+        }
+      </div>
+
+    </app-card>
+  </div>
+</div>
+}
