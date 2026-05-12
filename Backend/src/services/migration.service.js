@@ -1,39 +1,614 @@
-const logger = require('../utils/logger')(__filename); 
+
+const logger = require('../utils/logger')(__filename);
+const { STATE_MAP, COUNTRY_MAP, RECORD_TYPE_MAP } = require('../configs/mappings');
 
 class MigrationService {
- async insertRecords(conn, targetObject, records) {
-  try {
-    //Filter out empty objects and clean headers
-    const cleanRecords = records
-      .filter(record => Object.keys(record).length > 0) // Remove empty rows
-      .map(record => {
-        const cleanRow = {};
-        Object.entries(record).forEach(([key, value]) => {
-          // Remove any hidden whitespace or newlines from the Salesforce Field Name
-          const cleanKey = key.trim();
-          if (cleanKey && value !== undefined) {
-            cleanRow[cleanKey] = value;
+
+  // --- UPGRADED: Data Cleanser with Cross-CRM Source Translation ---
+  cleanseData(value, sfType, fieldName, targetObject, sourceType = null) {
+    if (value === undefined || value === null || value === '') return null;
+    if (String(value).trim() === '#N/A') return '#N/A';
+
+    let processedValue = value;
+
+    // 1. SOURCE CRM PRE-PROCESSING
+    if (sourceType) {
+      switch (sourceType.toLowerCase()) {
+        case 'unix_timestamp':
+          processedValue = new Date(Number(processedValue) * 1000);
+          break;
+        case 'unix_timestamp_ms':
+          processedValue = new Date(Number(processedValue));
+          break;
+        case 'yes_no_string':
+          processedValue = String(processedValue).trim().toLowerCase() === 'yes';
+          break;
+        case 'comma_separated_string':
+          processedValue = String(processedValue).replace(/\|/g, ',');
+          break;
+        case 'html_text':
+          if (['string', 'textarea', 'email'].includes(sfType)) {
+            processedValue = String(processedValue).replace(/<[^>]*>?/gm, '').trim();
           }
+          break;
+      }
+    }
+
+    // 2. SALESFORCE TARGET FORMATTING
+    switch (sfType) {
+      case 'boolean':
+        const strVal = String(processedValue).trim().toLowerCase();
+      if (['true', '1', 'yes', 'y', 'active'].includes(strVal)) {
+      return true;
+      }
+      if (['false', '0', 'no', 'n', 'inactive'].includes(strVal)) {
+      return false;
+      }
+      logger.warn(`Unrecognized boolean value: "${processedValue}" for field [${fieldName}]. Skipping.`);
+      return null;
+
+      case 'currency':
+      case 'double':
+      case 'percent':
+      case 'int':
+        if (typeof processedValue === 'number') return processedValue;
+        const numericString = String(processedValue).replace(/[^0-9.-]+/g, '');
+        const parsedNum = sfType === 'int' ? parseInt(numericString, 10) : parseFloat(numericString);
+        return isNaN(parsedNum) ? null : parsedNum;
+
+      case 'date':
+      case 'datetime':
+        if (typeof processedValue === 'number') {
+
+          const dateObj = new Date(Math.round((processedValue - 25569) * 86400 * 1000));
+          
+          if (!isNaN(dateObj.getTime())) {
+            return sfType === 'date' ? dateObj.toISOString().split('T')[0] : dateObj.toISOString();
+          }
+          
+          logger.warn(`Numeric value "${processedValue}" resulted in an out-of-bounds Date for field [${fieldName}]. Skipping.`);
+          return null; 
+        }
+
+        // Standard string date parsing
+        const parsedDate = new Date(processedValue);
+        if (!isNaN(parsedDate.getTime())) {
+          return sfType === 'date' ? parsedDate.toISOString().split('T')[0] : parsedDate.toISOString();
+        }
+        return null; 
+
+      case 'time':
+        if (processedValue instanceof Date) {
+          return processedValue.toISOString().split('T')[1];
+        }
+        return String(processedValue).trim();
+
+      case 'multipicklist':
+        return String(processedValue)
+          .split(',')
+          .map(item => item.trim())
+          .filter(item => item.length > 0)
+          .join(';');
+
+      case 'email':
+        let emailStr = String(processedValue).trim().replace(/\s+/g, ''); 
+        if (emailStr.length > 80) {
+          logger.warn(`Truncating Email field [${fieldName}] - Exceeded 80 chars.`);
+          emailStr = emailStr.substring(0, 80);
+        }
+        return emailStr;
+
+      case 'phone':
+        let phoneStr = String(processedValue).trim();
+        if (phoneStr.length > 40) {
+          logger.warn(`Truncating Phone field [${fieldName}] - Exceeded 40 chars.`);
+          phoneStr = phoneStr.substring(0, 40);
+        }
+        return phoneStr;
+
+      case 'url':
+        let urlStr = String(processedValue).trim();
+        if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+          urlStr = 'https://' + urlStr; 
+        }
+        if (urlStr.length > 255) {
+          logger.warn(`Truncating URL field [${fieldName}] - Exceeded 255 chars.`);
+          urlStr = urlStr.substring(0, 255);
+        }
+        return urlStr;
+
+      case 'id':
+      case 'reference':
+        return String(processedValue).trim();
+    }
+
+    if (['picklist', 'string', 'textarea'].includes(sfType)) {
+      let cleanStr = String(processedValue).trim();
+
+      if (fieldName === 'RecordTypeId' && targetObject) {
+        const objectRecordTypes = RECORD_TYPE_MAP[targetObject];
+        if (objectRecordTypes && objectRecordTypes[cleanStr]) {
+          return objectRecordTypes[cleanStr];
+        } else {
+          logger.warn(`Unmapped Record Type "${cleanStr}" for ${targetObject}.`);
+          return cleanStr;
+        }
+      }
+
+ if (fieldName) {
+        const lowerField = fieldName.toLowerCase();
+        const lowerVal = cleanStr.toLowerCase();
+
+        // 1. Process Country mapping
+        if (lowerField.includes('country')) {
+          if (COUNTRY_MAP[lowerVal]) return COUNTRY_MAP[lowerVal];
+          
+          // If not in our map, warn but send as-is (might be valid in SF)
+          logger.warn(`Unmapped Country: "${cleanStr}". Sending as-is.`);
+          return cleanStr; 
+        }
+        
+        // 2. Process State mapping
+        if (lowerField.includes('state') || lowerField.includes('province')) {
+          if (STATE_MAP[lowerVal]) return STATE_MAP[lowerVal];
+          
+          // CRITICAL FIX: If the state is not exactly mapped to a Full Name, 
+          // set it to null. Sending a bad text state guarantees a crash.
+          logger.warn(`Invalid State: "${cleanStr}". Removing to prevent crash.`);
+          return null; 
+        }
+      }
+
+     if (sfType === 'string') {
+        cleanStr = cleanStr.replace(/[\r\n]+/g, ' '); 
+        if (cleanStr.length > 255) {
+          logger.warn(`Truncating String field [${fieldName || 'Unknown'}] - Exceeded 255 chars.`);
+          cleanStr = cleanStr.substring(0, 255);
+        }
+      }
+
+     if (sfType === 'textarea') {
+        if (cleanStr.length > 32768) {
+          logger.warn(`Truncating Textarea field [${fieldName || 'Unknown'}] - Exceeded 32,768 chars.`);
+          cleanStr = cleanStr.substring(0, 32768);
+        }
+      }
+
+      return cleanStr;
+    }
+
+    return processedValue;
+  }
+
+  // 1: Dependency Sorter
+  sortJobsByDependency(jobs) {
+    const sorted = [];
+    const pass3Jobs = [];
+    const visited = new Set();
+    const visiting = new Set();
+
+    function visit(job) {
+      if (visited.has(job.targetObject)) return;
+
+      visiting.add(job.targetObject);
+
+      const dependencies = job.mappings
+        .filter(m => m.type === 'reference' && m.referenceTo)
+        .flatMap(m => m.referenceTo);
+
+      const deferReferencesTo = [];
+
+      for (const dep of dependencies) {
+        const parentJob = jobs.find(j => j.targetObject === dep);
+        if (parentJob) {
+          if (visiting.has(dep)) {
+            logger.warn(`Circular dependency: ${job.targetObject} <-> ${dep}. Deferring ${dep} link to Pass 3.`);
+            deferReferencesTo.push(dep);
+          } else {
+            visit(parentJob);
+          }
+        }
+      }
+
+      visiting.delete(job.targetObject);
+      visited.add(job.targetObject);
+
+      job.deferReferencesTo = deferReferencesTo;
+      sorted.push(job);
+
+      if (deferReferencesTo.length > 0) {
+        pass3Jobs.push({
+          ...job,
+          isPass3Patch: true,
+          onlyReferencesTo: deferReferencesTo
         });
-        return cleanRow;
+      }
+    }
+
+    jobs.forEach(job => visit(job));
+    return [...sorted, ...pass3Jobs];
+  }
+
+  // 2: Payload Builder
+  buildPayload(rawRecords, mappings, options = {}) {
+    const {
+      skipSelfReferencing = false,
+      onlySelfReferencing = false,
+      excludeReferencesTo = [],
+      onlyReferencesTo = [],
+      targetObject = '',
+      targetExtIdField = '',
+      operationMode = 'insert' // passed down config
+    } = options;
+
+    const payload = [];
+    const isPatchMode = onlySelfReferencing || onlyReferencesTo.length > 0;
+
+    rawRecords.forEach((rawRow, originalIndex) => {
+      let sfRecord = {};
+      let hasPatchData = false;
+
+      mappings.forEach(mappingMeta => {
+        if (!mappingMeta || !mappingMeta.sfField) return;
+
+        const csvKey = mappingMeta.csvField;
+        const csvValue = rawRow[csvKey];
+
+        const isAuditField = ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById'].includes(mappingMeta.sfField);
+        if (isPatchMode && isAuditField) return;
+
+        const valueToUse = this.cleanseData(
+          csvValue,
+          mappingMeta.type,
+          mappingMeta.sfField,
+          targetObject,
+          mappingMeta.sourceType
+        );
+
+        const isPrimaryExtId = mappingMeta.sfField === targetExtIdField;
+        if (valueToUse === null && !isPrimaryExtId) return;
+
+        const isSelfRef = mappingMeta.type === 'reference' && mappingMeta.referenceTo && mappingMeta.referenceTo.includes(targetObject);
+        const referencesOther = mappingMeta.type === 'reference' && mappingMeta.referenceTo ? mappingMeta.referenceTo : [];
+
+        const isExcludedCross = excludeReferencesTo.some(obj => referencesOther.includes(obj));
+        const isOnlyTargetCross = onlyReferencesTo.length > 0 && onlyReferencesTo.some(obj => referencesOther.includes(obj));
+
+        if (skipSelfReferencing && isSelfRef) return;
+        if (onlySelfReferencing && !isSelfRef) return;
+        if (isExcludedCross) return;
+        if (onlyReferencesTo.length > 0 && !isOnlyTargetCross) return;
+
+        let relName = mappingMeta.relationshipName;
+        if (!relName && mappingMeta.sfField) {
+          if (mappingMeta.sfField.endsWith('Id')) {
+            relName = mappingMeta.sfField.slice(0, -2);
+          } else if (mappingMeta.sfField.endsWith('__c')) {
+            relName = mappingMeta.sfField.replace('__c', '__r');
+          }
+        }
+
+        if (mappingMeta.type === 'reference' && mappingMeta.relationalExtIdField && relName) {
+          const relationalKey = `${relName}.${mappingMeta.relationalExtIdField}`;
+          sfRecord[relationalKey] = valueToUse;
+          if (isPatchMode) hasPatchData = true;
+        } else {
+          sfRecord[mappingMeta.sfField] = valueToUse;
+        }
       });
 
-    if (cleanRecords.length === 0) {
-      throw new Error("No valid data rows found after cleaning.");
-    }
-    logger.info(`Starting Bulk migration: ${cleanRecords.length} records into ${targetObject}`);
-    const results = await conn.bulk.load(targetObject, "insert", cleanRecords);
+      if (targetExtIdField && !sfRecord.hasOwnProperty(targetExtIdField)) {
+        sfRecord[targetExtIdField] = null;
+      }
 
-    return results;
+      // Explicit strip for Delete mode. SF only accepts "Id" field for bulk deletes.
+      if (operationMode === 'delete') {
+         sfRecord = sfRecord.Id ? { Id: sfRecord.Id } : {};
+      }
 
-  } catch (error) {
-    if (error.message.includes('InvalidBatch')) {
-      logger.error('Bulk API Header Error: Check if your mapped Salesforce field names are valid API names (e.g. No spaces, no special chars).');
-    }
-    logger.error(`Bulk Migration Service Error: ${error.message}`);
-    throw error;
+      // Check if Object is not empty before pushing
+      if (Object.keys(sfRecord).length > 0) {
+        if (!isPatchMode || (isPatchMode && hasPatchData)) {
+          payload.push({ originalIndex, sfRecord });
+        }
+      }
+    });
+
+    return payload;
   }
-}
+
+  // --- NEW: Data Chunker Helper ---
+  chunkArray(array, size) {
+    const result = [];
+    for (let i = 0; i < array.length; i += size) {
+      result.push(array.slice(i, i + size));
+    }
+    return result;
+  }
+
+  async threadPoolExecutor(chunks, concurrencyLimit, workerFunction) {
+    const results = [];
+    const executingThreads = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      // Start the worker function (Logical Thread)
+      const threadPromise = workerFunction(chunk, i + 1);
+      results.push(threadPromise);
+
+      // If we reach our thread limit, pause and wait for at least one to finish
+      if (concurrencyLimit <= chunks.length) {
+        const executing = threadPromise.then(() => executingThreads.splice(executingThreads.indexOf(executing), 1));
+        executingThreads.push(executing);
+        if (executingThreads.length >= concurrencyLimit) {
+          await Promise.race(executingThreads);
+        }
+      }
+    }
+    // Wait for the remaining threads to finish
+    return Promise.all(results);
+  }
+
+  // --- Auto-Retry Wrapper for Salesforce API ---
+  async loadToSalesforceWithRetry(conn, targetObject, operation, options, records, maxRetries = 3) {
+    let attempt = 1;
+    while (attempt <= maxRetries) {
+      try {
+        // Execute the actual JSforce bulk API call
+        return await conn.bulk.load(targetObject, operation, options, records);
+      } catch (err) {
+        const isRowLock = err.message.includes('UNABLE_TO_LOCK_ROW');
+        if (isRowLock && attempt < maxRetries) {
+          logger.warn(`[${targetObject}] Row lock detected on attempt ${attempt}. Retrying in 5 seconds...`);
+          // Pause this specific thread for 5 seconds before trying again
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          attempt++;
+        } else {
+          // If it's a different error, or we ran out of retries, fail the batch
+          throw err;
+        }
+      }
+    }
+  }
+
+ async executeUpsertBatch(conn, targetObjectOrJobs, records) {
+    conn.bulk.pollTimeout = 1200000; 
+    conn.bulk.pollInterval = 2000;
+
+    // Define exactly how many parallel threads we want to use for Salesforce Bulk API
+    const THREAD_COUNT = 6;
+
+    try {
+      const rawJobs = Array.isArray(targetObjectOrJobs)
+        ? targetObjectOrJobs
+        : [{ targetObject: targetObjectOrJobs, records: records }];
+
+      const migrationJobs = this.sortJobsByDependency(rawJobs);
+
+      let totalSuccess = 0, totalFailed = 0;
+      let allFailures = [], allSuccessfulRecords = [];
+
+      for (const job of migrationJobs) {
+        const { 
+            targetObject, 
+            targetExtIdField, 
+            records: rawJobRecords, 
+            mappings, 
+            batchSize = 10000, 
+            operationMode = 'insert',
+            deferReferencesTo = [], 
+            isPass3Patch, 
+            onlyReferencesTo = [],
+            concurrencyMode = 'Parallel'
+        } = job;
+
+        const BATCH_SIZE = parseInt(batchSize, 10) || 10000;
+
+        const handleBatchError = (err, chunk, stageName) => {
+            const isTimeout = err.name === 'JobTimeoutError' || err.message.includes('polling time out');
+            const prefix = isTimeout ? '[TIMEOUT]' : '[FATAL]';
+            
+            if (isTimeout) {
+                logger.error(`[${targetObject} - ${stageName}] TIMEOUT: Job is still processing in Salesforce.`);
+            } else {
+                logger.error(`[${targetObject} - ${stageName}] Fatal Error: ${err.message}`);
+            }
+            
+            chunk.forEach(p => allFailures.push({ 
+                error: `${prefix} ${err.message}`, 
+                record: rawJobRecords[p.originalIndex] 
+            }));
+            totalFailed += chunk.length;
+        };
+
+        // ==========================================
+        // SCENARIO 0: PASS 3 PATCH (Cross-Object Circular Patch)
+        // ==========================================
+        if (isPass3Patch) {
+          if (!targetExtIdField) continue;
+          const patchPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, onlyReferencesTo, operationMode: 'upsert' });
+          if (patchPayload.length === 0) continue;
+
+          const payloadChunks = this.chunkArray(patchPayload, BATCH_SIZE);
+          logger.info(`[${targetObject}] Pass 3: Spawning ${THREAD_COUNT} threads for ${payloadChunks.length} batches.`);
+
+          // Run up to 6 batches concurrently
+          await this.threadPoolExecutor(payloadChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
+            try {
+              logger.info(`[${targetObject}] Thread executing Pass 3 Batch ${chunkCounter}/${payloadChunks.length}`);
+              const patchRecords = chunk.map(p => p.sfRecord);
+              //const patchResults = await conn.bulk.load(targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
+              const patchResults = await this.loadToSalesforceWithRetry(conn, targetObject, "upsert", { extIdField: targetExtIdField, concurrencyMode }, patchRecords);
+
+              patchResults.forEach((res, i) => {
+                if (!res.success) {
+                  const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                  const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                  allFailures.push({ error: `[${targetObject} - Circular Link Failed] ${errMsg}`, record: originalRecord });
+                }
+              });
+            } catch (err) {
+                handleBatchError(err, chunk, `Pass 3 Batch ${chunkCounter}`);
+            }
+          });
+          continue;
+        }
+
+        // ==========================================
+        // SCENARIO 1: DELETE OPERATION
+        // ==========================================
+        if (operationMode === 'delete') {
+            const deletePayload = this.buildPayload(rawJobRecords, mappings, { targetObject, operationMode });
+            if (deletePayload.length === 0) continue;
+            
+            const payloadChunks = this.chunkArray(deletePayload, BATCH_SIZE);
+            logger.info(`[${targetObject}] Delete: Spawning ${THREAD_COUNT} threads for ${payloadChunks.length} batches.`);
+
+            await this.threadPoolExecutor(payloadChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
+                try {
+                    logger.info(`[${targetObject}] Thread executing Delete Batch ${chunkCounter}/${payloadChunks.length}`);
+                    const deleteRecords = chunk.map(p => p.sfRecord);
+                    const finalResults = await this.loadToSalesforceWithRetry(
+                    conn,
+                    targetObject,
+                    "hardDelete",
+                    { concurrencyMode },
+                    deleteRecords
+                  );
+
+                    finalResults.forEach((res, i) => {
+                        const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                        if (res.success) {
+                            totalSuccess++;
+                            allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: 'Deleted', ...originalRecord });
+                        } else {
+                            totalFailed++;
+                            const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                            allFailures.push({ error: `[${targetObject} Delete Failed] ${errMsg}`, record: originalRecord });
+                        }
+                    });
+                } catch (err) {
+                    handleBatchError(err, chunk, `Delete Batch ${chunkCounter}`);
+                }
+            });
+            continue; 
+        }
+
+        // ==========================================
+        // SCENARIO 2: INSERT / UPDATE / UPSERT
+        // ==========================================
+        let sfOperation = operationMode;
+        let bulkOptions = { concurrencyMode };
+
+        if (operationMode === 'update' && targetExtIdField && targetExtIdField !== 'Id') {
+            sfOperation = 'upsert';
+            bulkOptions.extIdField = targetExtIdField;
+        } else if (operationMode === 'upsert') {
+            sfOperation = 'upsert';
+            bulkOptions.extIdField = targetExtIdField;
+        }
+
+        const hasSelfReferencing = mappings.some(m => m.type === 'reference' && m.referenceTo && m.referenceTo.includes(targetObject));
+
+        if (hasSelfReferencing) {
+            // PASS 1: Base Data (Threaded)
+            const pass1Payload = this.buildPayload(rawJobRecords, mappings, { skipSelfReferencing: true, targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
+            if (pass1Payload.length > 0) {
+              const pass1Chunks = this.chunkArray(pass1Payload, BATCH_SIZE);
+              logger.info(`[${targetObject}] Pass 1: Spawning ${THREAD_COUNT} threads for ${pass1Chunks.length} batches.`);
+              
+              await this.threadPoolExecutor(pass1Chunks, THREAD_COUNT, async (chunk, chunkCounter) => {
+                try {
+                  logger.info(`[${targetObject}] Thread executing Pass 1 Batch ${chunkCounter}/${pass1Chunks.length}`);
+                  const pass1Records = chunk.map(p => p.sfRecord);
+                 //const pass1Results = await conn.bulk.load(targetObject, sfOperation, bulkOptions, pass1Records);
+                  const pass1Results = await this.loadToSalesforceWithRetry(conn, targetObject, sfOperation, bulkOptions, pass1Records);
+
+                  pass1Results.forEach((res, i) => {
+                    const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                    if (res.success) {
+                      totalSuccess++;
+                      allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Processed', ...originalRecord });
+                    } else {
+                      totalFailed++;
+                      const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                      allFailures.push({ error: `[${targetObject} - Base Data Failed] ${errMsg}`, record: originalRecord });
+                    }
+                  });
+                } catch (err) {
+                    handleBatchError(err, chunk, `Pass 1 Batch ${chunkCounter}`);
+                }
+              });
+            }
+
+            // PASS 2: Self-Referencing Links (Threaded)
+            const pass2Payload = this.buildPayload(rawJobRecords, mappings, { onlySelfReferencing: true, targetObject, targetExtIdField, operationMode: 'upsert' });
+            if (pass2Payload.length > 0) {
+              const pass2Chunks = this.chunkArray(pass2Payload, BATCH_SIZE);
+              const patchOptions = { concurrencyMode, ...(targetExtIdField && { extIdField: targetExtIdField }) };
+
+              logger.info(`[${targetObject}] Pass 2: Spawning ${THREAD_COUNT} threads for ${pass2Chunks.length} batches.`);
+
+              await this.threadPoolExecutor(pass2Chunks, THREAD_COUNT, async (chunk, chunkCounter) => {
+                try {
+                  logger.info(`[${targetObject}] Thread executing Pass 2 Batch ${chunkCounter}/${pass2Chunks.length}`);
+                  const pass2Records = chunk.map(p => p.sfRecord);
+                  //const pass2Results = await conn.bulk.load(targetObject, "upsert", patchOptions, pass2Records);
+                  const pass2Results = await this.loadToSalesforceWithRetry(conn, targetObject, "upsert", patchOptions, pass2Records);
+
+                  pass2Results.forEach((res, i) => {
+                    if (!res.success) {
+                      const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                      const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                      allFailures.push({ error: `[${targetObject} - Relationship Link Failed] ${errMsg}`, record: originalRecord });
+                    }
+                  });
+                } catch (err) {
+                    handleBatchError(err, chunk, `Pass 2 Batch ${chunkCounter}`);
+                }
+              });
+            }
+
+        } else {
+            // STANDARD 1-PASS (Insert, Update, or Upsert - Threaded)
+            const standardPayload = this.buildPayload(rawJobRecords, mappings, { targetObject, targetExtIdField, excludeReferencesTo: deferReferencesTo, operationMode });
+            if (standardPayload.length === 0) continue;
+
+            const standardChunks = this.chunkArray(standardPayload, BATCH_SIZE);
+            logger.info(`[${targetObject}] Standard: Spawning ${THREAD_COUNT} threads for ${standardChunks.length} batches.`);
+
+            await this.threadPoolExecutor(standardChunks, THREAD_COUNT, async (chunk, chunkCounter) => {
+              try {
+                logger.info(`[${targetObject}] Thread executing ${sfOperation} Batch ${chunkCounter}/${standardChunks.length}`);
+                const standardRecords = chunk.map(p => p.sfRecord);
+                //const finalResults = await conn.bulk.load(targetObject, sfOperation, bulkOptions, standardRecords);
+                const finalResults = await this.loadToSalesforceWithRetry(conn, targetObject, sfOperation, bulkOptions, standardRecords);
+
+                finalResults.forEach((res, i) => {
+                  const originalRecord = rawJobRecords[chunk[i].originalIndex];
+                  if (res.success) {
+                    totalSuccess++;
+                    allSuccessfulRecords.push({ _TargetObject: targetObject, SalesforceId: res.id, Status: res.created ? 'Created' : 'Processed', ...originalRecord });
+                  } else {
+                    totalFailed++;
+                    const errMsg = Array.isArray(res.errors) ? res.errors.map(e => typeof e === 'string' ? e : e.message).join(', ') : (res.error || 'Unknown Error');
+                    allFailures.push({ error: `[${targetObject} ${sfOperation} Failed] ${errMsg}`, record: originalRecord });
+                  }
+                });
+              } catch (err) {
+                  handleBatchError(err, chunk, `Standard ${sfOperation} Batch ${chunkCounter}`);
+              }
+            });
+        }
+      }
+
+      return { stats: { success: totalSuccess, failed: totalFailed }, failures: allFailures, successfulRecords: allSuccessfulRecords };
+
+    } catch (error) {
+      logger.error(`Bulk Execution Error: ${error.message}`);
+      throw error;
+    }
+  }
 }
 
 module.exports = new MigrationService();

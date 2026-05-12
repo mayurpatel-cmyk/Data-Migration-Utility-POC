@@ -26,45 +26,82 @@ export interface AuthResponse {
 @Injectable({
   providedIn: 'root'
 })
+// export class AuthService {
+//   private http = inject(HttpClient);
+//   private router = inject(Router);
+//   private apiUrl = 'http://localhost:3000/api/auth/login';
+
+//   // Initialize signal from localStorage to persist login on refresh
+//   currentUser = signal<AuthResponse['user'] | null>(
+//     JSON.parse(localStorage.getItem('user_data') || 'null')
+//   );
+//   getSalesforceAuthUrl(environment: string): Observable<{url: string}> {
+//   // This hits your Node.js backend login endpoint
+//   // Make sure this URL matches your backend route!
+//   return this.http.post<{url: string}>('http://localhost:3000/api/auth/login', { environment });
+// }
+
+//   login(credentials: LoginCredentials): Observable<AuthResponse> {
+//     return this.http.post<AuthResponse>(this.apiUrl, credentials).pipe(
+//       tap((response) => {
+//         // Removed the strict check for response.token
+//         if (response.success && response.user) {
+
+//           // 1. Persist data
+//           localStorage.setItem('user_data', JSON.stringify(response.user));
+
+//           // Note: If you want to store the Salesforce accessToken from the user object,
+//           // you can do it like this:
+//           if (response.user.accessToken) {
+//              localStorage.setItem('token', response.user.accessToken);
+//           }
+
+//           // 2. Update Signal
+//           this.currentUser.set(response.user);
+//         }
+//       })
+//     );
+//   }
+
+//   logout() {
+//     localStorage.removeItem('user_data');
+//     this.currentUser.set(null);
+//     this.router.navigate(['/login']);
+//   }
+
+//   isLoggedIn(): boolean {
+//     return !!this.currentUser();
+//   }
+// }
+
 export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
   private apiUrl = 'http://localhost:3000/api/auth/login';
 
-  // Initialize signal from localStorage to persist login on refresh
-  currentUser = signal<AuthResponse['user'] | null>(
-    JSON.parse(localStorage.getItem('user_data') || 'null')
-  );
+  // 1. Updated signal to check for our new 'sf_token'
+  currentUser = signal<any>(localStorage.getItem('sf_token'));
 
-  login(credentials: LoginCredentials): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(this.apiUrl, credentials).pipe(
-      tap((response) => {
-        // Removed the strict check for response.token
-        if (response.success && response.user) {
-          
-          // 1. Persist data
-          localStorage.setItem('user_data', JSON.stringify(response.user));
-          
-          // Note: If you want to store the Salesforce accessToken from the user object, 
-          // you can do it like this:
-          if (response.user.accessToken) {
-             localStorage.setItem('token', response.user.accessToken);
-          }
+  getSalesforceAuthUrl(environment: string): Observable<{url: string}> {
+    return this.http.post<{url: string}>(this.apiUrl, { environment });
+  }
 
-          // 2. Update Signal 
-          this.currentUser.set(response.user);
-        }
-      })
-    );
+  // 2. Updated to check for the new key
+  isLoggedIn(): boolean {
+    return !!localStorage.getItem('sf_token');
+  }
+
+  // 3. Helper to update storage and signal after OAuth redirect
+  handleOAuthLogin(token: string, instanceUrl: string) {
+    localStorage.setItem('sf_token', token);
+    localStorage.setItem('sf_instance_url', instanceUrl);
+    this.currentUser.set(token); // Update the signal so the Guard sees it
   }
 
   logout() {
-    localStorage.removeItem('user_data');
+    localStorage.removeItem('sf_token');
+    localStorage.removeItem('sf_instance_url');
     this.currentUser.set(null);
     this.router.navigate(['/login']);
-  }
-
-  isLoggedIn(): boolean {
-    return !!this.currentUser();
   }
 }

@@ -11,15 +11,27 @@ export class MigrationService {
   private apiUrl = 'http://localhost:3000/api/sf'; 
   private migrateUrl = 'http://localhost:3000/api/migrate-data';
 
-  private getHeaders(): HttpHeaders {
-    const userData = JSON.parse(localStorage.getItem('user_data') || '{}');
-    
-    return new HttpHeaders({
-      'user-email': userData.email || '',
-      'instanceurl': userData.instanceUrl || '', 
-      'accesstoken': userData.accessToken || ''  
-    });
-  }
+ private getHeaders(): HttpHeaders {
+  // Pull directly from the new keys your AuthService uses
+  const accessToken = localStorage.getItem('sf_token') || '';
+  const instanceUrl = localStorage.getItem('sf_instance_url') || ''; 
+  
+  // Note: Your OAuth flow doesn't seem to save an email to local storage anymore.
+  // I am sending a blank string here just in case your Node backend expects the header to exist.
+  const email = localStorage.getItem('sf_user_email') || ''; 
+
+  // DEBUG LOG
+  console.log('🛡️ Auth Headers Check:', { 
+      hasInstanceUrl: !!instanceUrl, 
+      hasToken: !!accessToken 
+  });
+
+  return new HttpHeaders({
+    'user-email': email,
+    'instanceurl': instanceUrl, 
+    'accesstoken': accessToken  
+  });
+}
 
   getAllObjects(): Observable<any[]> {
     return this.http.get<{success: boolean, data: any[]}>(`${this.apiUrl}/all-objects`, { 
@@ -35,7 +47,7 @@ export class MigrationService {
       headers: this.getHeaders(),
       withCredentials: true 
     }).pipe(
-      tap(rawResponse => console.log('RAW BACKEND RESPONSE:', rawResponse)),
+      tap(rawResponse => console.log(`RAW BACKEND RESPONSE for ${objectName}:`, rawResponse)),
       map(response => {
         if (response.fields) return response.fields;
         if (response.data) return response.data;

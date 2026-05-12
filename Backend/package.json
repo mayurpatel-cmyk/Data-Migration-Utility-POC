@@ -12,16 +12,22 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
     "fast-csv": "^5.0.5",
+    "form-data": "^4.0.5",
     "helmet": "^8.1.0",
     "jsforce": "^3.10.14",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "multer": "^2.1.1",
-    "winston": "^3.19.0"
+    "passport": "^0.7.0",
+    "passport-oauth2": "^1.8.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

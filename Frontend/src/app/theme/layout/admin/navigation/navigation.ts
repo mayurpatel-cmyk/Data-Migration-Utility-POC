@@ -16,22 +16,28 @@ export interface NavigationItem {
 }
 
 export const NavigationItems: NavigationItem[] = [
-  {
-    id: 'dashboard',
-    title: 'Dashboard',
-    type: 'group',
-    icon: 'icon-navigation',
-    children: [
-      {
-        id: 'migration',
-        title: 'Data-Migration',
-        type: 'item',
-        classes: 'nav-item',
-        url: '/migration',
-        icon: 'ti ti-dashboard',
-        breadcrumbs: true
-      }
-    ]
-  }
-
+ {
+  id: 'data-import',
+  title: 'CSV/Excel Import',
+  type: 'item',
+  url: '/data-import', // This must match the path in AppRoutingModule
+  icon: 'ti ti-file-upload',
+  breadcrumbs: true
+},
+ {
+  id: 'validation',
+  title: 'DataValidation',
+  type: 'item',
+  url: '/data-validation', // This must match the path in AppRoutingModule
+  icon: 'ti ti-shield-check',
+  breadcrumbs: true
+},
+ {
+  id: 'connection',
+  title: 'Connection',
+  type: 'item',
+  url: '/connection', // This must match the path in AppRoutingModule
+  icon: 'ti ti-plug',
+  breadcrumbs: true
+},
 ];
