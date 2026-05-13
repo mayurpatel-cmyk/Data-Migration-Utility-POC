@@ -723,6 +723,41 @@ export class DataValidationComponent implements OnInit {
     link.click();
   }
 
+  downloadDuplicates() {
+    let allDuplicates: any[] = [];
+
+    this.validationQueue.forEach(job => {
+      if (job.results?.invalidRecords?.length > 0) {
+        // Filter the invalid records to ONLY get the ones marked as Duplicates
+        const duplicateRecords = job.results.invalidRecords
+          .filter((ir: any) => ir.errors.includes('Duplicate Record'))
+          .map((ir: any) => ({
+            SourceSheet: job.sheetName,
+            TargetObject: job.targetObject,
+            RowNumber: ir.rowNumber,
+            Errors: ir.errors,
+            ...ir.originalRow
+          }));
+          
+        allDuplicates = [...allDuplicates, ...duplicateRecords];
+      }
+    });
+
+    if (allDuplicates.length === 0) {
+      this.toastr.info('No duplicate records found to download.', 'Empty');
+      return;
+    }
+
+    // Generate and download the CSV just like the Error Log!
+    const worksheet = utils.json_to_sheet(allDuplicates);
+    const csvOutput = utils.sheet_to_csv(worksheet);
+    const blob = new Blob([csvOutput], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    link.download = `Validation_Duplicates.csv`;
+    link.click();
+  }
+
   recalculateStats() {
     let totalValid = 0;
     let totalInvalid = 0;
