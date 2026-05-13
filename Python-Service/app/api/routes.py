@@ -123,61 +123,61 @@ async def validate_batch(
 
         # elif ext in ['.xlsx', '.xls']:
             # FIX: Open the Excel file in read-only streaming mode to prevent RAM spikes
-            wb = load_workbook(temp_file_name, read_only=True, data_only=True)
-            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+            # wb = load_workbook(temp_file_name, read_only=True, data_only=True)
+            # ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
             
-            rows_iter = ws.iter_rows(values_only=True)
-            headers_raw = next(rows_iter, [])
-            headers = [str(h) if h is not None else f"Unnamed_{i}" for i, h in enumerate(headers_raw)]
+            # rows_iter = ws.iter_rows(values_only=True)
+            # headers_raw = next(rows_iter, [])
+            # headers = [str(h) if h is not None else f"Unnamed_{i}" for i, h in enumerate(headers_raw)]
 
-            chunk_records = []
+            # chunk_records = []
             
-            # Manually stream and chunk the rows
-            for row in rows_iter:
-                # Skip entirely blank rows at the bottom of sheets
-                if not any(row): continue 
+            # # Manually stream and chunk the rows
+            # for row in rows_iter:
+            #     # Skip entirely blank rows at the bottom of sheets
+            #     if not any(row): continue 
                 
-                chunk_records.append(dict(zip(headers, row)))
+            #     chunk_records.append(dict(zip(headers, row)))
                 
-                # Yield when we hit 10,000 records
-                if len(chunk_records) == 10000:
-                    chunk_df = pd.DataFrame(chunk_records)
-                    chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
+            #     # Yield when we hit 10,000 records
+            #     if len(chunk_records) == 10000:
+            #         chunk_df = pd.DataFrame(chunk_records)
+            #         chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                     
-                    result = process_validation_batch(
-                        records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
-                         sf_rules=sf_rules,
-                        date_format=date_format
-                    )
+            #         result = process_validation_batch(
+            #             records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
+            #              sf_rules=sf_rules,
+            #             date_format=date_format
+            #         )
                     
-                    total_count += result["stats"]["total"]
-                    total_valid += result["stats"]["valid"]
-                    total_invalid_count += result["stats"]["invalid"]
-                    total_duplicates += result["stats"]["duplicates"]
-                    all_invalid_records.extend(result["invalidRecords"])
-                    all_valid_records.extend(result["validRecords"])
+            #         total_count += result["stats"]["total"]
+            #         total_valid += result["stats"]["valid"]
+            #         total_invalid_count += result["stats"]["invalid"]
+            #         total_duplicates += result["stats"]["duplicates"]
+            #         all_invalid_records.extend(result["invalidRecords"])
+            #         all_valid_records.extend(result["validRecords"])
                     
-                    chunk_records = [] # Reset for next batch
+            #         chunk_records = [] # Reset for next batch
             
-            # Process the final leftover records
-            if chunk_records:
-                chunk_df = pd.DataFrame(chunk_records)
-                chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
+            # # Process the final leftover records
+            # if chunk_records:
+            #     chunk_df = pd.DataFrame(chunk_records)
+            #     chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 
-                result = process_validation_batch(
-                    records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
-                     sf_rules=sf_rules,
-                    date_format=date_format
-                )
+            #     result = process_validation_batch(
+            #         records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key, 
+            #          sf_rules=sf_rules,
+            #         date_format=date_format
+            #     )
                 
-                total_count += result["stats"]["total"]
-                total_valid += result["stats"]["valid"]
-                total_invalid_count += result["stats"]["invalid"]
-                total_duplicates += result["stats"]["duplicates"]
-                all_invalid_records.extend(result["invalidRecords"])
-                all_valid_records.extend(result["validRecords"])
+            #     total_count += result["stats"]["total"]
+            #     total_valid += result["stats"]["valid"]
+            #     total_invalid_count += result["stats"]["invalid"]
+            #     total_duplicates += result["stats"]["duplicates"]
+            #     all_invalid_records.extend(result["invalidRecords"])
+            #     all_valid_records.extend(result["validRecords"])
                 
-            wb.close()
+            # wb.close()
 
         if ext == '.csv':
             chunk_iterator = pd.read_csv(temp_file_name, chunksize=10000)
