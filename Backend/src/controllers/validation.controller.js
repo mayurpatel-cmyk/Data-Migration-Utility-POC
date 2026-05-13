@@ -88,7 +88,7 @@ exports.validateData = async (req, res) => {
     form.append('config', JSON.stringify(config));
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
 
     const response = await fetch('http://localhost:8000/api/python/validate', {
       method: 'POST',

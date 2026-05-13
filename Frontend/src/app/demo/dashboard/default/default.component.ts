@@ -136,7 +136,7 @@ export class DefaultComponent implements OnInit {
           csvField: m.csvField,
           sfField: m.sfField,
           type: m.type,
-          // Note: Relationship lookup fields won't be fully auto-resolved here because 
+          // Note: Relationship lookup fields won't be fully auto-resolved here because
           // we don't have the parent object data from Step 1, but standard fields will map perfectly.
           relationalExtIdField: '',
           parentObjectName: undefined
@@ -1195,45 +1195,102 @@ export class DefaultComponent implements OnInit {
               });
             }
 
-            // --- NEW: Frontend Chunking Logic ---
+            // // --- NEW: Frontend Chunking Logic ---
+            // const totalRecords = rawData.length;
+            // const totalBatches = Math.ceil(totalRecords / this.batchSize);
+
+            // // Loop through each batch for this specific object
+            // for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+            //   const startRecord = batchIndex * this.batchSize;
+            //   const endRecord = startRecord + this.batchSize;
+            //   const batchRecords = rawData.slice(startRecord, endRecord);
+
+            //   // 1. SHOW PROCESSING STATUS
+            //   this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
+            //   this.cdr.detectChanges();
+
+            //   const singleBatchPayload = [{
+            //     targetObject: job.targetObject,
+            //     records: batchRecords,
+            //     mappings: job.mappings,
+            //     targetExtIdField: job.targetExtIdField,
+            //     operationMode: job.operationMode,
+            //     batchSize: this.batchSize
+            //   }];
+
+            //   const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
+
+            //   // 2. SHOW COMPLETED STATUS
+            //   this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
+            //   this.cdr.detectChanges();
+
+            //   // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
+            //   await new Promise(resolve => setTimeout(resolve, 600));
+
+            //   // Tally up the results
+            //   totalSuccess += response.stats?.success || 0;
+            //   totalFailed += response.stats?.failed || 0;
+            //   if (response.failures) allFailures = allFailures.concat(response.failures);
+            //   if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+            // }
+            // // --- End Frontend Chunking ---
+            // --- UPDATED: Threaded Frontend Chunking Logic ---
             const totalRecords = rawData.length;
             const totalBatches = Math.ceil(totalRecords / this.batchSize);
 
-            // Loop through each batch for this specific object
-            for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-              const startRecord = batchIndex * this.batchSize;
-              const endRecord = startRecord + this.batchSize;
-              const batchRecords = rawData.slice(startRecord, endRecord);
+            // 1. Process batches in parallel groups of CONCURRENCY_LIMIT (e.g., 6)
+            for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += CONCURRENCY_LIMIT) {
+              const threadPool: Promise<any>[] = [];
 
-              // 1. SHOW PROCESSING STATUS
-              this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
+              // 2. Fill the pool with concurrent requests
+              for (let t = 0; t < CONCURRENCY_LIMIT && (batchIndex + t) < totalBatches; t++) {
+                const currentBatchIdx = batchIndex + t;
+                const startRecord = currentBatchIdx * this.batchSize;
+                const endRecord = startRecord + this.batchSize;
+                const batchRecords = rawData.slice(startRecord, endRecord);
+
+                const singleBatchPayload = [{
+                  targetObject: job.targetObject,
+                  records: batchRecords,
+                  mappings: job.mappings,
+                  targetExtIdField: job.targetExtIdField,
+                  operationMode: job.operationMode,
+                  batchSize: this.batchSize
+                }];
+
+                // Update UI status for the active "wave"
+                this.activeJobStatus = `Processing ${job.targetObject} - Batch ${currentBatchIdx + 1} of ${totalBatches}...`;
+                this.cdr.detectChanges();
+
+                // 3. Trigger the request but DO NOT 'await' it immediately
+                const thread = firstValueFrom(this.migrationService.migrateData(singleBatchPayload))
+                  .then((response: any) => {
+                    // Update stats immediately as each "thread" finishes
+                    totalSuccess += response.stats?.success || 0;
+                    totalFailed += response.stats?.failed || 0;
+                    if (response.failures) allFailures = allFailures.concat(response.failures);
+                    if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
+                  });
+
+                threadPool.push(thread);
+              }
+
+              // 4. Wait for all threads in this "wave" to finish before proceeding
+              await Promise.all(threadPool);
+
+              // Update progress bar based on how many batches in this wave finished
+              this.completedJobsCount = Math.min(
+                this.migrationQueue.length,
+                this.completedJobsCount + (threadPool.length / totalBatches)
+              );
+
+              this.activeJobStatus = `Wave of ${threadPool.length} Batches Completed!`;
               this.cdr.detectChanges();
 
-              const singleBatchPayload = [{
-                targetObject: job.targetObject,
-                records: batchRecords,
-                mappings: job.mappings,
-                targetExtIdField: job.targetExtIdField,
-                operationMode: job.operationMode,
-                batchSize: this.batchSize
-              }];
-
-              const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
-
-              // 2. SHOW COMPLETED STATUS
-              this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
-              this.cdr.detectChanges();
-
-              // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
+              // 5. Keep your visual pause so the user can see the progress
               await new Promise(resolve => setTimeout(resolve, 600));
-
-              // Tally up the results
-              totalSuccess += response.stats?.success || 0;
-              totalFailed += response.stats?.failed || 0;
-              if (response.failures) allFailures = allFailures.concat(response.failures);
-              if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
             }
-            // --- End Frontend Chunking ---
+            // --- End Threaded Chunking ---
 
             this.completedJobsCount++;
             this.activeJobStatus = `Completed: ${job.targetObject}`;
@@ -1279,40 +1336,40 @@ export class DefaultComponent implements OnInit {
       html: `
         <div class="text-start fs-6 text-muted mt-2">
           <p class="mb-2">Please review these critical guidelines to ensure a successful Salesforce migration. <strong>Scroll to read all points.</strong></p>
-          
+
           <div style="max-height: 45vh; overflow-y: auto; overflow-x: hidden; padding-right: 10px;" class="mb-3 border rounded shadow-sm bg-light">
             <ul class="list-group list-group-flush">
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-file-text text-secondary me-2"></i>
                 <strong>1. Clean Your Data:</strong> Remove empty columns/rows. Ensure headers are clearly named.
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-layers text-primary me-2"></i>
                 <strong>2. Order of Operations:</strong> Always migrate Parent records (e.g., Accounts) <em>before</em> Child records (e.g., Contacts or Opportunities).
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-list text-info me-2"></i>
                 <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in Salesforce (they are case-sensitive).
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-calendar text-danger me-2"></i>
                 <strong>4. Date & Time Formats:</strong> Salesforce prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-key text-success me-2"></i>
                 <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or Salesforce ID column to prevent duplicate records.
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-alert-circle text-warning me-2"></i>
                 <strong>6. Required Fields:</strong> Check Salesforce to ensure you are mapping all universally required fields for your target object.
               </li>
-              
+
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-check-square text-secondary me-2"></i>
                 <strong>7. Checkboxes:</strong> Use <code>TRUE</code>/<code>FALSE</code>, <code>Yes</code>/<code>No</code>, or <code>1</code>/<code>0</code> for boolean fields.
@@ -1320,7 +1377,7 @@ export class DefaultComponent implements OnInit {
 
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-shopping-cart text-dark me-2"></i>
-                <strong>8. Product Migration Sequence:</strong> Products and Pricing must be loaded in this exact order: 
+                <strong>8. Product Migration Sequence:</strong> Products and Pricing must be loaded in this exact order:
                 <br><span class="ms-4 small text-dark">① <b>Products</b> (Product2)</span>
                 <br><span class="ms-4 small text-danger fw-bold">② Standard Pricebook Entries (Required!)</span>
                 <br><span class="ms-4 small text-dark">③ Custom Pricebooks (Pricebook2)</span>
