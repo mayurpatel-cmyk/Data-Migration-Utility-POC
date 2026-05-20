@@ -3,11 +3,11 @@
     <div class="d-flex justify-content-between align-items-center bg-white p-3 rounded shadow-sm border">
       <div>
         <h4 class="mb-1 fw-bold text-primary">System Connections</h4>
-        <p class="text-muted small mb-0">Configure API credentials to extract data directly from your source CRM.</p>
+        <p class="text-muted small mb-0">Select your platforms and authenticate to start migrating data.</p>
       </div>
       <div>
         <span class="badge bg-success-subtle text-success border border-success-subtle py-2 px-3 rounded-pill">
-          <i class="feather icon-shield"></i> Secure Configuration
+          <i class="feather icon-shield"></i> OAuth 2.0 Secured
         </span>
       </div>
     </div>
@@ -15,211 +15,135 @@
 </div>
 
 <div class="row mb-4">
-  <div class="col-sm-8 offset-sm-2">
-    <app-card cardTitle="New API Connection">
-      
-      <div class="form-group mb-4 pb-4 border-bottom">
-        <label for="crmPlatform" class="form-label fw-bold"><i class="feather icon-cpu text-primary me-1"></i> Select Source Platform</label>
-        <select id="crmPlatform" class="form-select border-primary-subtle" [(ngModel)]="selectedPlatform">
-          <option value="" disabled selected>-- Choose a Platform --</option>
-          <option value="MSDynamics">Microsoft Dynamics 365</option>
-          <option value="Salesforce">Salesforce</option>
-          <option value="HubSpot">HubSpot</option>
-          <option value="Zoho">Zoho CRM</option>
-          <option value="Zendesk">Zendesk</option>
+  <div class="col-sm-10 offset-sm-1">
+    <div class="bg-white p-4 rounded shadow-sm border d-flex gap-4">
+      <div class="flex-grow-1">
+        <label class="fw-bold mb-2"><i class="feather icon-upload-cloud text-primary"></i> Source CRM</label>
+        <select class="form-select border-secondary" [(ngModel)]="selectedSource" (change)="onCrmChange('source')">
+          <option value="" disabled selected>-- Select Source --</option>
+          @for (crm of availableCRMs; track crm.id) {
+            <option [value]="crm.id">{{ crm.name }}</option>
+          }
         </select>
       </div>
-
-      @if (selectedPlatform) {
-        <div class="animate__animated animate__fadeIn">
-          
-          @if (selectedPlatform === 'MSDynamics') {
-            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
-              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
-              <div class="small text-info-emphasis">
-                <strong>OAuth 2.0 Required:</strong> Microsoft requires Server-to-Server authentication. You must register an App in Microsoft Entra ID (Azure AD) to generate these credentials.
-              </div>
-            </div>
+      <div class="d-flex align-items-end pb-2">
+        <i class="feather icon-arrow-right text-muted fs-4"></i>
+      </div>
+      <div class="flex-grow-1">
+        <label class="fw-bold mb-2"><i class="feather icon-download-cloud text-info"></i> Target CRM</label>
+        <select class="form-select border-secondary" [(ngModel)]="selectedTarget" (change)="onCrmChange('target')">
+          <option value="" disabled selected>-- Select Target --</option>
+          @for (crm of availableCRMs; track crm.id) {
+            <option [value]="crm.id" [disabled]="crm.id === selectedSource">{{ crm.name }}</option>
           }
-          @if (selectedPlatform === 'Salesforce') {
-            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
-              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
-              <div class="small text-info-emphasis">
-                <strong>Connected App Required:</strong> Create a Connected App in Salesforce to generate your Consumer Key (Client ID) and Consumer Secret (Client Secret).
-              </div>
-            </div>
-          }
-          @if (selectedPlatform === 'HubSpot') {
-            <div class="alert alert-info border-info-subtle bg-info-subtle d-flex align-items-start gap-3 mb-4">
-              <i class="feather icon-info fs-4 text-info-emphasis mt-1"></i>
-              <div class="small text-info-emphasis">
-                <strong>Private App Token:</strong> HubSpot recommends using a Private App Access Token for custom integrations rather than legacy API keys.
-              </div>
-            </div>
-          }
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
 
-          <form (ngSubmit)="testAndSaveConnection()">
-            
-            @if (selectedPlatform === 'MSDynamics') {
-              <div class="mb-3">
-                <label class="form-label fw-bold">Environment URL</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
-                  <input type="text" class="form-control" placeholder="https://your-org.api.crm.dynamics.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Directory (Tenant) ID</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-folder"></i></span>
-                  <input type="text" class="form-control" placeholder="e.g. 8a7b6c5d-4e3f-2g1h-..." [(ngModel)]="credentials.tenantId" name="tenantId" required>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Application (Client) ID</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
-                  <input type="text" class="form-control" placeholder="e.g. 1b2c3d4e-5f6g-7h8i-..." [(ngModel)]="credentials.clientId" name="clientId" required>
-                </div>
-              </div>
-              <div class="mb-4">
-                <label class="form-label fw-bold">Client Secret</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
-                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter your Client Secret value" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
-                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                  </button>
-                </div>
-              </div>
-            }
-
-            @if (selectedPlatform === 'Salesforce') {
-              <div class="mb-3">
-                <label class="form-label fw-bold">Instance URL</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
-                  <input type="text" class="form-control" placeholder="https://your-domain.my.salesforce.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Consumer Key (Client ID)</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
-                  <input type="text" class="form-control" placeholder="Enter Consumer Key" [(ngModel)]="credentials.clientId" name="clientId" required>
-                </div>
-              </div>
-              <div class="mb-4">
-                <label class="form-label fw-bold">Consumer Secret (Client Secret)</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
-                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Consumer Secret" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
-                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                  </button>
-                </div>
-              </div>
-            }
-
-            @if (selectedPlatform === 'HubSpot') {
-              <div class="mb-4">
-                <label class="form-label fw-bold">Private App Access Token</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-key"></i></span>
-                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="pat-na1-..." [(ngModel)]="credentials.accessToken" name="accessToken" required>
-                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                  </button>
-                </div>
-              </div>
-            }
-
-            @if (selectedPlatform === 'Zoho') {
-              <div class="mb-3">
-                <label class="form-label fw-bold">Data Center Domain</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-globe"></i></span>
-                  <select class="form-select" [(ngModel)]="credentials.envUrl" name="envUrl" required>
-                    <option value="" disabled selected>Select your region</option>
-                    <option value="zoho.com">zoho.com (US)</option>
-                    <option value="zoho.eu">zoho.eu (Europe)</option>
-                    <option value="zoho.in">zoho.in (India)</option>
-                    <option value="zoho.com.au">zoho.com.au (Australia)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Client ID</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-user"></i></span>
-                  <input type="text" class="form-control" placeholder="Enter Client ID" [(ngModel)]="credentials.clientId" name="clientId" required>
-                </div>
-              </div>
-              <div class="mb-4">
-                <label class="form-label fw-bold">Client Secret</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-lock"></i></span>
-                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Client Secret" [(ngModel)]="credentials.clientSecret" name="clientSecret" required>
-                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                  </button>
-                </div>
-              </div>
-            }
-
-            @if (selectedPlatform === 'Zendesk') {
-              <div class="mb-3">
-                <label class="form-label fw-bold">Zendesk Subdomain</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-link"></i></span>
-                  <input type="text" class="form-control" placeholder="https://your-subdomain.zendesk.com" [(ngModel)]="credentials.envUrl" name="envUrl" required>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Admin Email Address</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-mail"></i></span>
-                  <input type="email" class="form-control" placeholder="admin@yourcompany.com" [(ngModel)]="credentials.username" name="username" required>
-                </div>
-              </div>
-              <div class="mb-4">
-                <label class="form-label fw-bold">API Token</label>
-                <div class="input-group">
-                  <span class="input-group-text bg-light"><i class="feather icon-key"></i></span>
-                  <input [type]="showPassword ? 'text' : 'password'" class="form-control" placeholder="Enter Zendesk API Token" [(ngModel)]="credentials.accessToken" name="accessToken" required>
-                  <button class="btn btn-outline-secondary" type="button" (click)="showPassword = !showPassword">
-                    <i class="feather" [class.icon-eye]="!showPassword" [class.icon-eye-off]="showPassword"></i>
-                  </button>
-                </div>
-              </div>
-            }
-
-            <div class="d-flex justify-content-end gap-3 pt-3 border-top">
-              <button type="button" class="btn btn-outline-secondary" (click)="resetForm()">Cancel</button>
+@if (selectedSource || selectedTarget) {
+<div class="row mb-4 animate__animated animate__fadeIn">
+  <div class="col-sm-10 offset-sm-1">
+    <app-card cardTitle="Connect CRMs">
+      
+      <div class="row g-4 justify-content-center align-items-center">
+        
+        <div class="col-md-5">
+          @if (selectedSource) {
+            <div class="border rounded p-4 text-center shadow-sm h-100 transition-hover" 
+                 [class.border-success]="isSourceConnected" [class.bg-success-subtle]="isSourceConnected">
               
-              <button type="button" class="btn btn-info text-white d-flex align-items-center gap-2 shadow-sm" (click)="testConnection()" [disabled]="isTesting">
-                @if (isTesting) {
-                  <span class="spinner-border spinner-border-sm"></span> Testing...
-                } @else {
-                  <i class="feather icon-zap"></i> Test Connection
+              <div class="mb-3">
+                <i class="feather {{ getCrmConfig(selectedSource)?.icon }} fs-1" 
+                   [class.text-success]="isSourceConnected" [class.text-dark]="!isSourceConnected"></i>
+              </div>
+              
+              <h5 class="fw-bold mb-1">Source: {{ getCrmConfig(selectedSource)?.name }}</h5>
+              <p class="text-muted small mb-4">Extract data from this system.</p>
+
+              @if (isSourceConnected) {
+                <div class="text-success fw-bold d-flex align-items-center justify-content-center gap-2">
+                  <i class="feather icon-check-circle fs-4"></i> Connected
+                </div>
+                <button class="btn btn-sm btn-outline-danger mt-3" (click)="disconnectCRM('source')">Disconnect</button>
+              } @else {
+                @if (selectedSource === 'zendesk') {
+                  <div class="input-group input-group-sm mb-3">
+                    <span class="input-group-text bg-light border-secondary">https://</span>
+                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="zendeskSubdomain">
+                    <span class="input-group-text bg-light border-secondary">.zendesk.com</span>
+                  </div>
                 }
-              </button>
-
-              <button type="submit" class="btn btn-primary d-flex align-items-center gap-2 shadow-sm" [disabled]="!connectionSuccessful">
-                <i class="feather icon-save"></i> Save Configuration
-              </button>
+                <button class="btn btn-dark w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm" 
+                        [disabled]="selectedSource === 'zendesk' && !zendeskSubdomain"
+                        (click)="loginToCRM('source')">
+                  <i class="feather icon-log-in"></i> Login to {{ getCrmConfig(selectedSource)?.name }}
+                </button>
+              }
             </div>
-          </form>
-
-          @if (testMessage) {
-            <div class="mt-4 alert" [class.alert-success]="connectionSuccessful" [class.alert-danger]="!connectionSuccessful && testMessage" class="d-flex align-items-center gap-2">
-              <i class="feather fs-5" [class.icon-check-circle]="connectionSuccessful" [class.icon-alert-triangle]="!connectionSuccessful"></i>
-              {{ testMessage }}
+          } @else {
+            <div class="border rounded border-dashed p-5 text-center text-muted h-100 d-flex align-items-center justify-content-center bg-light">
+              Select a Source CRM above
             </div>
           }
+        </div>
+
+        <div class="col-md-2 text-center d-none d-md-block">
+          <i class="feather icon-arrow-right text-muted" style="font-size: 3rem; opacity: 0.5;"></i>
+        </div>
+
+        <div class="col-md-5">
+          @if (selectedTarget) {
+            <div class="border rounded p-4 text-center shadow-sm h-100 transition-hover"
+                 [class.border-success]="isTargetConnected" [class.bg-success-subtle]="isTargetConnected">
+              
+              <div class="mb-3">
+                <i class="feather {{ getCrmConfig(selectedTarget)?.icon }} fs-1" 
+                   [class.text-success]="isTargetConnected" [class.text-info]="!isTargetConnected"></i>
+              </div>
+              
+              <h5 class="fw-bold mb-1">Target: {{ getCrmConfig(selectedTarget)?.name }}</h5>
+              <p class="text-muted small mb-4">Load data into this system.</p>
+
+              @if (isTargetConnected) {
+                <div class="text-success fw-bold d-flex align-items-center justify-content-center gap-2">
+                  <i class="feather icon-check-circle fs-4"></i> Connected
+                </div>
+                <button class="btn btn-sm btn-outline-danger mt-3" (click)="disconnectCRM('target')">Disconnect</button>
+              } @else {
+                @if (selectedTarget === 'zendesk') {
+                  <div class="input-group input-group-sm mb-3">
+                    <span class="input-group-text bg-light border-secondary">https://</span>
+                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="zendeskSubdomain">
+                    <span class="input-group-text bg-light border-secondary">.zendesk.com</span>
+                  </div>
+                }
+                <button class="btn btn-info text-white w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm" 
+                        [disabled]="selectedTarget === 'zendesk' && !zendeskSubdomain"
+                        (click)="loginToCRM('target')">
+                  <i class="feather icon-log-in"></i> Login to {{ getCrmConfig(selectedTarget)?.name }}
+                </button>
+              }
+            </div>
+          } @else {
+            <div class="border rounded border-dashed p-5 text-center text-muted h-100 d-flex align-items-center justify-content-center bg-light">
+              Select a Target CRM above
+            </div>
+          }
+        </div>
+
+      </div>
+
+      @if (selectedSource && selectedTarget && isSourceConnected && isTargetConnected) {
+        <div class="d-flex justify-content-end mt-4 pt-4 border-top animate__animated animate__fadeIn">
+          <button class="btn btn-primary shadow-lg d-flex align-items-center gap-2 px-4 py-2 fw-bold" (click)="goToMappingPage()">
+            Proceed to Data Mapping <i class="feather icon-arrow-right"></i>
+          </button>
         </div>
       }
 
     </app-card>
   </div>
 </div>
+}
