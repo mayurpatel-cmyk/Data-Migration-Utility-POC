@@ -65,6 +65,9 @@ export class ApiMappingComponent implements OnInit {
   // Execution Variables
   jobStatus = 'Idle';
   logMessages: string[] = [];
+  customQuery: string = '';
+  isPreviewLoading = false;
+  sourceFields: FieldMeta[] = [];
 
   ngOnInit(): void {
     // 1. Establish System Names and IDs
@@ -77,6 +80,87 @@ export class ApiMappingComponent implements OnInit {
 
     // 2. Kick off the continuous pipeline to load everything at once
     this.preloadEntirePage();
+  }
+
+
+ get queryContext() {
+    const crm = this.sourceCrmId.toLowerCase();
+    
+    // 1. ZENDESK (Search Filter Logic)
+    if (crm === 'zendesk') {
+      return {
+        title: 'Zendesk Search Filter',
+        placeholder: "e.g., type:ticket status<solved created>2023-01-01",
+        helpText: "Use Zendesk native search syntax to filter by tags, status, or dates.",
+        icon: 'icon-search',
+        buttonText: 'Apply Filter',
+        loadingText: 'Filtering...'
+      };
+    } 
+    // 2. SALESFORCE (SOQL Query Logic)
+    else if (crm === 'salesforce') {
+      return {
+        title: 'SOQL Query Editor',
+        placeholder: "e.g., StageName = 'Closed Won' AND Amount > 5000",
+        helpText: "Enter the WHERE clause for your Salesforce SOQL query (omit 'SELECT' and 'WHERE').",
+        icon: 'icon-database',
+        buttonText: 'Run Query',
+        loadingText: 'Querying...'
+      };
+    } 
+    // 3. ALL OTHER CRMs (Zoho, Dynamics, Hubspot, etc. - Generic Query Editor)
+    else {
+      return {
+        title: `${this.sourceSystem} Query Editor`,
+        placeholder: "e.g., status = 'Active' OR created_at > '2024-01-01'",
+        helpText: `Enter the specific database query to extract records from ${this.sourceSystem}.`,
+        icon: 'icon-terminal',
+        buttonText: 'Run Query',
+        loadingText: 'Querying...'
+      };
+    }
+  }
+
+  async applyFilter() {
+    if (!this.customQuery || !this.selectedSourceObject) return;
+
+    this.isPreviewLoading = true;
+    this.cdr.detectChanges(); // Force UI to show the loading spinner
+
+    const payload = {
+      crmId: this.sourceCrmId,
+      objectName: this.selectedSourceObject,
+      query: this.customQuery,
+      sfToken: localStorage.getItem('sf_token') || '',
+      sfInstance: localStorage.getItem('sf_instance_url') || '',
+      zdToken: localStorage.getItem('zd_token') || '',
+      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+    };
+
+    try {
+      const response = await fetch('http://localhost:8000/api/metadata/preview-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) throw new Error("Failed to fetch filtered data.");
+      
+      const data = await response.json();
+
+      // Update the preview table with the newly filtered data
+      this.previewRecords = data.records || [];
+      
+      // Log the success in the black terminal!
+      this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
+
+    } catch (error) {
+      console.error('Filter Error:', error);
+      this.logMessages = [...this.logMessages, 'Error: Failed to apply filter. Check your query syntax.'];
+    } finally {
+      this.isPreviewLoading = false;
+      this.cdr.detectChanges(); // Remove spinner and refresh table
+    }
   }
 
   /**
@@ -126,6 +210,23 @@ export class ApiMappingComponent implements OnInit {
     });
   }
 
+  insertFieldIntoQuery(event: Event) {
+    const selectElement = event.target as HTMLSelectElement;
+    const fieldName = selectElement.value;
+    
+    if (!fieldName) return;
+
+    // Append the field to the query box with a space
+    if (!this.customQuery) {
+      this.customQuery = fieldName;
+    } else {
+      this.customQuery += ` ${fieldName}`;
+    }
+
+    // Reset the dropdown back to default
+    selectElement.value = '';
+  }
+
   /**
    * Pipeline Step 2: Fetches fields, schema details, and preview records
    * for the currently selected/auto-selected items.
@@ -147,6 +248,7 @@ export class ApiMappingComponent implements OnInit {
       next: ({ sourceData, targetData }) => {
         // Populating target fields
         this.targetFields = targetData.fields || [];
+        this.sourceFields = sourceData.fields || [];
 
         // Populating live source preview tracking tables
         this.previewHeaders = sourceData.headers || [];
@@ -216,6 +318,7 @@ export class ApiMappingComponent implements OnInit {
       sourceObject: this.selectedSourceObject,
       targetObject: this.selectedTargetObject,
       mappings: this.mappings,
+      extractionQuery: this.customQuery,
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',

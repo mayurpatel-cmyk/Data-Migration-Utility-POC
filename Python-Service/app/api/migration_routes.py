@@ -57,7 +57,7 @@ async def websocket_migration(websocket: WebSocket):
         bulk_base_url = f"{base_url}/services/async/60.0"
         print(f"4. ATTEMPTING TO HIT SALESFORCE URL: {bulk_base_url}")
         
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
             
             # CREATE JOB
             await send_log("Creating Salesforce Bulk API v1 Job...")

@@ -1,34 +1,37 @@
 version: '3.8'
 
 services:
-  backend:
+  angular-frontend:
     build: 
-      context: ./Backend
-      dockerfile: Dockerfile
-    container_name: migration-backend
+      context: ./frontend
+      dockerfile: Dockerfile.prod
     ports:
-      - "3000:3000"
-    # This ensures your backend restarts automatically if it crashes
-    restart: unless-stopped 
+      - "80:80"
+    networks:
+      - migration-net
 
-  python-service:
-    build: 
-      context: ./Python-Service
-      dockerfile: Dockerfile
-    container_name: migration-python
-    ports:
-      - "5000:5000"
-    restart: unless-stopped
+  node-backend:
+    build: ./backend-node
+    environment:
+      - NODE_ENV=production
+      - SF_CONSUMER_KEY=${SF_CONSUMER_KEY}
+      - SF_CONSUMER_SECRET=${SF_CONSUMER_SECRET}
+      # Point to the internal Docker Python service
+      - PYTHON_SERVICE_URL=http://python-engine:8000 
+    networks:
+      - migration-net
 
-  frontend:
-    build: 
-      context: ./Frontend
-      dockerfile: Dockerfile
-    container_name: migration-frontend
-    ports:
-      - "8080:80"
-    # The frontend usually depends on the backend APIs to be up first
-    depends_on:
-      - backend
-      - python-service
-    restart: unless-stopped
+  python-engine:
+    build: ./backend-python
+    environment:
+      - FASTAPI_ENV=production
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    networks:
+      - migration-net
+
+networks:
+  migration-net:
+    driver: bridge

@@ -41,8 +41,57 @@
 @if (selectedSourceObject && selectedTargetObject) {
 <div class="row g-3 mb-3 animate__animated animate__fadeIn">
 
-  <div class="col-xl-7 col-lg-6">
-    <div class="card shadow-sm border-0 d-flex flex-column" style="height: 550px;">
+  <div class="col-xl-7 col-lg-6 d-flex flex-column">
+    
+    <div class="card shadow-sm border-0 bg-light mb-3 flex-shrink-0 animate__animated animate__fadeIn">
+      <div class="card-header bg-white py-2 border-bottom d-flex align-items-center gap-2">
+        <i class="feather {{ queryContext.icon }} text-warning"></i>
+        <h6 class="m-0 fw-bold text-dark">{{ queryContext.title }}</h6>
+      </div>
+    <div class="card-body p-3">
+        
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <label class="small fw-bold text-muted mb-0">Query Criteria:</label>
+          
+          <div class="input-group input-group-sm" style="width: auto;">
+            <span class="input-group-text bg-white border-secondary text-primary" title="Smart Field Helper">
+              <i class="feather icon-plus-circle"></i>
+            </span>
+            <select class="form-select form-select-sm border-secondary shadow-sm" 
+                    (change)="insertFieldIntoQuery($event)" 
+                    [disabled]="!selectedSourceObject || sourceFields.length === 0">
+              <option value="" selected>-- Insert Object Field --</option>
+              @for (field of sourceFields; track field.name) {
+                <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+              }
+            </select>
+          </div>
+        </div>
+        <textarea 
+          class="form-control form-control-sm font-monospace border-secondary shadow-sm" 
+          rows="3" 
+          [(ngModel)]="customQuery" 
+          placeholder="{{ queryContext.placeholder }}"
+          [disabled]="!selectedSourceObject">
+        </textarea>
+        
+        <div class="d-flex justify-content-between align-items-center mt-2">
+          <div class="small text-muted d-flex align-items-start gap-1">
+            <i class="feather icon-info text-info mt-1"></i>
+            <span style="font-size: 0.75rem;">{{ queryContext.helpText }}</span>
+          </div>
+          
+          <button class="btn btn-sm btn-primary shadow-sm" 
+                  (click)="applyFilter()" 
+                  [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
+            <i class="feather" [ngClass]="isPreviewLoading ? 'icon-loader fa-spin' : (queryContext.icon === 'icon-search' ? 'icon-filter' : 'icon-play')"></i> 
+            {{ isPreviewLoading ? queryContext.loadingText : queryContext.buttonText }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1" style="height: 400px; overflow: hidden;">
       <div class="card-header bg-white py-3 border-bottom flex-shrink-0">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
           <i class="feather icon-list text-primary"></i> Source Data Preview
@@ -50,34 +99,43 @@
         <div class="small text-muted mt-1">Showing top {{ previewRecords.length }} records from {{ sourceSystem }}</div>
       </div>
 
-      <div class="card-body p-0 flex-grow-1 overflow-auto bg-light">
-        @if (isLoading) {
+      <div class="card-body p-0 flex-grow-1 overflow-auto bg-white">
+        @if (isLoading || isPreviewLoading) {
         <div class="d-flex flex-column justify-content-center align-items-center h-100 p-5">
           <span class="spinner-border text-primary" style="width: 3rem; height: 3rem;"></span>
-          <p class="text-muted mt-3 fw-bold">Fetching live data...</p>
+          <p class="text-muted mt-3 fw-bold">{{ isPreviewLoading ? 'Applying Filter...' : 'Fetching live data...' }}</p>
         </div>
         } @else {
-        <div class="table-responsive h-100 bg-white">
-          <table class="table table-sm table-hover table-striped mb-0 text-nowrap" style="font-size: 0.85rem;">
-            <thead class="table-light text-muted sticky-top shadow-sm" style="z-index: 1;">
+        <div class="table-responsive h-100">
+          <table class="table table-hover table-striped mb-0 align-middle" style="font-size: 0.8rem; min-width: 800px;">
+            <thead class="sticky-top shadow-sm" style="z-index: 1; background-color: #f8f9fa;">
               <tr>
-                <th class="ps-3 border-bottom-0">#</th>
+                <th class="text-center text-muted border-bottom-0 py-2" style="width: 40px; background-color: #f8f9fa;">#</th>
                 @for (header of previewHeaders; track header) {
-                <th class="border-bottom-0">{{ header }}</th>
+                <th class="border-bottom-0 text-muted text-truncate px-3 py-2" 
+                    style="max-width: 180px; background-color: #f8f9fa;" 
+                    title="{{ header }}">{{ header }}</th>
                 }
               </tr>
             </thead>
             <tbody>
               @if(previewRecords.length === 0) {
               <tr>
-                <td [colSpan]="previewHeaders.length + 1" class="text-center text-muted p-4">No records found.</td>
+                <td [colSpan]="previewHeaders.length + 1" class="text-center text-muted p-5">
+                  <i class="feather icon-inbox fs-2 mb-2 d-block opacity-50"></i>
+                  No records found matching this criteria.
+                </td>
               </tr>
               }
               @for (row of previewRecords; track $index) {
-              <tr>
-                <td class="ps-3 text-muted fw-bold">{{ $index + 1 }}</td>
+              <tr style="cursor: default;">
+                <td class="text-center text-muted fw-bold bg-light border-end" style="width: 40px;">{{ $index + 1 }}</td>
                 @for (header of previewHeaders; track header) {
-                <td>{{ row[header] }}</td>
+                <td class="text-truncate px-3 text-secondary" 
+                    style="max-width: 180px;" 
+                    title="{{ row[header] }}">
+                  {{ row[header] !== null && row[header] !== undefined && row[header] !== '' ? row[header] : '--' }}
+                </td>
                 }
               </tr>
               }
@@ -88,11 +146,10 @@
       </div>
     </div>
   </div>
-
+  
   <div class="col-xl-5 col-lg-6">
     <div class="card shadow-sm border-0 bg-light d-flex flex-column" style="height: 550px;">
-      <div
-        class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-shrink-0">
+      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-shrink-0">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
           <i class="feather icon-git-merge text-info"></i> Field Mapping
         </h6>
@@ -185,8 +242,7 @@
         <div class="bg-light p-3 border-end d-flex flex-column gap-3 align-items-center justify-content-center"
           style="min-width: 140px;">
           <div class="text-center cursor-pointer text-muted hover-primary" style="transition: transform 0.2s;">
-            <div
-              class="bg-white border rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
+            <div class="bg-white border rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
               style="width: 45px; height: 45px;">
               <i class="feather icon-settings fs-5"></i>
             </div>
@@ -195,8 +251,7 @@
 
           <div class="text-center cursor-pointer text-primary" style="transition: transform 0.2s;"
             (click)="runMigration()">
-            <div
-              class="bg-primary-subtle border border-primary text-primary rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
+            <div class="bg-primary-subtle border border-primary text-primary rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
               style="width: 45px; height: 45px;">
               <i class="feather icon-play fs-5"></i>
             </div>

@@ -14,7 +14,7 @@ class CrmMetadataService:
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         url = f"{instance_url.rstrip('/')}/services/data/v60.0/sobjects"
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.get(url, headers=headers)
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="Failed to pull Salesforce object tree.")
@@ -32,7 +32,7 @@ class CrmMetadataService:
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         base_url = instance_url.rstrip('/')
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             describe_url = f"{base_url}/services/data/v60.0/sobjects/{object_name}/describe"
             desc_res = await client.get(describe_url, headers=headers)
             if desc_res.status_code != 200:
@@ -101,7 +101,7 @@ class CrmMetadataService:
             headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
             url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects/object_types"
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200:
                     for custom_obj in res.json().get("object_types", []):
@@ -121,7 +121,7 @@ class CrmMetadataService:
         base_url = f"https://{subdomain}.zendesk.com/api/v2"
         safe_object_name = object_name.lower()
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             
             # 1. Fetch live records FIRST to dynamically read the JSON keys (No Static Dictionaries)
             data_url = f"{base_url}/{safe_object_name}.json?per_page=5"
