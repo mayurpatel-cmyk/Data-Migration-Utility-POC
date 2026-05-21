@@ -1,6 +1,11 @@
 from fastapi import FastAPI
 from app.api.routes import router
 from fastapi.middleware.cors import CORSMiddleware
+# 1. Import your core routes
+from app.api.routes import router as core_router
+
+# 2. Import your NEW migration routes
+from app.api.migration_routes import router as migration_router
 
 app = FastAPI(title="Migartion Engine")
 
@@ -20,4 +25,5 @@ app.add_middleware(
 )
 
 # Register our API routes
-app.include_router(router)
+app.include_router(core_router)
+app.include_router(migration_router)

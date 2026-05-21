@@ -63,7 +63,8 @@ async def crm_oauth_login(
             "client_id": ZD_CLIENT_ID,
             "redirect_uri": ZD_REDIRECT_URI,
             "response_type": "code",
-            "state": f"{side}:{subdomain}"
+            "state": f"{side}:{subdomain}",
+            "scope": "read write",
         }
         query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
         auth_url = f"https://{subdomain.strip()}.zendesk.com/oauth/authorizations/new?{query_string}"
