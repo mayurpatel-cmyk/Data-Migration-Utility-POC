@@ -1,3 +1,37 @@
+<style>
+  /* Premium Hover Animations */
+  .btn-hover-lift {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  }
+  .btn-hover-lift:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.1) !important;
+  }
+  
+  .btn-hover-lift-primary {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  }
+  .btn-hover-lift-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(13, 110, 253, 0.35) !important;
+  }
+
+  /* Big Execution Action Cards */
+  .action-card-btn {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+  .action-card-btn:hover {
+    transform: translateY(-3px);
+  }
+  .action-card-btn.validate-btn:hover {
+    border-color: #adb5bd !important;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.12) !important;
+  }
+  .action-card-btn.run-btn:hover {
+    box-shadow: 0 0.5rem 1rem rgba(13, 110, 253, 0.45) !important;
+  }
+</style>
+
 <div class="card border-primary-subtle shadow-sm mb-3">
   <div class="card-body p-3 d-flex flex-wrap align-items-center gap-3">
 
@@ -13,48 +47,104 @@
 
     <div class="d-flex align-items-center gap-2">
       <label class="small fw-bold text-muted mb-0 text-nowrap">Source Entity:</label>
-      <select class="form-select form-select-sm border-secondary" style="width: 200px;"
-        [(ngModel)]="selectedSourceObject" (change)="loadMetadata()">
-        <option value="" disabled selected>-- Select Entity --</option>
-        @for (entity of sourceEntities; track entity.name) {
-        <option [value]="entity.name">{{ entity.label }}</option>
+      <div class="position-relative" (click)="$event.stopPropagation()" style="width: 230px;">
+        <div class="form-select form-select-sm cursor-pointer bg-white border-secondary shadow-sm"
+             (click)="toggleSourceDropdown($event)" [class.text-muted]="!selectedSourceObject">
+          {{ getSourceEntityLabel(selectedSourceObject) || '-- Select Entity --' }}
+        </div>
+
+        @if (isSourceDropdownOpen) {
+          <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
+               style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%;">
+            
+            <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                <input type="text" class="form-control" placeholder="Search entities..." [(ngModel)]="sourceSearchQuery" autofocus>
+              </div>
+            </div>
+
+            @for (entity of getFilteredSourceEntities(); track entity.name) {
+              <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectSourceEntity(entity.name)"
+                   [class.bg-light]="selectedSourceObject === entity.name">
+                <span class="fw-bold text-dark">{{ entity.label }}</span>
+                <div class="small text-muted" style="font-family: monospace;">{{ entity.name }}</div>
+              </div>
+            }
+          </div>
         }
-      </select>
+      </div>
     </div>
 
     <div class="text-muted"><i class="feather icon-arrow-right"></i></div>
 
     <div class="d-flex align-items-center gap-2">
       <label class="small fw-bold text-muted mb-0 text-nowrap">Target Object:</label>
-      <select class="form-select form-select-sm border-info" style="width: 200px;" [(ngModel)]="selectedTargetObject"
-        (change)="loadMetadata()" [disabled]="!selectedSourceObject">
-        <option value="" disabled selected>-- Select Object --</option>
-        @for (obj of targetEntities; track obj.name) {
-        <option [value]="obj.name">{{ obj.label }}</option>
-        }
-      </select>
-    </div>
+      <div class="position-relative" (click)="$event.stopPropagation()" style="width: 230px;">
+        <div class="form-select form-select-sm cursor-pointer bg-white border-info shadow-sm"
+             (click)="toggleTargetDropdown($event)" 
+             [class.text-muted]="!selectedTargetObject"
+             [class.opacity-50]="!selectedSourceObject"
+             [style.cursor]="!selectedSourceObject ? 'not-allowed' : 'pointer'">
+          {{ getTargetObjectLabel(selectedTargetObject) || '-- Select Object --' }}
+        </div>
 
+        @if (isTargetDropdownOpen) {
+          <div class="dropdown-menu show w-100 p-2 shadow-lg border-info position-absolute start-0 mt-1 bg-white"
+               style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%;">
+            
+            <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                <input type="text" class="form-control" placeholder="Search objects..." [(ngModel)]="targetSearchQuery" autofocus>
+              </div>
+            </div>
+
+            @for (obj of getFilteredTargetEntities(); track obj.name) {
+              <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectTargetObject(obj.name)"
+                   [class.bg-light]="selectedTargetObject === obj.name">
+                <span class="fw-bold text-dark">{{ obj.label }}</span>
+                <div class="small text-muted" style="font-family: monospace;">{{ obj.name }}</div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </div>
   </div>
 </div>
+
+@if ((!selectedSourceObject || !selectedTargetObject) && migrationQueue.length === 0) {
+<div class="row mb-4 animate__animated animate__fadeIn">
+  <div class="col-12">
+    <div class="card shadow-sm border-0 bg-light p-5 text-center d-flex flex-column justify-content-center align-items-center" style="min-height: 400px; border: 2px dashed #dee2e6 !important;">
+      <div class="mb-3 bg-white p-4 rounded-circle shadow-sm border">
+        <i class="feather icon-git-merge text-primary" style="font-size: 3rem;"></i>
+      </div>
+      <h3 class="fw-bold text-dark mt-2">Ready to Map Your API</h3>
+      <p class="text-muted mb-0" style="max-width: 500px;">
+        Select your <strong>Source Entity</strong> and <strong>Target Object</strong> in the bar above to load the live database schema and begin building your automated migration.
+      </p>
+    </div>
+  </div>
+</div>
+}
 
 @if (selectedSourceObject && selectedTargetObject) {
 <div class="row g-3 mb-3 animate__animated animate__fadeIn">
 
   <div class="col-xl-7 col-lg-6 d-flex flex-column">
     
-    <div class="card shadow-sm border-0 bg-light mb-3 flex-shrink-0 animate__animated animate__fadeIn">
+    <div class="card shadow-sm border-0 bg-light mb-3 flex-shrink-0">
       <div class="card-header bg-white py-2 border-bottom d-flex align-items-center gap-2">
         <i class="feather {{ queryContext.icon }} text-warning"></i>
         <h6 class="m-0 fw-bold text-dark">{{ queryContext.title }}</h6>
       </div>
-    <div class="card-body p-3">
-        
+      <div class="card-body p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <label class="small fw-bold text-muted mb-0">Query Criteria:</label>
-          
           <div class="input-group input-group-sm" style="width: auto;">
-            <span class="input-group-text bg-white border-secondary text-primary" title="Smart Field Helper">
+            <span class="input-group-text bg-white border-secondary text-primary">
               <i class="feather icon-plus-circle"></i>
             </span>
             <select class="form-select form-select-sm border-secondary shadow-sm" 
@@ -67,24 +157,32 @@
             </select>
           </div>
         </div>
+        
         <textarea 
-          class="form-control form-control-sm font-monospace border-secondary shadow-sm" 
+          class="form-control form-control-sm font-monospace shadow-sm" 
+          [ngClass]="queryError ? 'is-invalid border-danger text-danger' : 'border-secondary'"
           rows="3" 
           [(ngModel)]="customQuery" 
+          (ngModelChange)="queryError = null" 
           placeholder="{{ queryContext.placeholder }}"
           [disabled]="!selectedSourceObject">
         </textarea>
+        
+        @if (queryError) {
+          <div class="text-danger small fw-bold mt-1 animate__animated animate__headShake" style="font-size: 0.75rem;">
+            <i class="feather icon-alert-triangle"></i> {{ queryError }}
+          </div>
+        }
         
         <div class="d-flex justify-content-between align-items-center mt-2">
           <div class="small text-muted d-flex align-items-start gap-1">
             <i class="feather icon-info text-info mt-1"></i>
             <span style="font-size: 0.75rem;">{{ queryContext.helpText }}</span>
           </div>
-          
-          <button class="btn btn-sm btn-primary shadow-sm" 
+          <button class="btn btn-sm btn-primary shadow-sm btn-hover-lift-primary px-3" 
                   (click)="applyFilter()" 
                   [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
-            <i class="feather" [ngClass]="isPreviewLoading ? 'icon-loader fa-spin' : (queryContext.icon === 'icon-search' ? 'icon-filter' : 'icon-play')"></i> 
+            <i class="feather" [ngClass]="isPreviewLoading ? 'icon-loader fa-spin' : 'icon-filter'"></i> 
             {{ isPreviewLoading ? queryContext.loadingText : queryContext.buttonText }}
           </button>
         </div>
@@ -96,9 +194,7 @@
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
           <i class="feather icon-list text-primary"></i> Source Data Preview
         </h6>
-        <div class="small text-muted mt-1">Showing top {{ previewRecords.length }} records from {{ sourceSystem }}</div>
       </div>
-
       <div class="card-body p-0 flex-grow-1 overflow-auto bg-white">
         @if (isLoading || isPreviewLoading) {
         <div class="d-flex flex-column justify-content-center align-items-center h-100 p-5">
@@ -111,15 +207,24 @@
             <thead class="sticky-top shadow-sm" style="z-index: 1; background-color: #f8f9fa;">
               <tr>
                 <th class="text-center text-muted border-bottom-0 py-2" style="width: 40px; background-color: #f8f9fa;">#</th>
+                @if (previewHeaders.length === 0) {
+                  <th class="border-bottom-0 text-muted px-3 py-2" style="background-color: #f8f9fa;">Data Columns</th>
+                }
                 @for (header of previewHeaders; track header) {
-                <th class="border-bottom-0 text-muted text-truncate px-3 py-2" 
-                    style="max-width: 180px; background-color: #f8f9fa;" 
-                    title="{{ header }}">{{ header }}</th>
+                <th class="border-bottom-0 text-muted text-truncate px-3 py-2" style="max-width: 180px; background-color: #f8f9fa;">{{ header }}</th>
                 }
               </tr>
             </thead>
             <tbody>
-              @if(previewRecords.length === 0) {
+              @if (!selectedSourceObject || !selectedTargetObject) {
+              <tr>
+                <td colspan="100%" class="text-center text-muted py-5">
+                  <i class="feather icon-layout fs-1 mb-3 d-block opacity-25"></i>
+                  <h6 class="text-muted fw-bold">Awaiting Selection</h6>
+                  <small>Select Source and Target entities above to load preview data.</small>
+                </td>
+              </tr>
+              } @else if(previewRecords.length === 0) {
               <tr>
                 <td [colSpan]="previewHeaders.length + 1" class="text-center text-muted p-5">
                   <i class="feather icon-inbox fs-2 mb-2 d-block opacity-50"></i>
@@ -131,9 +236,7 @@
               <tr style="cursor: default;">
                 <td class="text-center text-muted fw-bold bg-light border-end" style="width: 40px;">{{ $index + 1 }}</td>
                 @for (header of previewHeaders; track header) {
-                <td class="text-truncate px-3 text-secondary" 
-                    style="max-width: 180px;" 
-                    title="{{ row[header] }}">
+                <td class="text-truncate px-3 text-secondary" style="max-width: 180px;" title="{{ row[header] }}">
                   {{ row[header] !== null && row[header] !== undefined && row[header] !== '' ? row[header] : '--' }}
                 </td>
                 }
@@ -158,14 +261,54 @@
 
       <div class="card-body p-3 d-flex flex-column flex-grow-1 overflow-hidden">
 
-        <div class="mb-3 p-2 border rounded bg-white d-flex align-items-center gap-2 shadow-sm flex-shrink-0">
-          <label class="small fw-bold text-muted mb-0 text-nowrap">External ID (Upsert):</label>
-          <select class="form-select form-select-sm border-0 bg-light" [(ngModel)]="externalIdField">
-            <option value="" selected>-- Select ID Field --</option>
-            @for (field of targetFields; track field.name) {
-            <option [value]="field.name">{{ field.label }}</option>
+        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle shadow-sm mb-3 flex-shrink-0"
+             style="transition: 0.3s ease;"
+             [class.opacity-50]="!selectedTargetObject"
+             [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
+          <h6 class="fw-bold text-primary-emphasis mb-2"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
+          <div class="d-flex flex-wrap gap-3 mb-2">
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpInsert" value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpInsert">Insert</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpdate" value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpdate">Update</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpsert" value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpsert">Upsert</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpDelete" value="delete" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold text-danger cursor-pointer small" for="apiOpDelete">Delete</label>
+            </div>
+          </div>
+          <div class="row g-2 mt-1">
+            @if (['insert', 'update', 'upsert'].includes(operationMode)) {
+              <div class="col">
+                <div class="input-group input-group-sm shadow-sm">
+                  <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold">
+                    <i class="feather icon-key text-primary me-1"></i> Ext ID
+                  </span>
+                  <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
+                    <option value="" selected>-- Select Field --</option>
+                    @for (field of targetFields; track field.name) {
+                      <option [value]="field.name">{{ field.label }}</option>
+                    }
+                  </select>
+                </div>
+              </div>
             }
-          </select>
+            <div class="col-auto">
+              <div class="input-group input-group-sm shadow-sm" style="width: 160px;">
+                <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold" title="Batch Size">
+                  <i class="feather icon-database text-primary me-1"></i> Batch
+                </span>
+                <input type="number" class="form-control border-secondary-subtle text-center fw-bold text-primary" [(ngModel)]="batchSize" min="10" max="10000" step="1000">
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="flex-grow-1 pe-2" style="overflow-y: auto; overflow-x: hidden;">
@@ -173,32 +316,51 @@
           <div class="d-flex justify-content-center align-items-center h-100">
             <span class="spinner-border text-primary"></span>
           </div>
+          } @else if (!selectedSourceObject || !selectedTargetObject) {
+          <div class="d-flex flex-column align-items-center justify-content-center h-100 text-muted opacity-50 pt-2">
+            <i class="feather icon-git-merge mb-3" style="font-size: 3.5rem;"></i>
+            <h5 class="fw-bold">Awaiting Schema</h5>
+            <small>Select entities above to map fields.</small>
+          </div>
           } @else {
-          @if(mappings.length === 0) {
-          <div class="text-center text-muted mt-4">Select objects to map fields.</div>
-          }
           @for (mapping of mappings; track mapping.sourceField; let i = $index) {
-          <div class="row g-1 mb-2 align-items-center animate__animated animate__fadeIn">
-            <div class="col-5">
-              <div class="form-control form-control-sm bg-white border-secondary text-truncate"
-                title="{{ mapping.sourceLabel }}">
-                <small class="fw-medium">{{ mapping.sourceLabel }}</small>
+          <div class="d-flex align-items-center gap-2 mb-2 animate__animated animate__fadeIn">
+            <div class="flex-grow-1" style="flex-basis: 45%;">
+              <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed" title="{{ mapping.sourceLabel }}">
+                <small class="fw-bold text-dark">{{ mapping.sourceLabel }}</small>
               </div>
             </div>
-            <div class="col-1 text-center">
-              <i class="feather icon-arrow-right text-muted small"></i>
+            <div class="text-center text-muted px-1">
+              <i class="feather icon-arrow-right small"></i>
             </div>
-            <div class="col-5">
-              <select class="form-select form-select-sm border-info shadow-sm" [(ngModel)]="mapping.targetField"
-                (change)="updateMappedCount()">
-                <option value="">-- Ignore --</option>
-                @for (sfField of targetFields; track sfField.name) {
-                <option [value]="sfField.name">{{ sfField.label }}</option>
+            <div class="flex-grow-1" style="flex-basis: 45%;">
+              <div class="position-relative" (click)="$event.stopPropagation()">
+                <div class="form-select form-select-sm cursor-pointer bg-white shadow-sm border-info" (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.targetField">
+                  {{ getTargetFieldLabel(mapping.targetField) || '-- Select Field --' }}
+                </div>
+                @if (mapping.isDropdownOpen) {
+                  <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
+                    <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                      <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                        <input type="text" class="form-control" placeholder="Search target fields..." [(ngModel)]="mapping.searchQuery" autofocus>
+                      </div>
+                    </div>
+                    <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold" (click)="selectField(mapping, '')" [class.bg-light]="mapping.targetField === ''">
+                      <i class="feather icon-slash"></i> -- Ignore --
+                    </div>
+                    @for (field of getFilteredTargetFields(mapping.searchQuery); track field.name) {
+                      <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.targetField === field.name">
+                        <span class="fw-bold text-dark">{{ field.label }}</span>
+                        <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+                      </div>
+                    }
+                  </div>
                 }
-              </select>
+              </div>
             </div>
-            <div class="col-1 text-center">
-              <button class="btn btn-sm btn-link text-danger p-0 m-0" (click)="clearMapping(i)" title="Clear Mapping">
+            <div>
+              <button class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex" (click)="clearMapping(i)">
                 <i class="feather icon-x"></i>
               </button>
             </div>
@@ -208,30 +370,231 @@
         </div>
 
         <div class="mt-3 pt-3 border-top d-flex justify-content-between align-items-center flex-shrink-0">
-          <div class="form-check form-switch m-0">
-            <input class="form-check-input" type="checkbox" id="strictMapping">
-            <label class="form-check-label small text-muted" for="strictMapping">Strict Mode</label>
+          <div class="d-flex align-items-center gap-3">
+            <div class="form-check form-switch m-0" title="Enforce Strict Salesforce Rules">
+              <input class="form-check-input cursor-pointer" type="checkbox" id="strictMapping" [disabled]="!selectedTargetObject">
+              <label class="form-check-label small text-muted cursor-pointer" for="strictMapping">Strict</label>
+            </div>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-white border shadow-sm text-primary btn-hover-lift" (click)="autoMap()" [disabled]="!selectedTargetObject || mappings.length === 0" title="Auto Map">
+                <i class="feather icon-cpu text-info"></i> Auto
+              </button>
+              <button class="btn btn-sm btn-white border shadow-sm text-danger btn-hover-lift" (click)="resetAllMappings()" [disabled]="!selectedTargetObject || mappings.length === 0" title="Clear All">
+                <i class="feather icon-trash-2 text-danger"></i> Clear
+              </button>
+            </div>
           </div>
-          <div class="d-flex gap-2">
-            <button class="btn btn-sm btn-white border shadow-sm hover-primary" (click)="autoMap()" title="Auto Map">
-              <i class="feather icon-cpu text-info"></i> Auto
-            </button>
-            <button class="btn btn-sm btn-white border shadow-sm hover-danger" (click)="resetAllMappings()"
-              title="Clear All">
-              <i class="feather icon-trash-2 text-danger"></i>
-            </button>
-            <button class="btn btn-sm btn-primary shadow-sm" title="Save Schema">
-              <i class="feather icon-save"></i> Save
-            </button>
-          </div>
+          <!-- <button class="btn btn-primary shadow-sm btn-hover-lift-primary d-flex align-items-center gap-2 fw-bold px-3" (click)="queueAnotherObject()" [disabled]="!selectedTargetObject || mappings.length === 0">
+            <i class="feather icon-plus-circle"></i> Save & Queue
+          </button> -->
         </div>
-
       </div>
     </div>
   </div>
 </div>
 
-<div class="row mb-4 animate__animated animate__fadeInUp">
+@if (aggregateStats.total > 0) {
+<div class="row mb-4 animate__animated animate__fadeIn">
+  <div class="col-sm-12">
+    <div class="card shadow-sm border-0">
+      <div class="card-body p-4">
+        
+        <div class="row text-center g-3">
+          <div class="col-md-3">
+            <div class="p-3 border rounded bg-light">
+              <h6 class="text-muted small fw-bold">Preview Processed</h6>
+              <h3 class="text-dark mb-0">{{ aggregateStats.total }}</h3>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="p-3 border border-success-subtle bg-success-subtle rounded">
+              <h6 class="text-success-emphasis small fw-bold">Valid & Ready</h6>
+              <h3 class="text-success mb-0">{{ aggregateStats.valid }}</h3>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="p-3 border border-danger-subtle bg-danger-subtle rounded">
+              <h6 class="text-danger-emphasis small fw-bold">Failed Rules</h6>
+              <h3 class="text-danger mb-0">{{ aggregateStats.invalid }}</h3>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="p-3 border border-warning-subtle bg-warning-subtle rounded">
+              <h6 class="text-warning-emphasis small fw-bold">Duplicates Ignored</h6>
+              <h3 class="text-warning mb-0">{{ aggregateStats.duplicates }}</h3>
+            </div>
+          </div>
+        </div>
+
+        @if (aggregateStats.invalid > 0) {
+        <div class="mt-4 border-top pt-4 animate__animated animate__fadeInUp">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-bold text-danger mb-0 d-flex align-items-center gap-2">
+              <i class="feather icon-edit-2"></i> Fix Preview Errors
+            </h5>
+            <button class="btn btn-sm btn-danger shadow-sm fw-bold btn-hover-lift px-3" (click)="revalidatePreview()" [disabled]="isValidating">
+              @if (isValidating) {
+                <span class="spinner-border spinner-border-sm"></span> Checking...
+              } @else {
+                <i class="feather icon-refresh-cw"></i> Re-Validate Fixes
+              }
+            </button>
+          </div>
+          
+          <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-sm table-bordered align-middle mb-0 text-nowrap">
+              <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
+                <tr>
+                  <th class="text-danger fw-bold py-2 ps-3 bg-white">Salesforce Error Rule</th>
+                  @for (mapping of mappings; track mapping.sourceField) {
+                    @if (mapping.targetField) {
+                      <th class="py-2" [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
+                        <div class="d-flex justify-content-between align-items-center gap-2">
+                          <div>
+                            <span class="d-block fw-bold lh-1" [class.text-danger]="hasErrorsInColumn(mapping.sourceField)">{{ mapping.sourceField }}</span>
+                            <small class="text-primary" style="font-family: monospace;">➔ {{ mapping.targetField }}</small>
+                          </div>
+                        </div>
+                      </th>
+                    }
+                  }
+                </tr>
+              </thead>
+              <tbody class="small">
+                @for (record of paginatedErrorRecords; track $index) {
+                <tr>
+                  <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium ps-3 text-wrap" style="min-width: 250px; font-size: 0.8rem;">
+                    {{ record.errors }}
+                  </td>
+                  @for (mapping of mappings; track mapping.sourceField) {
+                    @if (mapping.targetField) {
+                      <td class="p-1">
+                        <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all"
+                          [(ngModel)]="record.originalRow[mapping.sourceField]"
+                          (ngModelChange)="markAsEdited(record, mapping.sourceField)"
+                          [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
+                          [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
+                          [class.border-success]="record._editedFields?.[mapping.sourceField]"
+                          [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
+                      </td>
+                    }
+                  }
+                </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+          
+          <div class="d-flex justify-content-between align-items-center bg-light p-2 border border-top-0 border-danger-subtle rounded-bottom shadow-sm">
+            <span class="small text-muted fw-bold ms-2">
+              Showing <span class="text-dark">{{ (errorCurrentPage - 1) * errorPageSize + 1 }}</span> to <span class="text-dark">{{ currentErrorMaxBound }}</span> of <span class="text-dark">{{ validationResults.invalidRecords.length }}</span> entries
+            </span>
+
+            <div class="btn-group shadow-sm">
+              <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
+                (click)="prevErrorPage()" [disabled]="errorCurrentPage === 1">
+                <i class="feather icon-chevron-left"></i> Prev
+              </button>
+              <button class="btn btn-sm btn-white border-secondary-subtle text-primary fw-bold px-3" disabled>
+                Page {{ errorCurrentPage }} of {{ errorTotalPages }}
+              </button>
+              <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
+                (click)="nextErrorPage()" [disabled]="errorCurrentPage === errorTotalPages">
+                Next <i class="feather icon-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+
+        </div>
+        }
+
+        @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
+        <div class="mt-4 p-4 text-center bg-success-subtle border border-success rounded shadow-sm animate__animated animate__zoomIn">
+          <i class="feather icon-check-circle text-success" style="font-size: 3rem;"></i>
+          <h4 class="text-success-emphasis fw-bold mt-2">Preview Validation 100% Successful!</h4>
+          <p class="text-muted mb-0">Your mapping rules are perfect. You are safe to click <strong>Run Job</strong> to migrate the live data.</p>
+        </div>
+        }
+        
+      </div>
+    </div>
+  </div>
+</div>
+}
+
+@if (migrationQueue.length > 0) {
+<div id="queue-section" class="row mb-4 animate__animated animate__fadeInUp">
+  <div class="col-sm-12">
+    <div class="card shadow-sm border-0 d-flex flex-column">
+      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+        <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
+          <i class="feather icon-layers text-primary"></i> Execution Queue ({{ migrationQueue.length }} Objects)
+        </h6>
+        <span class="badge bg-warning-subtle text-warning-emphasis shadow-sm"><i class="feather icon-shuffle"></i> 3-Pass Dependency Sorting Enabled</span>
+      </div>
+      
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0 border-0">
+            <thead class="table-light text-muted small">
+              <tr>
+                <th width="30%" class="ps-4 border-0 py-3">Source Entity</th>
+                <th width="30%" class="border-0 py-3">Target Salesforce Object</th>
+                <th width="15%" class="border-0 py-3">Mode</th>
+                <th width="25%" class="text-end border-0 py-3 pe-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (item of migrationQueue; track $index) {
+              <tr>
+                <td class="ps-4 fw-bold text-dark">
+                  <i class="feather icon-database me-2 text-muted"></i> {{ item.sourceObject }}
+                </td>
+                <td>
+                  <span class="badge bg-primary-subtle text-primary border border-primary-subtle py-2 px-3 rounded-pill d-inline-flex align-items-center gap-1">
+                    <i class="feather icon-box"></i> {{ item.targetObject }}
+                  </span>
+                </td>
+                <td>
+                  <span class="fw-bold text-uppercase small text-muted">{{ item.operationMode }}</span>
+                </td>
+                <td class="text-end pe-4">
+                  <div class="d-flex justify-content-end align-items-center gap-2">
+                    
+                    <div class="btn-group shadow-sm me-2">
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2 btn-hover-lift"
+                        (click)="moveQueueItemUp($index)" [disabled]="$index === 0" title="Move Up">
+                        <i class="feather icon-chevron-up text-dark fw-bold"></i>
+                      </button>
+                      <button class="btn btn-sm btn-light border-secondary-subtle px-2 btn-hover-lift"
+                        (click)="moveQueueItemDown($index)" [disabled]="$index === migrationQueue.length - 1" title="Move Down">
+                        <i class="feather icon-chevron-down text-dark fw-bold"></i>
+                      </button>
+                    </div>
+
+                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1 shadow-sm btn-hover-lift"
+                      (click)="editQueuedItem($index)" title="Edit this mapping">
+                      <i class="feather icon-edit-2"></i> Edit
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger shadow-sm btn-hover-lift" (click)="removeFromQueue($index)"
+                      title="Remove from queue">
+                      <i class="feather icon-trash-2"></i>
+                    </button>
+
+                  </div>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+}
+
+<div id="execution-terminal" class="row mb-4 animate__animated animate__fadeInUp">
   <div class="col-sm-12">
     <div class="card shadow-sm border-0 d-flex flex-column" style="height: 250px;">
       <div class="card-header bg-white py-2 border-bottom flex-shrink-0">
@@ -239,34 +602,57 @@
       </div>
       <div class="card-body p-0 d-flex flex-grow-1 overflow-hidden">
 
-        <div class="bg-light p-3 border-end d-flex flex-column gap-3 align-items-center justify-content-center"
-          style="min-width: 140px;">
-          <div class="text-center cursor-pointer text-muted hover-primary" style="transition: transform 0.2s;">
-            <div class="bg-white border rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
-              style="width: 45px; height: 45px;">
-              <i class="feather icon-settings fs-5"></i>
+       <div class="bg-light p-3 border-end d-flex flex-column gap-3 justify-content-center" style="min-width: 170px;">
+          
+          <button class="btn bg-white shadow-sm border border-secondary-subtle action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
+                  (click)="validateData()">
+            <div class="bg-light rounded-circle d-flex align-items-center justify-content-center mb-1 border" style="width: 38px; height: 38px;">
+              <i class="feather icon-check-square fs-5 text-secondary"></i>
             </div>
-            <small class="fw-bold" style="font-size: 0.75rem;">Validate</small>
-          </div>
+            <span class="fw-bold text-dark" style="font-size: 0.8rem;">Validate</span>
+          </button>
 
-          <div class="text-center cursor-pointer text-primary" style="transition: transform 0.2s;"
-            (click)="runMigration()">
-            <div class="bg-primary-subtle border border-primary text-primary rounded-circle d-flex align-items-center justify-content-center mx-auto mb-1 shadow-sm"
-              style="width: 45px; height: 45px;">
-              <i class="feather icon-play fs-5"></i>
+          <button class="btn btn-primary shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
+                  (click)="runMigration()">
+            <div class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center mb-1" style="width: 38px; height: 38px;">
+              <i class="feather icon-play fs-5 text-white"></i>
             </div>
-            <small class="fw-bold" style="font-size: 0.75rem;">Run Job</small>
-          </div>
+            <span class="fw-bold text-white" style="font-size: 0.8rem;">Run Job</span>
+          </button>
+
         </div>
 
         <div class="p-3 flex-grow-1 bg-white d-flex flex-column overflow-hidden">
-          <div class="d-flex justify-content-between mb-2 flex-shrink-0">
-            <span class="small fw-bold text-muted">Job Status: <span class="text-primary">{{ jobStatus }}</span></span>
-            <span class="small text-muted"><span class="badge bg-secondary">{{ logMessages.length }}</span> logs</span>
+          <div class="d-flex justify-content-between align-items-center mb-2 flex-shrink-0">
+            <span class="small fw-bold text-muted">Job Status: 
+              <span [ngClass]="jobStatus.includes('Error') || jobStatus.includes('Failed') ? 'text-danger' : 'text-primary'">
+                {{ jobStatus }}
+              </span>
+            </span>
+            
+            <div class="d-flex gap-2">
+              @if (successData.length > 0) {
+                <button class="btn btn-xs btn-outline-success d-flex align-items-center gap-1 btn-hover-lift" 
+                        style="font-size: 0.7rem; padding: 2px 8px;"
+                        (click)="downloadCSV(successData, 'migration_success_log.csv')">
+                  <i class="feather icon-download"></i> Success ({{ successData.length }})
+                </button>
+              }
+              
+              @if (errorData.length > 0) {
+                <button class="btn btn-xs btn-outline-danger d-flex align-items-center gap-1 btn-hover-lift" 
+                        style="font-size: 0.7rem; padding: 2px 8px;"
+                        (click)="downloadCSV(errorData, 'migration_error_log.csv')">
+                  <i class="feather icon-alert-triangle"></i> Errors ({{ errorData.length }})
+                </button>
+              }
+              
+              <span class="small text-muted ms-2"><span class="badge bg-secondary">{{ logMessages.length }}</span> logs</span>
+            </div>
           </div>
 
-          <div class="bg-light border rounded p-3 font-monospace small text-dark flex-grow-1 overflow-auto shadow-sm"
-            style="font-size: 0.8rem; min-height: 200px;">
+          <div class="bg-light border rounded p-3 font-monospace small text-dark flex-grow-1 overflow-auto shadow-inner"
+            style="font-size: 0.8rem; min-height: 200px; box-shadow: inset 0 2px 4px rgba(0,0,0,.05);">
 
             <div *ngIf="logMessages.length === 0" class="text-center mt-4 text-muted">
               Awaiting job execution...
