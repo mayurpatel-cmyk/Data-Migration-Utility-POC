@@ -14,7 +14,7 @@ def chunk_dataset(data: list, chunk_size: int = 5000):
         yield data[i:i + chunk_size]
 
 # ==========================================
-# HELPER 2: DEPENDENCY SORTER (Node.js Port)
+# HELPER 2: DEPENDENCY SORTER
 # ==========================================
 def sort_jobs_by_dependency(jobs):
     sorted_jobs = []
@@ -28,7 +28,6 @@ def sort_jobs_by_dependency(jobs):
         
         visiting.add(target_obj)
 
-        # Find all objects this job depends on
         dependencies = []
         for m in job.get("mappings", []):
             if m.get("type") == "reference" and m.get("referenceTo"):
@@ -50,7 +49,6 @@ def sort_jobs_by_dependency(jobs):
         job["deferReferencesTo"] = defer_references_to
         sorted_jobs.append(job)
 
-        # Create the Pass 3 Patch Job if needed
         if defer_references_to:
             pass3_patch = dict(job)
             pass3_patch["isPass3Patch"] = True
@@ -63,7 +61,7 @@ def sort_jobs_by_dependency(jobs):
     return sorted_jobs + pass3_jobs
 
 # ==========================================
-# HELPER 3: PAYLOAD BUILDER (Node.js Port)
+# HELPER 3: PAYLOAD BUILDER 
 # ==========================================
 def build_payload(raw_records, mappings, options):
     skip_self_ref = options.get("skipSelfReferencing", False)
@@ -87,7 +85,6 @@ def build_payload(raw_records, mappings, options):
 
             csv_val = raw_row.get(mapping.get("sourceField"))
 
-            # Skip audit fields during patch mode
             if is_patch_mode and sf_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById']:
                 continue
 
@@ -95,7 +92,6 @@ def build_payload(raw_records, mappings, options):
             if (csv_val is None or str(csv_val).strip() == "") and sf_field != target_ext_id_field: 
                 continue
 
-            # Check Relationship Links
             is_self_ref = mapping.get("type") == "reference" and target_object in mapping.get("referenceTo", [])
             refs_other = mapping.get("referenceTo", []) if mapping.get("type") == "reference" else []
 
@@ -107,7 +103,6 @@ def build_payload(raw_records, mappings, options):
             if is_excluded_cross: continue
             if len(only_refs) > 0 and not is_only_target_cross: continue
 
-            # Resolve Relational External ID mapping
             rel_name = mapping.get("relationshipName")
             if not rel_name and sf_field:
                 if sf_field.endswith('Id'): rel_name = sf_field[:-2]
@@ -120,15 +115,12 @@ def build_payload(raw_records, mappings, options):
             else:
                 sf_record[sf_field] = csv_val
 
-        # Handle Target External ID enforcement
         if target_ext_id_field and target_ext_id_field not in sf_record:
             sf_record[target_ext_id_field] = None
 
-        # Delete Mode Strip (Salesforce only accepts the "Id" field for hard bulk deletes)
         if op_mode == "delete":
             sf_record = {"Id": sf_record["Id"]} if "Id" in sf_record else {}
 
-        # Append to payload if valid
         if sf_record:
             if not is_patch_mode or (is_patch_mode and has_patch_data):
                 payload.append({"originalIndex": idx, "sfRecord": sf_record})
@@ -147,8 +139,6 @@ async def websocket_migration(websocket: WebSocket):
         await websocket.send_json({"log": "System: Multi-Object 3-Pass Engine Initialized.", "status": "Initializing..."})
         payload = await websocket.receive_json()
         
-        # WE NOW EXPECT AN ARRAY OF JOBS (The Queue)
-        # If UI hasn't been updated yet, we wrap the single job in a list to prevent breaking
         raw_queue = payload.get("queue") 
         if not raw_queue:
             raw_queue = [payload] 
@@ -166,11 +156,9 @@ async def websocket_migration(websocket: WebSocket):
         async def send_log(msg: str, status: str = "Running"):
             await websocket.send_json({"log": msg, "status": status})
 
-        # SORT JOBS BY DEPENDENCY
         await send_log(f"Analyzing {len(raw_queue)} objects for dependencies...")
         execution_queue = sort_jobs_by_dependency(raw_queue)
 
-        # Open a single HTTPX session
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
             
             total_success, total_error = 0, 0
@@ -194,27 +182,63 @@ async def websocket_migration(websocket: WebSocket):
                 if not mappings: continue
 
                 # ------------------------------------------
-                # STEP 1: EXTRACT (Only once per object)
+                # STEP 1: EXTRACT (With Massive Pagination)
                 # ------------------------------------------
                 source_records = job.get("rawRecords")
+                
                 if not source_records:
-                    await send_log(f"[{target_object}] Extracting live data from Zendesk...")
+                    await send_log(f"[{target_object}] Initializing extraction from Zendesk...")
                     zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-                    safe_obj = source_object.lower().rstrip('s')
-
+                    safe_obj = source_object.lower()
+                    
+                    source_records = []
+                    
                     try:
                         if extraction_query:
-                            safe_query = urllib.parse.quote(f"{extraction_query} type:{safe_obj}")
-                            res = await client.get(f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}", headers=zd_headers)
-                            res.raise_for_status()
-                            source_records = res.json().get("results", [])
-                        else:
-                            res = await client.get(f"https://{zd_subdomain}.zendesk.com/api/v2/{source_object.lower()}.json", headers=zd_headers)
-                            res.raise_for_status()
-                            source_records = res.json().get(source_object.lower(), [])
+                            # Search API Extraction Loop
+                            safe_obj_singular = safe_obj.rstrip('s')
+                            safe_query = urllib.parse.quote(f"{extraction_query} type:{safe_obj_singular}")
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=100"
                             
-                        # Cache it so Pass 3 doesn't re-download!
+                            while url:
+                                res = await client.get(url, headers=zd_headers)
+                                res.raise_for_status()
+                                data = res.json()
+                                records = data.get("results", [])
+                                
+                                if not records: break
+                                source_records.extend(records)
+                                
+                                await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
+                                url = data.get("next_page")
+                                
+                        else:
+                            # Standard Object Extraction Loop (with Cursor Pagination support)
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/{safe_obj}.json?page[size]=100"
+                            
+                            while url:
+                                res = await client.get(url, headers=zd_headers)
+                                res.raise_for_status()
+                                data = res.json()
+                                records = data.get(safe_obj, [])
+                                
+                                if not records: break
+                                source_records.extend(records)
+                                
+                                # Send updates to UI every 1,000 records so it doesn't look frozen
+                                if len(source_records) % 1000 == 0:
+                                    await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
+                                
+                                # Check for Zendesk Cursor Pagination vs Standard Pagination
+                                meta = data.get("meta")
+                                if meta and meta.get("has_more"):
+                                    url = data.get("links", {}).get("next")
+                                else:
+                                    url = data.get("next_page")
+                            
                         job["rawRecords"] = source_records 
+                        await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
+                        
                     except Exception as e:
                         await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
                         continue
@@ -240,7 +264,7 @@ async def websocket_migration(websocket: WebSocket):
                     job_id = job_res.json().get("id")
 
                     chunks = list(chunk_dataset(sf_payload, batch_size))
-                    await send_log(f"[{target_object}] {pass_name}: Uploading {len(chunks)} concurrent batches...")
+                    await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} concurrent batch threads...")
 
                     async def upload_chunk(chunk_data):
                         just_sf_records = [c["sfRecord"] for c in chunk_data]
@@ -250,7 +274,7 @@ async def websocket_migration(websocket: WebSocket):
                     batch_ids = await asyncio.gather(*[upload_chunk(c) for c in chunks])
                     await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
 
-                    # Poll
+                    # Poll for completion with Exponential Backoff
                     poll_delay = 1.0
                     while True:
                         await asyncio.sleep(poll_delay)
@@ -293,17 +317,14 @@ async def websocket_migration(websocket: WebSocket):
                     await execute_sf_bulk(payload, "delete", "Deletion")
 
                 elif has_self_ref:
-                    # Pass 1: Base Data
                     sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
                     p1_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "skipSelfReferencing": True, "operationMode": sf_op})
                     await execute_sf_bulk(p1_payload, sf_op, "Pass 1 (Base Data)")
 
-                    # Pass 2: Self-Reference Links
                     p2_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "onlySelfReferencing": True, "operationMode": "upsert"})
                     await execute_sf_bulk(p2_payload, "upsert", "Pass 2 (Hierarchy Patch)")
 
                 else:
-                    # Standard Single Pass
                     sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
                     std_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "operationMode": sf_op})
                     await execute_sf_bulk(std_payload, sf_op, "Standard Sync")
