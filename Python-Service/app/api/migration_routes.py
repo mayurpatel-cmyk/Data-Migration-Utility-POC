@@ -218,6 +218,14 @@ async def websocket_migration(websocket: WebSocket):
                             
                             while url:
                                 res = await client.get(url, headers=zd_headers)
+                                
+                                # THE DEFENDER: Catch Rate Limits
+                                if res.status_code == 429:
+                                    retry_after = int(res.headers.get("Retry-After", 60))
+                                    await send_log(f"⚠️ [Zendesk Rate Limit Hit] Engine pausing for {retry_after} seconds...", "Paused")
+                                    await asyncio.sleep(retry_after)
+                                    continue # Safely retry the exact same URL!
+                                    
                                 res.raise_for_status()
                                 data = res.json()
                                 records = data.get(safe_obj, [])
@@ -225,11 +233,9 @@ async def websocket_migration(websocket: WebSocket):
                                 if not records: break
                                 source_records.extend(records)
                                 
-                                # Send updates to UI every 1,000 records so it doesn't look frozen
-                                if len(source_records) % 1000 == 0:
+                                if len(source_records) % 2000 == 0:
                                     await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
                                 
-                                # Check for Zendesk Cursor Pagination vs Standard Pagination
                                 meta = data.get("meta")
                                 if meta and meta.get("has_more"):
                                     url = data.get("links", {}).get("next")
@@ -264,13 +270,19 @@ async def websocket_migration(websocket: WebSocket):
                     job_id = job_res.json().get("id")
 
                     chunks = list(chunk_dataset(sf_payload, batch_size))
-                    await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} concurrent batch threads...")
+                    await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} batches (Max 6 concurrent threads)...")
+
+                    # THE THROTTLE: Strictly limit to 6 parallel uploads at a time
+                    semaphore = asyncio.Semaphore(6)
 
                     async def upload_chunk(chunk_data):
-                        just_sf_records = [c["sfRecord"] for c in chunk_data]
-                        b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_sf_records, headers=sf_headers)
-                        return b_res.json().get("id")
+                        async with semaphore:
+                            just_sf_records = [c["sfRecord"] for c in chunk_data]
+                            b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_sf_records, headers=sf_headers)
+                            b_res.raise_for_status()
+                            return b_res.json().get("id")
 
+                    # Fire the safely throttled tasks
                     batch_ids = await asyncio.gather(*[upload_chunk(c) for c in chunks])
                     await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
 
