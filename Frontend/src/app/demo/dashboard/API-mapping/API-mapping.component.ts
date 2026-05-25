@@ -67,6 +67,7 @@ export class ApiMappingComponent implements OnInit {
   mappings: MappingRow[] = [];
   externalIdField = '';
   mappedCount = 0;
+  isStrictMapping = false;
 
   // Execution Variables
   jobStatus = 'Idle';
@@ -91,8 +92,8 @@ export class ApiMappingComponent implements OnInit {
   operationMode: string = 'insert';
   batchSize: number = 5000;
   
-  // --- MULTI-OBJECT QUEUE VARIABLES ---
   migrationQueue: any[] = [];
+  recentQueries: string[] = [];
 
   ngOnInit(): void {
     this.sourceSystem = localStorage.getItem('source_crm_slot') || 'Zendesk';
@@ -101,6 +102,8 @@ export class ApiMappingComponent implements OnInit {
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot') || 'msdynamics';
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+
+    this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
     this.preloadEntirePage();
   }
@@ -130,25 +133,77 @@ export class ApiMappingComponent implements OnInit {
     if (mapping.isDropdownOpen) mapping.searchQuery = '';
   }
 
-  selectField(mapping: any, fieldName: string) {
-    mapping.targetField = fieldName;
-    mapping.isDropdownOpen = false;
-    this.updateMappedCount();
+  isReferenceField(fieldName: string): boolean {
+  if (!fieldName) return false;
+  const fieldMeta = this.targetFields.find(f => f.name === fieldName);
+
+  if (!fieldMeta) return false;
+
+  // 1. Trust the API metadata first
+  if (fieldMeta.type === 'reference' || (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0)) {
+    return true;
   }
 
-  getFilteredTargetFields(query?: string): any[] {
-    if (!query) return this.targetFields;
-    const lowerQuery = query.toLowerCase();
-    return this.targetFields.filter((f) => 
-      f.label.toLowerCase().includes(lowerQuery) || 
-      f.name.toLowerCase().includes(lowerQuery)
-    );
+  // 2. Fallback: If API missed it, but it follows Salesforce lookup naming conventions
+  // (e.g., AccountId, OwnerId). We explicitly exclude the primary 'Id' field.
+  if (fieldName !== 'Id' && fieldName.endsWith('Id')) {
+    return true;
+  }
+
+  return false;
+}
+
+  selectField(mapping: any, fieldName: string) {
+  mapping.targetField = fieldName;
+  mapping.isDropdownOpen = false;
+  
+  if (this.isReferenceField(fieldName)) {
+    // If it is a reference, default the Ext ID to 'Id' so the user knows what to type
+    mapping.relationalExtIdField = 'Id';
+  } else {
+    // CRITICAL: Clear it out if they switch to a normal text/string field
+    mapping.relationalExtIdField = undefined; 
+  }
+  
+  this.updateMappedCount();
+}
+
+  getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
+    let filtered = this.targetFields;
+
+    // --- STRICT MAPPING LOGIC ---
+    if (this.isStrictMapping) {
+      const sourceMeta = this.sourceFields.find(f => f.name === sourceFieldName);
+      
+      if (sourceMeta && sourceMeta.type) {
+        filtered = filtered.filter(t => {
+          // Allow exact type matches. 
+          // (We also allow 'string' to map to 'picklist' or 'reference' as strings act as universal identifiers)
+          if (sourceMeta.type === 'string' && ['string', 'picklist', 'reference'].includes(t.type || '')) {
+            return true;
+          }
+          return t.type === sourceMeta.type;
+        });
+      }
+    }
+
+    // --- SEARCH LOGIC ---
+    if (query) {
+      const lowerQuery = query.toLowerCase();
+      filtered = filtered.filter((f) => 
+        f.label.toLowerCase().includes(lowerQuery) || 
+        f.name.toLowerCase().includes(lowerQuery)
+      );
+    }
+
+    return filtered;
   }
 
   getTargetFieldLabel(fieldName: string): string {
     if (!fieldName) return '';
     const field = this.targetFields.find((f) => f.name === fieldName);
-    return field ? field.label : fieldName;
+    // Show Label + API Name for the mapped target fields
+    return field ? `${field.label} (${field.name})` : fieldName;
   }
 
   toggleSourceDropdown(event: Event) {
@@ -202,13 +257,15 @@ export class ApiMappingComponent implements OnInit {
   getSourceEntityLabel(entityName: string): string {
     if (!entityName) return '';
     const entity = this.sourceEntities.find(e => e.name === entityName);
-    return entity ? entity.label : entityName;
+    // Dynamically show Label + API Name for any CRM
+    return entity ? `${entity.label} (${entity.name})` : entityName;
   }
 
   getTargetObjectLabel(objName: string): string {
     if (!objName) return '';
     const obj = this.targetEntities.find(e => e.name === objName);
-    return obj ? obj.label : objName;
+    // Dynamically show Label + API Name for any CRM
+    return obj ? `${obj.label} (${obj.name})` : objName;
   }
 
   get paginatedErrorRecords() {
@@ -292,16 +349,16 @@ export class ApiMappingComponent implements OnInit {
     }
   }
 
-  async applyFilter() {
+ async applyFilter() {
     if (!this.customQuery || !this.selectedSourceObject) return;
 
     if (!this.validateQuery()) {
-      setTimeout(() => this.scrollToBottom(), 10); 
       return; 
     }
 
     this.isPreviewLoading = true;
     this.cdr.detectChanges(); 
+    this.saveQueryToHistory(this.customQuery);
 
     const payload = {
       crmId: this.sourceCrmId,
@@ -330,7 +387,8 @@ export class ApiMappingComponent implements OnInit {
 
     } catch (error) {
       console.error('Filter Error:', error);
-      this.logMessages = [...this.logMessages, 'Error: Failed to apply filter. Check your query syntax.'];
+      // We still log actual network failures to the terminal
+      this.logMessages = [...this.logMessages, 'Error: Failed to fetch filtered data from the API.'];
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges(); 
@@ -361,10 +419,11 @@ export class ApiMappingComponent implements OnInit {
 
     const enhancedMappings = activeMappings.map(m => {
       const fieldMeta = this.targetFields.find(t => t.name === m.targetField);
+      const isRef = this.isReferenceField(m.targetField);
       return {
         sourceField: m.sourceField,
         targetField: m.targetField,
-        type: fieldMeta?.type,
+        type: isRef ? 'reference' : fieldMeta?.type,
         referenceTo: fieldMeta?.referenceTo,
         relationshipName: fieldMeta?.relationshipName,
         relationalExtIdField: m.relationalExtIdField || 'Id', 
@@ -458,7 +517,8 @@ export class ApiMappingComponent implements OnInit {
           const savedMap = item.mappings.find((m: any) => m.sourceField === field.name);
           return {
             sourceField: field.name,
-            sourceLabel: field.label,
+            // NEW: Embed the API Name here as well
+            sourceLabel: `${field.label} (${field.name})`,
             targetField: savedMap ? savedMap.targetField : ''
           };
         });
@@ -480,29 +540,67 @@ export class ApiMappingComponent implements OnInit {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    if (crm === 'zendesk') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
-        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved created>2023-01-01";
-      } else if (queryLower.includes(',')) {
-        this.queryError = "Do not use commas. Format: status:open tags:urgent";
-      } else if (queryLower.includes(' = ')) {
-        this.queryError = "Use colons for exact matches. Format: status:open";
-      } else if (queryLower.includes('%')) {
-        this.queryError = "Use '*' for wildcards. Format: name:tech*";
-      } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
-        this.queryError = "Use '-' to exclude a value. Format: -status:closed";
-      } else if (queryLower.includes('type:')) {
-        this.logWarning(`⚠️ Notice: You don't need to type "type:...". The system applies it automatically!`);
+    // ... [KEEP YOUR EXISTING SYNTAX CHECKS HERE] ...
+
+    // Advanced Schema & Data-Type Verification
+    if (!this.queryError && this.sourceFields.length > 0) {
+      let extractedConditions: { field: string, value: string }[] = [];
+
+      if (crm === 'zendesk') {
+        // Extracts "status:open" -> field: "status", value: "open"
+        const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
+        let match;
+        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated']; 
+        
+        while ((match = zendeskRegex.exec(this.customQuery)) !== null) {
+          if (!ignoreList.includes(match[2].toLowerCase())) {
+            extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
+          }
+        }
+      } else if (crm === 'salesforce') {
+        // Extracts "Amount > 5000" -> field: "amount", value: "5000"
+        // Also strips quotes from string values
+        const sfRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like)\s*('?[a-zA-Z0-9_%\s-]+'?)/gi;
+        let match;
+        
+        while ((match = sfRegex.exec(this.customQuery)) !== null) {
+          extractedConditions.push({ 
+            field: match[1].toLowerCase(), 
+            value: match[2].replace(/'/g, '').trim() // Remove SOQL single quotes for type checking
+          });
+        }
       }
-    } else if (crm === 'salesforce') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' where ')) {
-        this.queryError = "Enter conditions only. Format: Amount > 5000 AND StageName = 'Closed Won'";
-      } else if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
-        this.queryError = "Do not use LIMIT. The engine handles pagination automatically.";
-      } else if (queryLower.includes('*')) {
-        this.queryError = "Use '%' for wildcards. Format: Name LIKE 'Tech%'";
-      } else if (queryLower.endsWith(';')) {
-        this.queryError = "Do not end your query with a semicolon (;).";
+
+      // Check extracted fields AND their values against the live schema
+      for (const condition of extractedConditions) {
+        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
+        
+        if (!schemaField) {
+          this.queryError = `Invalid Field: '${condition.field}' does not exist on ${this.selectedSourceObject}.`;
+          break; 
+        }
+
+        // --- NEW: DATA TYPE VALIDATION ---
+        const val = condition.value;
+        const type = schemaField.type;
+
+        // Ignore wildcard values for validation
+        if (val.includes('*') || val.includes('%')) continue;
+
+        if (type === 'number' && isNaN(Number(val))) {
+          this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
+          break;
+        }
+
+        if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
+          this.queryError = `Type Mismatch: '${condition.field}' is a Boolean (True/False). You entered '${val}'.`;
+          break;
+        }
+
+        if (type === 'date' && isNaN(Date.parse(val))) {
+          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date (YYYY-MM-DD). You entered '${val}'.`;
+          break;
+        }
       }
     } else if (crm === 'zoho') {
       if (queryLower.endsWith(';')) {
@@ -510,11 +608,24 @@ export class ApiMappingComponent implements OnInit {
       }
     }
 
-    if (this.queryError) {
-      this.logError(`❌ Validation Error: ${this.queryError}`);
-      return false;
-    }
-    return true; 
+    return this.queryError === null; 
+  }
+
+  // Helper to load a historical query
+  loadHistoricalQuery(query: string) {
+    this.customQuery = query;
+    this.validateQuery();
+  }
+
+  // Helper to save a successful query to history
+  saveQueryToHistory(query: string) {
+    if (!query) return;
+    // Remove duplicates and keep only the last 5
+    this.recentQueries = this.recentQueries.filter(q => q !== query);
+    this.recentQueries.unshift(query);
+    if (this.recentQueries.length > 5) this.recentQueries.pop();
+    
+    localStorage.setItem('crm_query_history', JSON.stringify(this.recentQueries));
   }
 
   preloadEntirePage() {
@@ -592,7 +703,8 @@ export class ApiMappingComponent implements OnInit {
 
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
-          sourceLabel: field.label,
+          // NEW: Embed the API Name into the Source Label dynamically
+          sourceLabel: `${field.label} (${field.name})`, 
           targetField: ''
         }));
 
@@ -602,7 +714,7 @@ export class ApiMappingComponent implements OnInit {
       },
       error: (err) => {
         console.error('Metadata payload extraction failed:', err);
-        this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics.`);
+        this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics from ${this.sourceSystem}.`);
         this.isLoading = false;
         this.cdr.detectChanges();
       }
@@ -620,20 +732,66 @@ export class ApiMappingComponent implements OnInit {
   }
 
   autoMap() {
-    this.mappings.forEach((m) => {
-      const sourceMatchKey = m.sourceField.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const match = this.targetFields.find((t) => {
-        const targetMatchKey = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-        return targetMatchKey.includes(sourceMatchKey) || sourceMatchKey.includes(targetMatchKey);
-      });
+    let matchCount = 0;
 
+    this.mappings.forEach((m) => {
+      if (m.targetField) return;
+
+      const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
+      if (!sourceMeta) return;
+
+      const srcApiExact = sourceMeta.name.toLowerCase();
+      const srcLabelExact = sourceMeta.label.toLowerCase();
+      
+      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '');
+      const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+
+      let match = null;
+
+      // PASS 1: Exact API Name Match
+      match = this.targetFields.find(t => t.name.toLowerCase() === srcApiExact);
+      // PASS 2: Exact UI Label Match
+      if (!match) match = this.targetFields.find(t => t.label.toLowerCase() === srcLabelExact);
+      // PASS 3: Fuzzy API Name Match
+      if (!match) match = this.targetFields.find(t => t.name.toLowerCase().replace(/[^a-z0-9]/g, '') === srcApiClean);
+      // PASS 4: Fuzzy UI Label Match
+      if (!match) match = this.targetFields.find(t => t.label.toLowerCase().replace(/[^a-z0-9]/g, '') === srcLabelClean);
+      // PASS 5: Aggressive Substring Match 
+      if (!match && srcApiClean.length > 3) {
+         match = this.targetFields.find(t => {
+           const tgtApiClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+           return tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean);
+         });
+      }
+
+      // --- STRICT MAPPING CHECK ---
+      if (this.isStrictMapping && match) {
+        const sType = sourceMeta.type;
+        const tType = match.type;
+        const isCompatible = sType === tType || (sType === 'string' && ['string', 'picklist', 'reference'].includes(tType || ''));
+        
+        if (!isCompatible) {
+          match = null; // Reject the match because data types do not align
+        }
+      }
+
+      // Apply the match if found
       if (match) {
         m.targetField = match.name;
+        if (this.isReferenceField(match.name)) {
+          m.relationalExtIdField = 'Id';
+        }
+        matchCount++;
       }
     });
 
     this.updateMappedCount();
-    this.logMessages.unshift('System: Dynamic Auto-mapping applied based on field topology matching.');
+    
+    if (matchCount > 0) {
+      this.logMessages.unshift(`System: Auto-mapping applied. ${matchCount} fields mapped.`);
+    } else {
+      this.logMessages.unshift(`System: Auto-mapping ran, but no new matching fields were found.`);
+    }
   }
 
   updateMappedCount() {
@@ -727,6 +885,9 @@ export class ApiMappingComponent implements OnInit {
     this.previewRecords = recordsToTest; 
     await this.validateData(); 
   }
+
+
+
 
   downloadCSV(data: any[], filename: string) {
     if (!data || data.length === 0) return;

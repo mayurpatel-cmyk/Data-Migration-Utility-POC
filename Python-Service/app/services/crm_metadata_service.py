@@ -20,11 +20,19 @@ class CrmMetadataService:
                 response.raise_for_status()
                 
                 data = response.json()
+                
+                # Node.js Logic Applied: Map all objects directly, add keyPrefix, and identify custom/metadata types
                 objects = [
-                    {"name": obj["name"], "label": obj["label"]}
+                    {
+                        "name": obj["name"], 
+                        "label": obj["label"],
+                        "keyPrefix": obj.get("keyPrefix"),
+                        "isCustomMetadata": str(obj["name"]).endswith("__mdt"),
+                        "isCustomObject": str(obj["name"]).endswith("__c")
+                    }
                     for obj in data.get("sobjects", [])
-                    if obj.get("queryable") and obj.get("replicateable")
                 ]
+                
                 return sorted(objects, key=lambda x: x["label"])
                 
         except httpx.HTTPStatusError as e:
@@ -49,48 +57,50 @@ class CrmMetadataService:
                 
                 fields_raw = desc_res.json().get("fields", [])
                 
-                type_mapping = {
-                    "string": "string", "textarea": "string", "phone": "string", "email": "string", "url": "string",
-                    "double": "number", "int": "number", "currency": "number", "percent": "number",
-                    "date": "date", "datetime": "date",
-                    "boolean": "boolean",
-                    "picklist": "picklist", "multipicklist": "picklist",
-                    "reference": "reference"
-                }
-                
                 parsed_fields = []
                 select_fields_list = []
                 
                 for f in fields_raw:
+                    # Skip compound fields that break SOQL queries
                     if f["type"] in ["address", "location"]:
                         continue
 
+                    # Grab fields for sample records
                     if f.get("createable") or f.get("updateable") or f.get("name") == "Id":
                         select_fields_list.append(f["name"])
-                        parsed_fields.append({
-                            "name": f["name"],
-                            "label": f["label"],
-                            "type": type_mapping.get(f["type"], "string"),
-                            "required": not f["nillable"] if f["name"] != "Id" else False
-                        })
+                        
+                    # Node.js Logic Applied: Extract length, custom flag, exact isRequired logic, and referenceTo
+                    is_required = (not f.get("nillable", True)) and f.get("createable", False) and (not f.get("defaultedOnCreate", False))
+                    
+                    parsed_fields.append({
+                        "name": f["name"],
+                        "label": f["label"],
+                        "type": f["type"],
+                        "length": f.get("length"),
+                        "custom": f.get("custom"),
+                        "isRequired": is_required,
+                        "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None
+                    })
 
                 # 2. Fetch Sample Data
                 sample_fields = select_fields_list[:15]
-                soql = f"SELECT {', '.join(sample_fields)} FROM {object_name} LIMIT 5"
-                query_url = f"{base_url}/services/data/v60.0/query/?q={soql}"
-                
-                query_res = await client.get(query_url, headers=headers)
                 sample_records = []
-                if query_res.status_code == 200:
-                    raw_records = query_res.json().get("records", [])
-                    for r in raw_records:
-                        r.pop("attributes", None)
-                        sample_records.append(r)
+                
+                if sample_fields:
+                    soql = f"SELECT {', '.join(sample_fields)} FROM {object_name} LIMIT 5"
+                    query_url = f"{base_url}/services/data/v60.0/query/?q={soql}"
+                    
+                    query_res = await client.get(query_url, headers=headers)
+                    if query_res.status_code == 200:
+                        raw_records = query_res.json().get("records", [])
+                        for r in raw_records:
+                            r.pop("attributes", None)
+                            sample_records.append(r)
 
                 return {
                     "headers": sample_fields[:12],
                     "sampleRecords": sample_records,
-                    "fields": sorted(parsed_fields, key=lambda x: x["required"], reverse=True)
+                    "fields": sorted(parsed_fields, key=lambda x: x["isRequired"], reverse=True)
                 }
                 
         except httpx.HTTPStatusError as e:
@@ -155,71 +165,113 @@ class CrmMetadataService:
         try:
             async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
                 
-                # 1. Fetch live records FIRST to dynamically read JSON keys
+                # 1. Identify the correct schema endpoint based on the object
+                meta_url = None
+                meta_key = None
+                singular_name = safe_object_name[:-1] if safe_object_name.endswith('s') else safe_object_name
+                
+                if safe_object_name in ["tickets", "users", "organizations"]:
+                    meta_url = f"{base_url}/{singular_name}_fields.json"
+                    meta_key = f"{singular_name}_fields"
+                elif safe_object_name not in ["groups", "macros", "triggers", "views"]:
+                    # Sunshine Custom Objects Schema
+                    meta_url = f"{base_url}/custom_objects/object_types/{safe_object_name}"
+                    meta_key = "schema"
+
+                # 2. Fetch and parse the live Metadata Schema
+                schema_fields_map = {}
+                if meta_url:
+                    meta_res = await client.get(meta_url, headers=headers)
+                    if meta_res.status_code == 200:
+                        data = meta_res.json()
+                        
+                        # Parse Standard Objects (Tickets, Users, Orgs)
+                        if meta_key in ["ticket_fields", "user_fields", "organization_fields"]:
+                            for f in data.get(meta_key, []):
+                                field_id = f.get("id")
+                                # Zendesk custom fields use numeric IDs, standard system fields use strings (e.g. "status")
+                                is_custom = isinstance(field_id, int)
+                                
+                                api_name = f"custom_field_{field_id}" if is_custom else str(field_id)
+                                
+                                schema_fields_map[api_name] = {
+                                    "name": api_name,
+                                    "label": f.get("title", api_name),
+                                    "type": f.get("type", "string"),
+                                    "isRequired": f.get("required", False) or f.get("required_in_portal", False),
+                                    "custom": is_custom,
+                                    "referenceTo": None
+                                }
+                                
+                        # Parse Sunshine Custom Objects
+                        elif meta_key == "schema":
+                            schema = data.get("schema", {})
+                            properties = schema.get("properties", {})
+                            required_fields = schema.get("required", [])
+                            
+                            for prop_key, prop_val in properties.items():
+                                schema_fields_map[prop_key] = {
+                                    "name": prop_key,
+                                    "label": prop_val.get("title", prop_key.replace("_", " ").title()),
+                                    "type": prop_val.get("type", "string"),
+                                    "isRequired": prop_key in required_fields,
+                                    "custom": True,
+                                    "referenceTo": None
+                                }
+
+                # 3. Fetch Sample Data (crucial for getting hidden system fields like 'id' and 'created_at')
                 data_url = f"{base_url}/{safe_object_name}.json?per_page=5"
                 data_res = await client.get(data_url, headers=headers)
                 data_res.raise_for_status()
                     
                 raw_records = data_res.json().get(safe_object_name, [])
-                
-                # 2. Fetch custom field metadata for UI mapping (if applicable)
-                singular_name = safe_object_name[:-1] if safe_object_name.endswith('s') else safe_object_name
-                meta_url = f"{base_url}/{singular_name}_fields.json"
-                meta_res = await client.get(meta_url, headers=headers)
-                
-                meta_dict = {}
-                if meta_res.status_code == 200:
-                    for f in meta_res.json().get(f"{singular_name}_fields", []):
-                        meta_dict[str(f["id"])] = {
-                            "label": f.get("title", f"Custom Field {f['id']}"),
-                            "type": f.get("type", "string")
-                        }
-
                 sample_records = []
-                dynamic_fields_map = {}
 
-                # 3. Build schema dynamically from the API payload structure
+                # 4. Flatten data & discover missing system fields
                 if len(raw_records) > 0:
                     for rec in raw_records:
                         flat_rec = {}
                         for k, v in rec.items():
                             
+                            # Flatten Zendesk's nested 'custom_fields' array into direct keys
                             if k == "custom_fields" and isinstance(v, list):
                                 for cf in v:
-                                    cf_id = str(cf['id'])
-                                    cf_key = f"custom_field_{cf_id}"
+                                    cf_key = f"custom_field_{cf['id']}"
                                     flat_rec[cf_key] = cf.get("value")
-                                    
-                                    meta = meta_dict.get(cf_id, {})
-                                    dynamic_fields_map[cf_key] = {
-                                        "name": cf_key,
-                                        "label": meta.get("label", f"Custom Field {cf_id}"),
-                                        "type": "string",
-                                        "required": False
-                                    }
+                            
+                            # Grab all other standard non-nested fields
                             elif not isinstance(v, (dict, list)): 
                                 flat_rec[k] = v
                                 
-                                field_type = "string"
-                                if isinstance(v, bool): field_type = "boolean"
-                                elif isinstance(v, (int, float)): field_type = "number"
-                                
-                                dynamic_fields_map[k] = {
-                                    "name": k,
-                                    "label": k.replace("_", " ").title(),
-                                    "type": field_type,
-                                    "required": k in ["id", "email", "name"]
-                                }
+                                # If this data key wasn't in the schema API (e.g., 'id', 'url', 'created_at'), add it manually
+                                if k not in schema_fields_map:
+                                    field_type = "string"
+                                    if isinstance(v, bool): field_type = "boolean"
+                                    elif isinstance(v, (int, float)): field_type = "number"
+                                    
+                                    schema_fields_map[k] = {
+                                        "name": k,
+                                        "label": k.replace("_", " ").title(),
+                                        "type": field_type,
+                                        "isRequired": k == "id",
+                                        "custom": False,
+                                        "referenceTo": None
+                                    }
                                 
                         sample_records.append(flat_rec)
                 
-                fields_list = list(dynamic_fields_map.values())
+                # 5. Format and Sort Output to match Salesforce structure
+                fields_list = list(schema_fields_map.values())
+                
+                # Sort rules: Required fields go to the top, then sort alphabetically
+                fields_list = sorted(fields_list, key=lambda x: (not x["isRequired"], x["name"]))
+                
                 headers_preview = [f["name"] for f in fields_list[:12]] 
                 
             return {
                 "headers": headers_preview,
                 "sampleRecords": sample_records,
-                "fields": sorted(fields_list, key=lambda x: x["name"])
+                "fields": fields_list
             }
             
         except httpx.HTTPStatusError as e:
