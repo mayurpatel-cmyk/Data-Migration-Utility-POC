@@ -259,6 +259,15 @@ export class ApiMappingComponent implements OnInit {
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
+    } else if (crm === 'zoho') {
+      return {
+        title: 'Zoho COQL Filter',
+        placeholder: "e.g., Account_Name != null and Industry = 'Technology'",
+        helpText: "Enter Zoho criteria or a COQL condition to filter your records.",
+        icon: 'icon-filter',
+        buttonText: 'Run Query',
+        loadingText: 'Querying...'
+      };
     } else {
       return {
         title: `${this.sourceSystem} Query Editor`,
@@ -301,7 +310,9 @@ export class ApiMappingComponent implements OnInit {
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
+      zohoToken: localStorage.getItem('zoho_token') || '',
+      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
 
     try {
@@ -373,7 +384,9 @@ export class ApiMappingComponent implements OnInit {
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
+      zohoToken: localStorage.getItem('zoho_token') || '',
+      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
 
     this.migrationQueue.push(job);
@@ -391,7 +404,7 @@ export class ApiMappingComponent implements OnInit {
     
     this.cdr.detectChanges();
     
-    // Smoothly scroll down to the Queue Table!
+    // Smoothly scroll down to the Queue Table
     setTimeout(() => {
       const queueCard = document.getElementById('queue-section');
       if (queueCard) {
@@ -491,6 +504,10 @@ export class ApiMappingComponent implements OnInit {
       } else if (queryLower.endsWith(';')) {
         this.queryError = "Do not end your query with a semicolon (;).";
       }
+    } else if (crm === 'zoho') {
+      if (queryLower.endsWith(';')) {
+        this.queryError = "Do not end your query with a semicolon (;).";
+      }
     }
 
     if (this.queryError) {
@@ -514,14 +531,14 @@ export class ApiMappingComponent implements OnInit {
 
         if (this.sourceEntities.length > 0) {
           const defaultSrc = this.sourceEntities.find(
-            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('ticket')
+            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('ticket') || e.name.toLowerCase().includes('contacts')
           );
           this.selectedSourceObject = defaultSrc ? defaultSrc.name : this.sourceEntities[0].name;
         }
 
         if (this.targetEntities.length > 0) {
           const defaultTgt = this.targetEntities.find(
-            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('user')
+            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('user') || e.name.toLowerCase().includes('contacts')
           );
           this.selectedTargetObject = defaultTgt ? defaultTgt.name : this.targetEntities[0].name;
         }
@@ -754,7 +771,6 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
-    // Auto queue if they haven't manually queued it but clicked run
     if (this.migrationQueue.length === 0 && this.selectedTargetObject && this.mappedCount > 0) {
       this.queueAnotherObject();
     }
@@ -766,7 +782,6 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
-    // Send the entire queue array
     const payload = { queue: this.migrationQueue };
 
     const ws = new WebSocket('ws://localhost:8000/ws/migrate');

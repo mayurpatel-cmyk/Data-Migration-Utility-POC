@@ -226,3 +226,104 @@ class CrmMetadataService:
             raise HTTPException(status_code=e.response.status_code, detail=f"Zendesk data fetch error for '{object_name}': {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Zendesk network connection failed: {str(e)}")
+
+
+
+    # =========================================================
+    # ZOHO CRM METADATA EXTRACTION ENGINE
+    # =========================================================
+    @staticmethod
+    async def fetch_zoho_objects(zoho_token: str, api_domain: str):
+        if not zoho_token or not api_domain:
+            raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
+
+        headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+        # Assuming api_domain is structured like "https://www.zohoapis.com"
+        url = f"{api_domain.rstrip('/')}/crm/v3/settings/modules"
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+
+                data = response.json()
+                objects = [
+                    {"name": mod["api_name"], "label": mod["module_name"]}
+                    for mod in data.get("modules", [])
+                    if mod.get("api_supported")
+                ]
+                return sorted(objects, key=lambda x: x["label"])
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Zoho rejected module request: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to Zoho: {str(e)}")
+
+    @staticmethod
+    async def fetch_zoho_fields(zoho_token: str, api_domain: str, module_name: str):
+        if not zoho_token or not api_domain:
+            raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
+
+        headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+        base_url = f"{api_domain.rstrip('/')}/crm/v3"
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+                # 1. Fetch Field Metadata Schema
+                fields_url = f"{base_url}/settings/fields?module={module_name}"
+                fields_res = await client.get(fields_url, headers=headers)
+                fields_res.raise_for_status()
+
+                fields_raw = fields_res.json().get("fields", [])
+
+                type_mapping = {
+                    "text": "string", "textarea": "string", "email": "string", "phone": "string", "website": "string",
+                    "integer": "number", "double": "number", "currency": "number", "percent": "number",
+                    "date": "date", "datetime": "date",
+                    "boolean": "boolean",
+                    "picklist": "picklist", "multiselectpicklist": "picklist",
+                    "lookup": "reference", "ownerlookup": "reference"
+                }
+
+                parsed_fields = []
+                select_fields_list = []
+
+                for f in fields_raw:
+                    if not f.get("api_name"):
+                        continue
+
+                    select_fields_list.append(f["api_name"])
+                    parsed_fields.append({
+                        "name": f["api_name"],
+                        "label": f["field_label"],
+                        "type": type_mapping.get(f["data_type"], "string"),
+                        "required": f.get("system_mandatory", False) or f.get("required", False)
+                    })
+
+                # 2. Fetch Sample Data
+                records_url = f"{base_url}/{module_name}?page=1&per_page=5"
+                records_res = await client.get(records_url, headers=headers)
+                sample_records = []
+
+                if records_res.status_code == 200:
+                    raw_records = records_res.json().get("data", [])
+                    for r in raw_records:
+                        flat_rec = {}
+                        for k, v in r.items():
+                            # Flatten Zoho's nested dictionary structures for Lookups/Owners
+                            if isinstance(v, dict) and "id" in v:
+                                flat_rec[k] = v.get("name", v["id"]) 
+                            else:
+                                flat_rec[k] = v
+                        sample_records.append(flat_rec)
+
+                return {
+                    "headers": select_fields_list[:12],
+                    "sampleRecords": sample_records,
+                    "fields": sorted(parsed_fields, key=lambda x: x["required"], reverse=True)
+                }
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Zoho schema error: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to Zoho: {str(e)}")

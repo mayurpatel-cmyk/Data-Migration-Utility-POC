@@ -445,14 +445,30 @@ async def get_crm_objects(
         
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_objects()
+        
     elif crm_lower == "zoho":
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{zoho_api_domain}/crm/v6/settings/modules", headers={
+        # 1. Sanitize the Zoho Domain Protocol
+        if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+            zoho_api_domain = f"https://{zoho_api_domain}"
+        base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+
+        # 2. Execute with verify=False for SSL safety
+        async with httpx.AsyncClient(verify=False) as client:
+            res = await client.get(f"{base_url}/crm/v6/settings/modules", headers={
                 "Authorization": f"Zoho-oauthtoken {zoho_token}"
             })
-            if res.status_code != 200: return []
+            if res.status_code != 200: 
+                    raise HTTPException(status_code=res.status_code, detail=f"Zoho API Error: {res.text}")
             data = res.json()
-            return [{"name": m["api_name"], "label": m["plural_label"]} for m in data.get("modules", []) if m.get("visible")]    
+            zoho_objects = []
+            for m in data.get("modules", []):
+                if m.get("api_supported", False): 
+                    zoho_objects.append({
+                        "name": m.get("api_name"),
+                        "label": m.get("plural_label") or m.get("module_name") or m.get("api_name") 
+                    })
+            
+            return sorted(zoho_objects, key=lambda x: x["label"])
     else:
         return [
             {"name": "account", "label": "Account (Mock)"},
@@ -482,29 +498,56 @@ async def get_crm_fields(
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_fields(zd_token, zd_subdomain, object_name)
     elif crm_lower == "zoho":
-        # Dynamic query targeting the user's specific global server cluster (US, EU, IN, etc.)
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                f"{zoho_api_domain}/crm/v6/settings/fields?module={object_name}", 
-                headers={"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+        # 1. Sanitize the Zoho Domain Protocol
+        if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+            zoho_api_domain = f"https://{zoho_api_domain}"
+        base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+
+        async with httpx.AsyncClient(verify=False) as client:
+            headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+
+            # --- CALL 1: Fetch the Field Schema (Columns) ---
+            fields_res = await client.get(
+                f"{base_url}/crm/v6/settings/fields?module={object_name}", 
+                headers=headers
             )
             
-            if res.status_code != 200:
-                raise HTTPException(status_code=res.status_code, detail="Failed to fetch field metadata schema from Zoho.")
+            if fields_res.status_code != 200:
+                raise HTTPException(status_code=fields_res.status_code, detail="Failed to fetch field metadata schema from Zoho.")
                 
-            data = res.json()
-            fields_list = data.get("fields", [])
+            fields_data = fields_res.json().get("fields", [])
             
-            # Formats layout to feed directly into your Angular API-mapping interactive table configuration
+            # --- CALL 2: Fetch the Sample Data (Rows) ---
+            records_res = await client.get(
+                f"{base_url}/crm/v6/{object_name}?page=1&per_page=5", 
+                headers=headers
+            )
+            
+            sample_records = []
+            if records_res.status_code == 200:
+                raw_records = records_res.json().get("data", [])
+                
+                # Flatten complex Zoho data (like Owner or Lookup objects) into simple strings for the UI table
+                for r in raw_records:
+                    flat_rec = {}
+                    for k, v in r.items():
+                        if isinstance(v, dict) and "id" in v:
+                            flat_rec[k] = v.get("name", v["id"]) 
+                        else:
+                            flat_rec[k] = v
+                    sample_records.append(flat_rec)
+
+            # Return both Schema AND Data to Angular
             return {
-                "headers": [f["api_name"] for f in fields_list],
+                "headers": [f["api_name"] for f in fields_data][:15], # Limit to first 15 headers for UI cleanliness
+                "sampleRecords": sample_records,
                 "fields": [
                     {
                         "name": f["api_name"],
                         "label": f["field_label"],
                         "type": f["data_type"],
                         "required": f.get("required", False)
-                    } for f in fields_list
+                    } for f in fields_data
                 ]
             }
        
@@ -534,6 +577,8 @@ async def get_filtered_preview(request: Request):
     sf_instance = payload.get("sfInstance", "")
     zd_token = payload.get("zdToken", "")
     zd_subdomain = payload.get("zdSubdomain", "")
+    zoho_token = payload.get("zohoToken", "")
+    zoho_api_domain = payload.get("zohoDomain", "")
     
     if not obj_name:
         raise HTTPException(status_code=400, detail="Object name is required.")
@@ -548,15 +593,10 @@ async def get_filtered_preview(request: Request):
             if not sf_token or not sf_instance:
                 raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
             
-            # Construct standard SOQL. (Assuming query is just the WHERE clause)
             where_clause = f" WHERE {query}" if query else ""
             soql = f"SELECT Id, Name, CreatedDate FROM {obj_name}{where_clause} LIMIT 5"
             
-            headers = {
-                "Authorization": f"Bearer {sf_token}",
-                "Content-Type": "application/json"
-            }
-            
+            headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
             safe_soql = urllib.parse.quote(soql)
             base_url = sf_instance.rstrip('/')
             url = f"{base_url}/services/data/v60.0/query?q={safe_soql}"
@@ -565,13 +605,8 @@ async def get_filtered_preview(request: Request):
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
                 
-            data = res.json()
-            records = data.get("records", [])
-            
-            # Clean up the hidden Salesforce "attributes" block from the JSON response
-            for r in records:
-                r.pop("attributes", None)
-                
+            records = res.json().get("records", [])
+            for r in records: r.pop("attributes", None)
             return {"records": records}
 
         # ==========================================
@@ -581,30 +616,56 @@ async def get_filtered_preview(request: Request):
             if not zd_token or not zd_subdomain:
                 raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
             
-            # Zendesk Search API requires singular object names (e.g., "ticket", not "tickets")
             safe_obj = obj_name.lower()
-            if safe_obj.endswith("s"):
-                safe_obj = safe_obj[:-1]
+            if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
 
-            # Append the object type automatically to the user's custom query string
             full_query = f"{query} type:{safe_obj}" if query else f"type:{safe_obj}"
             safe_query = urllib.parse.quote(full_query)
             
-            headers = {
-                "Authorization": f"Bearer {zd_token}",
-                "Content-Type": "application/json"
-            }
-            
+            headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
             url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=5"
             
             res = await client.get(url, headers=headers)
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
                 
-            data = res.json()
-            records = data.get("results", [])
+            return {"records": res.json().get("results", [])}
+
+        # ==========================================
+        # 3. ZOHO LIVE DYNAMIC QUERY
+        # ==========================================
+        elif crm_id == "zoho":
+            if not zoho_token:
+                raise HTTPException(status_code=400, detail="Zoho credentials missing.")
             
-            return {"records": records}
+            # Sanitize the Zoho Domain Protocol
+            if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+                zoho_api_domain = f"https://{zoho_api_domain}"
+            base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+
+            headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}", "Content-Type": "application/json"}
             
+            # Use Zoho's COQL API if a query is provided, otherwise fallback to standard record fetch
+            if query:
+                coql_query = f"select id from {obj_name} where {query} limit 5"
+                res = await client.post(
+                    f"{base_url}/crm/v6/coql", 
+                    headers=headers, 
+                    json={"select_query": coql_query}
+                )
+            else:
+                res = await client.get(
+                    f"{base_url}/crm/v6/{obj_name}?page=1&per_page=5", 
+                    headers=headers
+                )
+
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Zoho Error: {res.text}")
+                
+            return {"records": res.json().get("data", [])}
+            
+        # ==========================================
+        # 4. UNSUPPORTED CRM (Must be at the very end)
+        # ==========================================
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported CRM: {crm_id}")
