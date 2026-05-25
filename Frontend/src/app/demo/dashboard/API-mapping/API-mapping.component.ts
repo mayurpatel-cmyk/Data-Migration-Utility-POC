@@ -92,7 +92,6 @@ export class ApiMappingComponent implements OnInit {
   operationMode: string = 'insert';
   batchSize: number = 5000;
   
-  migrationQueue: any[] = [];
   recentQueries: string[] = [];
 
   ngOnInit(): void {
@@ -134,51 +133,43 @@ export class ApiMappingComponent implements OnInit {
   }
 
   isReferenceField(fieldName: string): boolean {
-  if (!fieldName) return false;
-  const fieldMeta = this.targetFields.find(f => f.name === fieldName);
+    if (!fieldName) return false;
+    const fieldMeta = this.targetFields.find(f => f.name === fieldName);
 
-  if (!fieldMeta) return false;
+    if (!fieldMeta) return false;
 
-  // 1. Trust the API metadata first
-  if (fieldMeta.type === 'reference' || (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0)) {
-    return true;
+    if (fieldMeta.type === 'reference' || (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0)) {
+      return true;
+    }
+
+    if (fieldName !== 'Id' && fieldName.endsWith('Id')) {
+      return true;
+    }
+
+    return false;
   }
-
-  // 2. Fallback: If API missed it, but it follows Salesforce lookup naming conventions
-  // (e.g., AccountId, OwnerId). We explicitly exclude the primary 'Id' field.
-  if (fieldName !== 'Id' && fieldName.endsWith('Id')) {
-    return true;
-  }
-
-  return false;
-}
 
   selectField(mapping: any, fieldName: string) {
-  mapping.targetField = fieldName;
-  mapping.isDropdownOpen = false;
-  
-  if (this.isReferenceField(fieldName)) {
-    // If it is a reference, default the Ext ID to 'Id' so the user knows what to type
-    mapping.relationalExtIdField = 'Id';
-  } else {
-    // CRITICAL: Clear it out if they switch to a normal text/string field
-    mapping.relationalExtIdField = undefined; 
+    mapping.targetField = fieldName;
+    mapping.isDropdownOpen = false;
+    
+    if (this.isReferenceField(fieldName)) {
+      mapping.relationalExtIdField = 'Id';
+    } else {
+      mapping.relationalExtIdField = undefined; 
+    }
+    
+    this.updateMappedCount();
   }
-  
-  this.updateMappedCount();
-}
 
   getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
     let filtered = this.targetFields;
 
-    // --- STRICT MAPPING LOGIC ---
     if (this.isStrictMapping) {
       const sourceMeta = this.sourceFields.find(f => f.name === sourceFieldName);
       
       if (sourceMeta && sourceMeta.type) {
         filtered = filtered.filter(t => {
-          // Allow exact type matches. 
-          // (We also allow 'string' to map to 'picklist' or 'reference' as strings act as universal identifiers)
           if (sourceMeta.type === 'string' && ['string', 'picklist', 'reference'].includes(t.type || '')) {
             return true;
           }
@@ -187,7 +178,6 @@ export class ApiMappingComponent implements OnInit {
       }
     }
 
-    // --- SEARCH LOGIC ---
     if (query) {
       const lowerQuery = query.toLowerCase();
       filtered = filtered.filter((f) => 
@@ -202,7 +192,6 @@ export class ApiMappingComponent implements OnInit {
   getTargetFieldLabel(fieldName: string): string {
     if (!fieldName) return '';
     const field = this.targetFields.find((f) => f.name === fieldName);
-    // Show Label + API Name for the mapped target fields
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
@@ -257,14 +246,12 @@ export class ApiMappingComponent implements OnInit {
   getSourceEntityLabel(entityName: string): string {
     if (!entityName) return '';
     const entity = this.sourceEntities.find(e => e.name === entityName);
-    // Dynamically show Label + API Name for any CRM
     return entity ? `${entity.label} (${entity.name})` : entityName;
   }
 
   getTargetObjectLabel(objName: string): string {
     if (!objName) return '';
     const obj = this.targetEntities.find(e => e.name === objName);
-    // Dynamically show Label + API Name for any CRM
     return obj ? `${obj.label} (${obj.name})` : objName;
   }
 
@@ -376,7 +363,6 @@ export class ApiMappingComponent implements OnInit {
 
     } catch (error) {
       console.error('Filter Error:', error);
-      // We still log actual network failures to the terminal
       this.logMessages = [...this.logMessages, 'Error: Failed to fetch filtered data from the API.'];
     } finally {
       this.isPreviewLoading = false;
@@ -392,134 +378,6 @@ export class ApiMappingComponent implements OnInit {
     this.logMessages = [...this.logMessages, message];
   }
 
-  queueAnotherObject() {
-    const activeMappings = this.mappings.filter(m => m.targetField !== '');
-    
-    if (activeMappings.length === 0) {
-      this.logError('❌ Queue Error: Please map at least one field before queueing.');
-      return;
-    }
-
-    const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedTargetObject);
-    if (isDuplicate) {
-      this.logError(`❌ Queue Error: ${this.selectedTargetObject} is already in the queue! Please edit the existing entry.`);
-      return;
-    }
-
-    const enhancedMappings = activeMappings.map(m => {
-      const fieldMeta = this.targetFields.find(t => t.name === m.targetField);
-      const isRef = this.isReferenceField(m.targetField);
-      return {
-        sourceField: m.sourceField,
-        targetField: m.targetField,
-        type: isRef ? 'reference' : fieldMeta?.type,
-        referenceTo: fieldMeta?.referenceTo,
-        relationshipName: fieldMeta?.relationshipName,
-        relationalExtIdField: m.relationalExtIdField || 'Id', 
-        parentObjectName: m.parentObjectName || (fieldMeta?.referenceTo ? fieldMeta.referenceTo[0] : undefined)
-      };
-    });
-
-    const job = {
-      sourceObject: this.selectedSourceObject,
-      targetObject: this.selectedTargetObject,
-      extractionQuery: this.customQuery,
-      mappings: enhancedMappings,
-      operationMode: this.operationMode,
-      batchSize: this.batchSize,
-      externalIdField: this.externalIdField,
-      
-      sfToken: localStorage.getItem('sf_token') || '',
-      sfInstance: localStorage.getItem('sf_instance_url') || '',
-      zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
-    };
-
-    this.migrationQueue.push(job);
-    this.logMessages = [...this.logMessages, `📦 System: ${this.selectedSourceObject} ➔ ${this.selectedTargetObject} added to the Execution Queue.`];
-
-    // Reset UI to Skeleton State
-    this.selectedSourceObject = '';
-    this.selectedTargetObject = '';
-    this.mappings = [];
-    this.customQuery = '';
-    this.queryError = null;
-    this.previewRecords = [];
-    this.previewHeaders = [];
-    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
-    
-    this.cdr.detectChanges();
-    
-    // Smoothly scroll down to the Queue Table!
-    setTimeout(() => {
-      const queueCard = document.getElementById('queue-section');
-      if (queueCard) {
-        queueCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 50);
-  }
-
-  removeFromQueue(index: number) {
-    const removed = this.migrationQueue.splice(index, 1)[0];
-    this.logMessages = [...this.logMessages, `🗑️ System: Removed ${removed.targetObject} from the queue.`];
-  }
-
-  moveQueueItemUp(index: number) {
-    if (index > 0) {
-      const item = this.migrationQueue.splice(index, 1)[0];
-      this.migrationQueue.splice(index - 1, 0, item);
-    }
-  }
-
-  moveQueueItemDown(index: number) {
-    if (index < this.migrationQueue.length - 1) {
-      const item = this.migrationQueue.splice(index, 1)[0];
-      this.migrationQueue.splice(index + 1, 0, item);
-    }
-  }
-
-  editQueuedItem(index: number) {
-    const item = this.migrationQueue.splice(index, 1)[0];
-    this.selectedSourceObject = item.sourceObject;
-    this.selectedTargetObject = item.targetObject;
-    this.customQuery = item.extractionQuery;
-    this.operationMode = item.operationMode;
-    this.batchSize = item.batchSize;
-    this.externalIdField = item.externalIdField;
-    
-    this.isLoading = true;
-    this.cdr.detectChanges();
-    
-    forkJoin({
-      sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject),
-      targetData: this.mappingApi.getFields(this.targetCrmId, this.selectedTargetObject)
-    }).subscribe({
-      next: ({ sourceData, targetData }) => {
-        this.targetFields = targetData.fields || [];
-        this.sourceFields = sourceData.fields || [];
-        this.previewHeaders = sourceData.headers || [];
-        this.previewRecords = sourceData.sampleRecords || [];
-        
-        this.mappings = (sourceData.fields || []).map((field: any) => {
-          const savedMap = item.mappings.find((m: any) => m.sourceField === field.name);
-          return {
-            sourceField: field.name,
-            // NEW: Embed the API Name here as well
-            sourceLabel: `${field.label} (${field.name})`,
-            targetField: savedMap ? savedMap.targetField : ''
-          };
-        });
-        
-        this.updateMappedCount();
-        this.isLoading = false;
-        this.cdr.detectChanges();
-        
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        this.logMessages = [...this.logMessages, `✏️ System: Loaded ${this.selectedTargetObject} into editor.`];
-      }
-    });
-  }
-
   validateQuery(): boolean {
     this.queryError = null; 
     if (!this.customQuery) return true;
@@ -527,14 +385,37 @@ export class ApiMappingComponent implements OnInit {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    // ... [KEEP YOUR EXISTING SYNTAX CHECKS HERE] ...
+    if (crm === 'zendesk') {
+      if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
+        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved created>2023-01-01";
+      } else if (queryLower.includes(',')) {
+        this.queryError = "Do not use commas. Format: status:open tags:urgent";
+      } else if (queryLower.includes(' = ')) {
+        this.queryError = "Use colons for exact matches. Format: status:open";
+      } else if (queryLower.includes('%')) {
+        this.queryError = "Use '*' for wildcards. Format: name:tech*";
+      } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
+        this.queryError = "Use '-' to exclude a value. Format: -status:closed";
+      } else if (queryLower.includes('type:')) {
+        this.customQuery = this.customQuery.replace(/type:[a-zA-Z0-9_]+\s*/gi, '');
+        this.logMessages = [...this.logMessages, `System: Automatically removed "type:" modifier (handled natively).`];
+      }
+    } else if (crm === 'salesforce') {
+      if (queryLower.startsWith('select ') || queryLower.includes(' where ')) {
+        this.queryError = "Enter conditions only. Format: Amount > 5000 AND StageName = 'Closed Won'";
+      } else if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
+        this.queryError = "Do not use LIMIT. The engine handles pagination automatically.";
+      } else if (queryLower.includes('*')) {
+        this.queryError = "Use '%' for wildcards. Format: Name LIKE 'Tech%'";
+      } else if (queryLower.endsWith(';')) {
+        this.queryError = "Do not end your query with a semicolon (;).";
+      }
+    }
 
-    // Advanced Schema & Data-Type Verification
     if (!this.queryError && this.sourceFields.length > 0) {
       let extractedConditions: { field: string, value: string }[] = [];
 
       if (crm === 'zendesk') {
-        // Extracts "status:open" -> field: "status", value: "open"
         const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
         let match;
         const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated']; 
@@ -545,20 +426,17 @@ export class ApiMappingComponent implements OnInit {
           }
         }
       } else if (crm === 'salesforce') {
-        // Extracts "Amount > 5000" -> field: "amount", value: "5000"
-        // Also strips quotes from string values
         const sfRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like)\s*('?[a-zA-Z0-9_%\s-]+'?)/gi;
         let match;
         
         while ((match = sfRegex.exec(this.customQuery)) !== null) {
           extractedConditions.push({ 
             field: match[1].toLowerCase(), 
-            value: match[2].replace(/'/g, '').trim() // Remove SOQL single quotes for type checking
+            value: match[2].replace(/'/g, '').trim()
           });
         }
       }
 
-      // Check extracted fields AND their values against the live schema
       for (const condition of extractedConditions) {
         const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
         
@@ -567,11 +445,9 @@ export class ApiMappingComponent implements OnInit {
           break; 
         }
 
-        // --- NEW: DATA TYPE VALIDATION ---
-        const val = condition.value;
+        const val = condition.value || '';
         const type = schemaField.type;
 
-        // Ignore wildcard values for validation
         if (val.includes('*') || val.includes('%')) continue;
 
         if (type === 'number' && isNaN(Number(val))) {
@@ -594,16 +470,13 @@ export class ApiMappingComponent implements OnInit {
     return this.queryError === null; 
   }
 
-  // Helper to load a historical query
   loadHistoricalQuery(query: string) {
     this.customQuery = query;
     this.validateQuery();
   }
 
-  // Helper to save a successful query to history
   saveQueryToHistory(query: string) {
     if (!query) return;
-    // Remove duplicates and keep only the last 5
     this.recentQueries = this.recentQueries.filter(q => q !== query);
     this.recentQueries.unshift(query);
     if (this.recentQueries.length > 5) this.recentQueries.pop();
@@ -686,7 +559,6 @@ export class ApiMappingComponent implements OnInit {
 
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
-          // NEW: Embed the API Name into the Source Label dynamically
           sourceLabel: `${field.label} (${field.name})`, 
           targetField: ''
         }));
@@ -731,15 +603,10 @@ export class ApiMappingComponent implements OnInit {
 
       let match = null;
 
-      // PASS 1: Exact API Name Match
       match = this.targetFields.find(t => t.name.toLowerCase() === srcApiExact);
-      // PASS 2: Exact UI Label Match
       if (!match) match = this.targetFields.find(t => t.label.toLowerCase() === srcLabelExact);
-      // PASS 3: Fuzzy API Name Match
       if (!match) match = this.targetFields.find(t => t.name.toLowerCase().replace(/[^a-z0-9]/g, '') === srcApiClean);
-      // PASS 4: Fuzzy UI Label Match
       if (!match) match = this.targetFields.find(t => t.label.toLowerCase().replace(/[^a-z0-9]/g, '') === srcLabelClean);
-      // PASS 5: Aggressive Substring Match 
       if (!match && srcApiClean.length > 3) {
          match = this.targetFields.find(t => {
            const tgtApiClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -747,18 +614,16 @@ export class ApiMappingComponent implements OnInit {
          });
       }
 
-      // --- STRICT MAPPING CHECK ---
       if (this.isStrictMapping && match) {
         const sType = sourceMeta.type;
         const tType = match.type;
         const isCompatible = sType === tType || (sType === 'string' && ['string', 'picklist', 'reference'].includes(tType || ''));
         
         if (!isCompatible) {
-          match = null; // Reject the match because data types do not align
+          match = null; 
         }
       }
 
-      // Apply the match if found
       if (match) {
         m.targetField = match.name;
         if (this.isReferenceField(match.name)) {
@@ -869,9 +734,6 @@ export class ApiMappingComponent implements OnInit {
     await this.validateData(); 
   }
 
-
-
-
   downloadCSV(data: any[], filename: string) {
     if (!data || data.length === 0) return;
 
@@ -902,6 +764,7 @@ export class ApiMappingComponent implements OnInit {
     document.body.removeChild(a);
   }
 
+  // --- REFACTORED TO EXECUTE SINGLE MAPPED JOB DIRECTLY ---
   runMigration() {
     this.successData = [];
     this.errorData = [];
@@ -915,20 +778,53 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
-    // Auto queue if they haven't manually queued it but clicked run
-    if (this.migrationQueue.length === 0 && this.selectedTargetObject && this.mappedCount > 0) {
-      this.queueAnotherObject();
-    }
+    const activeMappings = this.mappings.filter(m => m.targetField !== '');
 
-    if (this.migrationQueue.length === 0) {
+    if (activeMappings.length === 0) {
       this.jobStatus = 'Failed';
-      this.logError('❌ Error: The migration queue is empty.');
+      this.logError('❌ Error: Please map at least one field before running the migration.');
       this.cdr.detectChanges();
       return;
     }
 
-    // Send the entire queue array
-    const payload = { queue: this.migrationQueue };
+    if (!this.selectedSourceObject || !this.selectedTargetObject) {
+      this.jobStatus = 'Failed';
+      this.logError('❌ Error: Source and Target objects must be selected.');
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const enhancedMappings = activeMappings.map(m => {
+      const fieldMeta = this.targetFields.find(t => t.name === m.targetField);
+      const isRef = this.isReferenceField(m.targetField);
+      return {
+        sourceField: m.sourceField,
+        targetField: m.targetField,
+        type: isRef ? 'reference' : fieldMeta?.type,
+        referenceTo: fieldMeta?.referenceTo,
+        relationshipName: fieldMeta?.relationshipName,
+        relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined), 
+        parentObjectName: m.parentObjectName || (fieldMeta?.referenceTo ? fieldMeta.referenceTo[0] : undefined)
+      };
+    });
+
+    const job = {
+      sourceObject: this.selectedSourceObject,
+      targetObject: this.selectedTargetObject,
+      extractionQuery: this.customQuery,
+      mappings: enhancedMappings,
+      operationMode: this.operationMode,
+      batchSize: this.batchSize,
+      externalIdField: this.externalIdField,
+      
+      sfToken: localStorage.getItem('sf_token') || '',
+      sfInstance: localStorage.getItem('sf_instance_url') || '',
+      zdToken: localStorage.getItem('zd_token') || '',
+      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+    };
+
+    // We pass it in an array to match Python's expectations seamlessly
+    const payload = { queue: [job] };
 
     const ws = new WebSocket('ws://localhost:8000/ws/migrate');
 
