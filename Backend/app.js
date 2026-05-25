@@ -27,6 +27,15 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 
+app.get('/', (req, res) => {
+  res.status(200).send('Node API is healthy and running!');
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'Healthy', timestamp: new Date() });
+});
+
+
 // --- ROUTES ---
 
 // 2. Attach your auth routes to the /api/auth path

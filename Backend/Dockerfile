@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # Install production dependencies
-RUN npm install --only=production
+RUN npm ci --only=production
 
 # Copy the rest of your backend code
 COPY . .

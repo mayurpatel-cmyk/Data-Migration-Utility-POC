@@ -135,7 +135,8 @@ async def crm_oauth_login(
 # =========================================================
 @router.get("/api/auth/salesforce/callback")
 async def salesforce_callback(code: str, state: str):
-    async with httpx.AsyncClient() as client:
+    # 👇 CRITICAL FIX: Added verify=False here
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.post("https://login.salesforce.com/services/oauth2/token", data={
             "grant_type": "authorization_code",
             "code": code,
@@ -166,7 +167,8 @@ async def zendesk_callback(code: str, state: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="State parameter verification corruption.")
 
-    async with httpx.AsyncClient() as client:
+    # 👇 CRITICAL FIX: Added verify=False here
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
             "grant_type": "authorization_code",
             "code": code,
@@ -519,3 +521,90 @@ async def get_crm_fields(
                 {"name": "status", "label": "Status Flag", "type": "picklist", "required": False}
             ]
         }
+    
+@router.post("/api/metadata/preview-filter")
+async def get_filtered_preview(request: Request):
+    payload = await request.json()
+    
+    crm_id = payload.get("crmId", "").lower()
+    obj_name = payload.get("objectName", "")
+    query = payload.get("query", "").strip()
+    
+    sf_token = payload.get("sfToken", "")
+    sf_instance = payload.get("sfInstance", "")
+    zd_token = payload.get("zdToken", "")
+    zd_subdomain = payload.get("zdSubdomain", "")
+    
+    if not obj_name:
+        raise HTTPException(status_code=400, detail="Object name is required.")
+
+    # Using verify=False to bypass corporate SSL proxy issues
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        
+        # ==========================================
+        # 1. SALESFORCE LIVE DYNAMIC QUERY
+        # ==========================================
+        if crm_id == "salesforce":
+            if not sf_token or not sf_instance:
+                raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
+            
+            # Construct standard SOQL. (Assuming query is just the WHERE clause)
+            where_clause = f" WHERE {query}" if query else ""
+            soql = f"SELECT Id, Name, CreatedDate FROM {obj_name}{where_clause} LIMIT 5"
+            
+            headers = {
+                "Authorization": f"Bearer {sf_token}",
+                "Content-Type": "application/json"
+            }
+            
+            safe_soql = urllib.parse.quote(soql)
+            base_url = sf_instance.rstrip('/')
+            url = f"{base_url}/services/data/v60.0/query?q={safe_soql}"
+            
+            res = await client.get(url, headers=headers)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
+                
+            data = res.json()
+            records = data.get("records", [])
+            
+            # Clean up the hidden Salesforce "attributes" block from the JSON response
+            for r in records:
+                r.pop("attributes", None)
+                
+            return {"records": records}
+
+        # ==========================================
+        # 2. ZENDESK LIVE DYNAMIC QUERY
+        # ==========================================
+        elif crm_id == "zendesk":
+            if not zd_token or not zd_subdomain:
+                raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
+            
+            # Zendesk Search API requires singular object names (e.g., "ticket", not "tickets")
+            safe_obj = obj_name.lower()
+            if safe_obj.endswith("s"):
+                safe_obj = safe_obj[:-1]
+
+            # Append the object type automatically to the user's custom query string
+            full_query = f"{query} type:{safe_obj}" if query else f"type:{safe_obj}"
+            safe_query = urllib.parse.quote(full_query)
+            
+            headers = {
+                "Authorization": f"Bearer {zd_token}",
+                "Content-Type": "application/json"
+            }
+            
+            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=5"
+            
+            res = await client.get(url, headers=headers)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
+                
+            data = res.json()
+            records = data.get("results", [])
+            
+            return {"records": records}
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported CRM: {crm_id}")

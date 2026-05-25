@@ -1,137 +1,367 @@
+import urllib.parse
 import asyncio
 import httpx
-import traceback # <--- Added to track exact errors
+import traceback
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
 
+# ==========================================
+# HELPER 1: CHUNK DATASET
+# ==========================================
+def chunk_dataset(data: list, chunk_size: int = 5000):
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]
+
+# ==========================================
+# HELPER 2: DEPENDENCY SORTER
+# ==========================================
+def sort_jobs_by_dependency(jobs):
+    sorted_jobs = []
+    pass3_jobs = []
+    visited = set()
+    visiting = set()
+
+    def visit(job):
+        target_obj = job.get("targetObject")
+        if target_obj in visited: return
+        
+        visiting.add(target_obj)
+
+        dependencies = []
+        for m in job.get("mappings", []):
+            if m.get("type") == "reference" and m.get("referenceTo"):
+                dependencies.extend(m.get("referenceTo"))
+
+        defer_references_to = []
+        for dep in dependencies:
+            parent_job = next((j for j in jobs if j.get("targetObject") == dep), None)
+            if parent_job:
+                if dep in visiting:
+                    print(f"🔄 Circular dependency detected: {target_obj} <-> {dep}. Deferring to Pass 3.")
+                    defer_references_to.append(dep)
+                else:
+                    visit(parent_job)
+
+        visiting.remove(target_obj)
+        visited.add(target_obj)
+
+        job["deferReferencesTo"] = defer_references_to
+        sorted_jobs.append(job)
+
+        if defer_references_to:
+            pass3_patch = dict(job)
+            pass3_patch["isPass3Patch"] = True
+            pass3_patch["onlyReferencesTo"] = defer_references_to
+            pass3_jobs.append(pass3_patch)
+
+    for job in jobs:
+        visit(job)
+
+    return sorted_jobs + pass3_jobs
+
+# ==========================================
+# HELPER 3: PAYLOAD BUILDER 
+# ==========================================
+def build_payload(raw_records, mappings, options):
+    skip_self_ref = options.get("skipSelfReferencing", False)
+    only_self_ref = options.get("onlySelfReferencing", False)
+    exclude_refs = options.get("excludeReferencesTo", [])
+    only_refs = options.get("onlyReferencesTo", [])
+    target_object = options.get("targetObject", "")
+    target_ext_id_field = options.get("targetExtIdField", "")
+    op_mode = options.get("operationMode", "insert")
+
+    payload = []
+    is_patch_mode = only_self_ref or len(only_refs) > 0
+
+    for idx, raw_row in enumerate(raw_records):
+        sf_record = {}
+        has_patch_data = False
+
+        for mapping in mappings:
+            sf_field = mapping.get("targetField")
+            if not sf_field: continue
+
+            csv_val = raw_row.get(mapping.get("sourceField"))
+
+            if is_patch_mode and sf_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById']:
+                continue
+
+            # Prevent empty strings from wiping out Salesforce data
+            if (csv_val is None or str(csv_val).strip() == "") and sf_field != target_ext_id_field: 
+                continue
+
+            is_self_ref = mapping.get("type") == "reference" and target_object in mapping.get("referenceTo", [])
+            refs_other = mapping.get("referenceTo", []) if mapping.get("type") == "reference" else []
+
+            is_excluded_cross = any(obj in refs_other for obj in exclude_refs)
+            is_only_target_cross = len(only_refs) > 0 and any(obj in refs_other for obj in only_refs)
+
+            if skip_self_ref and is_self_ref: continue
+            if only_self_ref and not is_self_ref: continue
+            if is_excluded_cross: continue
+            if len(only_refs) > 0 and not is_only_target_cross: continue
+
+            rel_name = mapping.get("relationshipName")
+            if not rel_name and sf_field:
+                if sf_field.endswith('Id'): rel_name = sf_field[:-2]
+                elif sf_field.endswith('__c'): rel_name = sf_field.replace('__c', '__r')
+
+            rel_ext_id = mapping.get("relationalExtIdField")
+            if mapping.get("type") == "reference" and rel_ext_id and rel_name:
+                sf_record[f"{rel_name}.{rel_ext_id}"] = csv_val
+                if is_patch_mode: has_patch_data = True
+            else:
+                sf_record[sf_field] = csv_val
+
+        if target_ext_id_field and target_ext_id_field not in sf_record:
+            sf_record[target_ext_id_field] = None
+
+        if op_mode == "delete":
+            sf_record = {"Id": sf_record["Id"]} if "Id" in sf_record else {}
+
+        if sf_record:
+            if not is_patch_mode or (is_patch_mode and has_patch_data):
+                payload.append({"originalIndex": idx, "sfRecord": sf_record})
+
+    return payload
+
+
+# ==========================================
+# CORE WEBSOCKET ROUTE
+# ==========================================
 @router.websocket("/ws/migrate")
 async def websocket_migration(websocket: WebSocket):
     await websocket.accept()
-    print("\n" + "="*50)
-    print("1. WEBSOCKET CONNECTED SUCCESSFULLY")
     
     try:
-        # Prove the pipe works by sending an instant message
-        await websocket.send_json({"log": "Logs Opened!", "status": "Initializing..."})
-        
-        print("2. WAITING FOR PAYLOAD FROM ANGULAR...")
+        await websocket.send_json({"log": "System: Multi-Object 3-Pass Engine Initialized.", "status": "Initializing..."})
         payload = await websocket.receive_json()
-        print(f"3. PAYLOAD RECEIVED! Target Object: {payload.get('targetObject')}")
         
-        mappings = payload.get("mappings", [])
-        sf_token = payload.get("sfToken")
-        sf_instance = payload.get("sfInstance")
-        target_object = payload.get("targetObject")
+        raw_queue = payload.get("queue") 
+        if not raw_queue:
+            raw_queue = [payload] 
+            
+        sf_token = payload.get("sfToken") or raw_queue[0].get("sfToken")
+        sf_instance = payload.get("sfInstance") or raw_queue[0].get("sfInstance")
+        zd_token = payload.get("zdToken") or raw_queue[0].get("zdToken")
+        zd_subdomain = payload.get("zdSubdomain") or raw_queue[0].get("zdSubdomain")
 
-        # SECURITY CHECK: Did Angular send the credentials?
-        if not sf_token or not sf_instance:
-            print("❌ ERROR: Missing Salesforce Credentials!")
-            await websocket.send_json({"log": "FATAL: Missing Salesforce Credentials. Please reconnect SFDC.", "status": "Failed"})
+        if not all([sf_token, sf_instance, zd_token, zd_subdomain]):
+            await websocket.send_json({"log": "FATAL: Missing CRM Credentials. Please reconnect.", "status": "Failed"})
             await websocket.close()
             return
-            
-        active_mappings = [m for m in mappings if m.get("targetField")]
 
         async def send_log(msg: str, status: str = "Running"):
             await websocket.send_json({"log": msg, "status": status})
 
-        await send_log("Authenticating with Salesforce Bulk API...")
-        await asyncio.sleep(0.5)
-        
-        transformed_records = [
-            {m["targetField"]: f"Sample Data {i}" for m in active_mappings} 
-            for i in range(1, 6) 
-        ]
-        
-        await send_log(f"Extracted and mapped {len(transformed_records)} records.")
+        await send_log(f"Analyzing {len(raw_queue)} objects for dependencies...")
+        execution_queue = sort_jobs_by_dependency(raw_queue)
 
-        sf_headers = {
-            "X-SFDC-Session": sf_token,
-            "Content-Type": "application/json; charset=UTF-8",
-            "Accept": "application/json"
-        }
-        
-        # Make sure the URL doesn't crash if it's empty
-        base_url = sf_instance.rstrip('/')
-        bulk_base_url = f"{base_url}/services/async/60.0"
-        print(f"4. ATTEMPTING TO HIT SALESFORCE URL: {bulk_base_url}")
-        
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
             
-            # CREATE JOB
-            await send_log("Creating Salesforce Bulk API v1 Job...")
-            job_payload = {"operation": "insert", "object": target_object, "contentType": "JSON"}
-            job_res = await client.post(f"{bulk_base_url}/job", json=job_payload, headers=sf_headers)
-            
-            if job_res.status_code != 201:
-                print(f"❌ SFDC API ERROR: {job_res.text}")
-                await send_log(f"FATAL: Failed to create Bulk Job. {job_res.text}", "Failed")
-                await websocket.close()
-                return
-                
-            job_id = job_res.json().get("id")
-            print(f"5. JOB CREATED: {job_id}")
+            total_success, total_error = 0, 0
+            all_success_data = []
+            all_error_data = []
 
-            # UPLOAD BATCH
-            await send_log(f"Uploading Batch to Salesforce [Job: {job_id}]...")
-            batch_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=transformed_records, headers=sf_headers)
-            
-            if batch_res.status_code != 201:
-                await send_log("FATAL: Failed to upload batch data.", "Failed")
-                await websocket.close()
-                return
+            for job in execution_queue:
+                target_object = job.get("targetObject")
+                source_object = job.get("sourceObject", "")
+                extraction_query = job.get("extractionQuery", "").strip()
+                mappings = [m for m in job.get("mappings", []) if m.get("targetField")]
                 
-            batch_id = batch_res.json().get("id")
-            print(f"6. BATCH UPLOADED: {batch_id}")
+                operation_mode = job.get("operationMode", "insert")
+                batch_size = int(job.get("batchSize", 5000))
+                target_ext_id_field = job.get("externalIdField", "")
+                
+                is_pass3_patch = job.get("isPass3Patch", False)
+                defer_references_to = job.get("deferReferencesTo", [])
+                only_references_to = job.get("onlyReferencesTo", [])
 
-            # CLOSE JOB
-            await send_log("Closing Job to trigger processing...")
-            await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
-            
-            # POLL PROGRESS
-            await send_log("Waiting for Salesforce to process the queue...")
-            while True:
-                await asyncio.sleep(3)
-                status_res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{batch_id}", headers=sf_headers)
-                state = status_res.json().get("state")
-                print(f"7. SALESFORCE PROCESSING STATE: {state}")
+                if not mappings: continue
+
+                # ------------------------------------------
+                # STEP 1: EXTRACT (With Massive Pagination)
+                # ------------------------------------------
+                source_records = job.get("rawRecords")
                 
-                if state == "Completed":
-                    await send_log("Salesforce finished processing. Fetching results...")
-                    break
-                elif state in ["Failed", "NotProcessed"]:
-                    await send_log(f"Salesforce rejected the batch. State: {state}", "Failed")
-                    await websocket.close()
-                    return
+                if not source_records:
+                    await send_log(f"[{target_object}] Initializing extraction from Zendesk...")
+                    zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+                    safe_obj = source_object.lower()
+                    
+                    source_records = []
+                    
+                    try:
+                        if extraction_query:
+                            # Search API Extraction Loop
+                            safe_obj_singular = safe_obj.rstrip('s')
+                            safe_query = urllib.parse.quote(f"{extraction_query} type:{safe_obj_singular}")
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=100"
+                            
+                            while url:
+                                res = await client.get(url, headers=zd_headers)
+                                res.raise_for_status()
+                                data = res.json()
+                                records = data.get("results", [])
+                                
+                                if not records: break
+                                source_records.extend(records)
+                                
+                                await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
+                                url = data.get("next_page")
+                                
+                        else:
+                            # Standard Object Extraction Loop (with Cursor Pagination support)
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/{safe_obj}.json?page[size]=100"
+                            
+                            while url:
+                                res = await client.get(url, headers=zd_headers)
+                                
+                                # THE DEFENDER: Catch Rate Limits
+                                if res.status_code == 429:
+                                    retry_after = int(res.headers.get("Retry-After", 60))
+                                    await send_log(f"⚠️ [Zendesk Rate Limit Hit] Engine pausing for {retry_after} seconds...", "Paused")
+                                    await asyncio.sleep(retry_after)
+                                    continue # Safely retry the exact same URL!
+                                    
+                                res.raise_for_status()
+                                data = res.json()
+                                records = data.get(safe_obj, [])
+                                
+                                if not records: break
+                                source_records.extend(records)
+                                
+                                if len(source_records) % 2000 == 0:
+                                    await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
+                                
+                                meta = data.get("meta")
+                                if meta and meta.get("has_more"):
+                                    url = data.get("links", {}).get("next")
+                                else:
+                                    url = data.get("next_page")
+                            
+                        job["rawRecords"] = source_records 
+                        await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
+                        
+                    except Exception as e:
+                        await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
+                        continue
+
+                # ------------------------------------------
+                # Helper: Salesforce Upload Function
+                # ------------------------------------------
+                async def execute_sf_bulk(sf_payload, sf_op, pass_name="Standard"):
+                    nonlocal total_success, total_error
+                    if not sf_payload: return
+
+                    await send_log(f"[{target_object}] {pass_name}: Initializing {sf_op.upper()}...")
+                    sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
+                    bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
+
+                    job_config = {"operation": sf_op, "object": target_object, "contentType": "JSON"}
+                    if sf_op == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
+
+                    job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
+                    if job_res.status_code != 201:
+                        await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
+                        return
+                    job_id = job_res.json().get("id")
+
+                    chunks = list(chunk_dataset(sf_payload, batch_size))
+                    await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} batches (Max 6 concurrent threads)...")
+
+                    # THE THROTTLE: Strictly limit to 6 parallel uploads at a time
+                    semaphore = asyncio.Semaphore(6)
+
+                    async def upload_chunk(chunk_data):
+                        async with semaphore:
+                            just_sf_records = [c["sfRecord"] for c in chunk_data]
+                            b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_sf_records, headers=sf_headers)
+                            b_res.raise_for_status()
+                            return b_res.json().get("id")
+
+                    # Fire the safely throttled tasks
+                    batch_ids = await asyncio.gather(*[upload_chunk(c) for c in chunks])
+                    await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
+
+                    # Poll for completion with Exponential Backoff
+                    poll_delay = 1.0
+                    while True:
+                        await asyncio.sleep(poll_delay)
+                        status_res = await asyncio.gather(*[client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}", headers=sf_headers) for b_id in batch_ids])
+                        states = [r.json().get("state") for r in status_res]
+                        if all(s == "Completed" for s in states) or any(s in ["Failed", "NotProcessed"] for s in states):
+                            break
+                        poll_delay = min(poll_delay * 1.5, 4.0)
+
+                    # Fetch Results
+                    for i, b_id in enumerate(batch_ids):
+                        res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
+                        results = res.json()
+                        original_chunk = chunks[i]
+
+                        for row_data, sf_result in zip(original_chunk, results):
+                            orig_record = source_records[row_data["originalIndex"]]
+                            if sf_result.get("success"):
+                                orig_record["Salesforce_Id"] = sf_result.get("id")
+                                all_success_data.append(orig_record)
+                                total_success += 1
+                            else:
+                                err_msg = sf_result.get("errors", [{"message": "Unknown"}])[0].get("message")
+                                orig_record["Salesforce_Error"] = err_msg
+                                all_error_data.append(orig_record)
+                                total_error += 1
+
+
+                # ------------------------------------------
+                # STEP 2 & 3: THE 3-PASS ROUTER
+                # ------------------------------------------
+                has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
+
+                if is_pass3_patch:
+                    payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "onlyReferencesTo": only_references_to, "operationMode": "upsert"})
+                    await execute_sf_bulk(payload, "upsert", "Pass 3 (Circular Patch)")
+
+                elif operation_mode == "delete":
+                    payload = build_payload(source_records, mappings, {"targetObject": target_object, "operationMode": "delete"})
+                    await execute_sf_bulk(payload, "delete", "Deletion")
+
+                elif has_self_ref:
+                    sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
+                    p1_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "skipSelfReferencing": True, "operationMode": sf_op})
+                    await execute_sf_bulk(p1_payload, sf_op, "Pass 1 (Base Data)")
+
+                    p2_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "onlySelfReferencing": True, "operationMode": "upsert"})
+                    await execute_sf_bulk(p2_payload, "upsert", "Pass 2 (Hierarchy Patch)")
+
                 else:
-                    await send_log(f"Salesforce is currently: {state}...")
+                    sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
+                    std_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "operationMode": sf_op})
+                    await execute_sf_bulk(std_payload, sf_op, "Standard Sync")
 
-            # DOWNLOAD RESULTS
-            result_res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{batch_id}/result", headers=sf_headers)
-            results = result_res.json()
-            
-            success_count = sum(1 for r in results if r.get("success"))
-            error_count = len(results) - success_count
-            
-            if error_count > 0:
-                first_error = next(r for r in results if not r.get("success"))
-                err_msg = first_error.get("errors", [{"message": "Unknown"}])[0].get("message")
-                await send_log(f"Partial Success: {success_count} inserted, {error_count} failed.", "Completed with Errors")
-                await send_log(f"SFDC ERROR REASON: {err_msg}", "Completed with Errors")
+            # Final Summary
+            if total_error > 0:
+                await send_log(f"Completed with Errors: {total_success} inserted/updated, {total_error} failed.", "Finished")
             else:
-                await send_log(f"Success! All {success_count} records inserted perfectly.", "Completed")
+                await send_log(f"QUEUE COMPLETE! {total_success} records seamlessly pushed.", "Finished")
+                
+            await websocket.send_json({
+                "log": "System: Generating downloadable execution logs...",
+                "status": "Finished",
+                "successData": all_success_data,
+                "errorData": all_error_data
+            })
 
-        print("8. JOB COMPLETED SUCCESSFULLY")
         await websocket.close()
         
     except WebSocketDisconnect:
         print("❌ ANGULAR CLIENT DISCONNECTED PREMATURELY")
     except Exception as e:
-        print("\n❌ PYTHON CRASHED! See error below:")
-        traceback.print_exc() # <--- PRINTS EXACT ERROR TO TERMINAL
+        traceback.print_exc()
         try:
-            await websocket.send_json({"log": f"SYSTEM ERROR: {str(e)}", "status": "Failed"})
+            await websocket.send_json({"log": f"SYSTEM CRASH: {str(e)}", "status": "Failed"})
             await websocket.close()
         except:
             pass

@@ -7,3 +7,5 @@ openpyxl>=3.1.2
 python-multipart>=0.0.6
 httpx>=0.24.0
 python-dotenv>=1.0.0
+gunicorn==21.2.0
+uvicorn==0.27.0.post1
