@@ -7,14 +7,26 @@ import pandas as pd
 from openpyxl import load_workbook
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Query, Header 
 from fastapi.responses import RedirectResponse
-import httpx  
+import httpx 
+from pathlib import Path
 from dotenv import load_dotenv # <--- ADDED: To load environment variables
 
 from app.services.validator_service import process_validation_batch
 from app.services.crm_metadata_service import CrmMetadataService
 
 # Load environment variables from .env file
-load_dotenv()
+current_file = Path(__file__).resolve()
+possible_paths = [
+    current_file.parent.parent.parent / ".env",  # Python-Service/ folder
+    Path.cwd() / ".env",                          # Active Terminal Workspace folder
+    Path.cwd() / "Python-Service" / ".env"        # Sub-folder targeting
+]
+
+# Loads the first valid environment configuration configuration file it encounters
+for path in possible_paths:
+    if path.exists():
+        load_dotenv(dotenv_path=path)
+        break
 
 router = APIRouter()
 
@@ -31,6 +43,23 @@ SF_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/salesforce/callback"
 ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
 ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
 ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zendesk/callback"
+#Zoho ClientId and secret and URI
+ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "").strip()
+ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "").strip()
+ZOHO_REGIONS = {
+    "us": "https://accounts.zoho.com",
+    "in": "https://accounts.zoho.in",
+    "eu": "https://accounts.zoho.eu",
+    "au": "https://accounts.zoho.com.au",
+    "jp": "https://accounts.zoho.jp",
+    "ca": "https://accounts.zohocloud.ca",
+    "sa": "https://accounts.zoho.sa",
+    "uk": "https://accounts.zoho.uk",
+    "cn": "https://accounts.zoho.com.cn"
+}
+FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
+ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200")
+ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zoho/callback"
 
 
 # =========================================================
@@ -40,7 +69,8 @@ ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zendesk/callback"
 async def crm_oauth_login(
     crm_id: str, 
     side: str = Query(...),  # 'source' or 'target'
-    subdomain: str = Query(None)  # Required only for zendesk
+    subdomain: str = Query(None), # Required only for zendesk
+    region: str = Query(None) # Capture region from Angular UI (e.g., 'US', 'IN', 'EU') for zoho
 ):
     crm_id_lower = crm_id.lower()
     
@@ -69,7 +99,34 @@ async def crm_oauth_login(
         query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
         auth_url = f"https://{subdomain.strip()}.zendesk.com/oauth/authorizations/new?{query_string}"
         return RedirectResponse(auth_url)
-
+    elif crm_id_lower == "zoho":
+        if not ZOHO_CLIENT_ID:
+            raise HTTPException(status_code=500, detail="ZOHO_CLIENT_ID is missing from environment variables.")
+            
+        reg_key = (region or "US").lower().strip()
+        base_accounts_url = ZOHO_REGIONS.get(reg_key, ZOHO_REGIONS["us"])
+        
+        scopes = [
+            "ZohoCRM.modules.ALL",
+            "ZohoCRM.bulk.READ",
+            "ZohoCRM.settings.FIELDS.READ",
+            "ZohoCRM.settings.modules.READ"
+        ]
+        
+        # CORRECTED FIXED PARAMS BLOCK BELOW:
+        params = {
+            "scope": ",".join(scopes),
+            "client_id": ZOHO_CLIENT_ID,       # <--- FIXED: Replaced config["client_id"] with universal variable
+            "response_type": "code",
+            "access_type": "offline",
+            "redirect_uri": ZOHO_REDIRECT_URI,
+            "prompt": "consent",
+            "state": f"{side}:{reg_key}"
+        }
+        
+        query_string = urllib.parse.urlencode(params)
+        auth_url = f"{base_accounts_url}/oauth/v2/auth?{query_string}"
+        return RedirectResponse(auth_url)
     raise HTTPException(status_code=400, detail=f"CRM engine '{crm_id}' is not yet supported via OAuth.")
 
 
@@ -127,6 +184,41 @@ async def zendesk_callback(code: str, state: str):
     access_token = token_data.get("access_token")
     return RedirectResponse(f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zendesk&access_token={access_token}")
 
+# =========================================================
+# ROUTE: ZOHO OAUTH CALLBACK
+# =========================================================
+@router.get("/api/auth/zoho/callback")
+async def zoho_callback(code: str, state: str,request: Request):
+    try:
+        side, reg_key = state.split(":") 
+    except ValueError:
+        side = state
+        reg_key="us"
+    base_accounts_url = ZOHO_REGIONS.get(reg_key.lower(), ZOHO_REGIONS["us"])
+    accounts_server = request.query_params.get("accounts-server", base_accounts_url)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{accounts_server}/oauth/v2/token", data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": ZOHO_CLIENT_ID,
+            "client_secret": ZOHO_CLIENT_SECRET,
+            "redirect_uri": ZOHO_REDIRECT_URI
+        })
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to retrieve token from Zoho CRM.")
+            
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        api_domain = token_data.get("api_domain", "https://www.zohoapis.com")
+        
+        safe_api_domain = urllib.parse.quote(api_domain)
+        safe_accounts_server = urllib.parse.quote(accounts_server)
+
+    return RedirectResponse(
+        f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zoho&access_token={access_token}&api_domain={safe_api_domain}&accounts_server={safe_accounts_server}"
+    )
 
 # ==========================================
 # ROUTE 1: FAST HEADER EXTRACTION
@@ -340,7 +432,9 @@ async def get_crm_objects(
     sf_token: str = Header(None, alias="sf-token"),
     sf_instance_url: str = Header(None, alias="sf-instance-url"),
     zd_token: str = Header(None, alias="zd-token"),
-    zd_subdomain: str = Header(None, alias="zd-subdomain")
+    zd_subdomain: str = Header(None, alias="zd-subdomain"),
+    zoho_token: str = Header(None, alias="zoho-token"),
+    zoho_api_domain: str = Header(None, alias="zoho-api-domain")
 ):
     crm_lower = crm_id.lower()
     
@@ -349,7 +443,14 @@ async def get_crm_objects(
         
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_objects()
-        
+    elif crm_lower == "zoho":
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{zoho_api_domain}/crm/v6/settings/modules", headers={
+                "Authorization": f"Zoho-oauthtoken {zoho_token}"
+            })
+            if res.status_code != 200: return []
+            data = res.json()
+            return [{"name": m["api_name"], "label": m["plural_label"]} for m in data.get("modules", []) if m.get("visible")]    
     else:
         return [
             {"name": "account", "label": "Account (Mock)"},
@@ -367,7 +468,9 @@ async def get_crm_fields(
     sf_token: str = Header(None, alias="sf-token"),
     sf_instance_url: str = Header(None, alias="sf-instance-url"),
     zd_token: str = Header(None, alias="zd-token"),
-    zd_subdomain: str = Header(None, alias="zd-subdomain")
+    zd_subdomain: str = Header(None, alias="zd-subdomain"),
+    zoho_token: str = Header(None, alias="zoho-token"),            # Regional token header context
+    zoho_api_domain: str = Header(None, alias="zoho-api-domain")  # Dynamic data center domain mapping
 ):
     crm_lower = crm_id.lower()
     
@@ -376,7 +479,33 @@ async def get_crm_fields(
         
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_fields(zd_token, zd_subdomain, object_name)
-        
+    elif crm_lower == "zoho":
+        # Dynamic query targeting the user's specific global server cluster (US, EU, IN, etc.)
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{zoho_api_domain}/crm/v6/settings/fields?module={object_name}", 
+                headers={"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+            )
+            
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail="Failed to fetch field metadata schema from Zoho.")
+                
+            data = res.json()
+            fields_list = data.get("fields", [])
+            
+            # Formats layout to feed directly into your Angular API-mapping interactive table configuration
+            return {
+                "headers": [f["api_name"] for f in fields_list],
+                "fields": [
+                    {
+                        "name": f["api_name"],
+                        "label": f["field_label"],
+                        "type": f["data_type"],
+                        "required": f.get("required", False)
+                    } for f in fields_list
+                ]
+            }
+       
     else:
         return {
             "headers": ["id", "name", "status"],
