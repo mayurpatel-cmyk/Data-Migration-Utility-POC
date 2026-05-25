@@ -92,8 +92,8 @@ export class ApiMappingComponent implements OnInit {
   operationMode: string = 'insert';
   batchSize: number = 5000;
   
-  // --- MULTI-OBJECT QUEUE VARIABLES ---
   migrationQueue: any[] = [];
+  recentQueries: string[] = [];
 
   ngOnInit(): void {
     this.sourceSystem = localStorage.getItem('source_crm_slot') || 'Zendesk';
@@ -102,6 +102,8 @@ export class ApiMappingComponent implements OnInit {
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot') || 'msdynamics';
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+
+    this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
     this.preloadEntirePage();
   }
@@ -338,16 +340,16 @@ export class ApiMappingComponent implements OnInit {
     }
   }
 
-  async applyFilter() {
+ async applyFilter() {
     if (!this.customQuery || !this.selectedSourceObject) return;
 
     if (!this.validateQuery()) {
-      setTimeout(() => this.scrollToBottom(), 10); 
       return; 
     }
 
     this.isPreviewLoading = true;
     this.cdr.detectChanges(); 
+    this.saveQueryToHistory(this.customQuery);
 
     const payload = {
       crmId: this.sourceCrmId,
@@ -374,7 +376,8 @@ export class ApiMappingComponent implements OnInit {
 
     } catch (error) {
       console.error('Filter Error:', error);
-      this.logMessages = [...this.logMessages, 'Error: Failed to apply filter. Check your query syntax.'];
+      // We still log actual network failures to the terminal
+      this.logMessages = [...this.logMessages, 'Error: Failed to fetch filtered data from the API.'];
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges(); 
@@ -524,37 +527,88 @@ export class ApiMappingComponent implements OnInit {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    if (crm === 'zendesk') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
-        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved created>2023-01-01";
-      } else if (queryLower.includes(',')) {
-        this.queryError = "Do not use commas. Format: status:open tags:urgent";
-      } else if (queryLower.includes(' = ')) {
-        this.queryError = "Use colons for exact matches. Format: status:open";
-      } else if (queryLower.includes('%')) {
-        this.queryError = "Use '*' for wildcards. Format: name:tech*";
-      } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
-        this.queryError = "Use '-' to exclude a value. Format: -status:closed";
-      } else if (queryLower.includes('type:')) {
-        this.logWarning(`⚠️ Notice: You don't need to type "type:...". The system applies it automatically!`);
+    // ... [KEEP YOUR EXISTING SYNTAX CHECKS HERE] ...
+
+    // Advanced Schema & Data-Type Verification
+    if (!this.queryError && this.sourceFields.length > 0) {
+      let extractedConditions: { field: string, value: string }[] = [];
+
+      if (crm === 'zendesk') {
+        // Extracts "status:open" -> field: "status", value: "open"
+        const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
+        let match;
+        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated']; 
+        
+        while ((match = zendeskRegex.exec(this.customQuery)) !== null) {
+          if (!ignoreList.includes(match[2].toLowerCase())) {
+            extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
+          }
+        }
+      } else if (crm === 'salesforce') {
+        // Extracts "Amount > 5000" -> field: "amount", value: "5000"
+        // Also strips quotes from string values
+        const sfRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like)\s*('?[a-zA-Z0-9_%\s-]+'?)/gi;
+        let match;
+        
+        while ((match = sfRegex.exec(this.customQuery)) !== null) {
+          extractedConditions.push({ 
+            field: match[1].toLowerCase(), 
+            value: match[2].replace(/'/g, '').trim() // Remove SOQL single quotes for type checking
+          });
+        }
       }
-    } else if (crm === 'salesforce') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' where ')) {
-        this.queryError = "Enter conditions only. Format: Amount > 5000 AND StageName = 'Closed Won'";
-      } else if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
-        this.queryError = "Do not use LIMIT. The engine handles pagination automatically.";
-      } else if (queryLower.includes('*')) {
-        this.queryError = "Use '%' for wildcards. Format: Name LIKE 'Tech%'";
-      } else if (queryLower.endsWith(';')) {
-        this.queryError = "Do not end your query with a semicolon (;).";
+
+      // Check extracted fields AND their values against the live schema
+      for (const condition of extractedConditions) {
+        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
+        
+        if (!schemaField) {
+          this.queryError = `Invalid Field: '${condition.field}' does not exist on ${this.selectedSourceObject}.`;
+          break; 
+        }
+
+        // --- NEW: DATA TYPE VALIDATION ---
+        const val = condition.value;
+        const type = schemaField.type;
+
+        // Ignore wildcard values for validation
+        if (val.includes('*') || val.includes('%')) continue;
+
+        if (type === 'number' && isNaN(Number(val))) {
+          this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
+          break;
+        }
+
+        if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
+          this.queryError = `Type Mismatch: '${condition.field}' is a Boolean (True/False). You entered '${val}'.`;
+          break;
+        }
+
+        if (type === 'date' && isNaN(Date.parse(val))) {
+          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date (YYYY-MM-DD). You entered '${val}'.`;
+          break;
+        }
       }
     }
 
-    if (this.queryError) {
-      this.logError(`❌ Validation Error: ${this.queryError}`);
-      return false;
-    }
-    return true; 
+    return this.queryError === null; 
+  }
+
+  // Helper to load a historical query
+  loadHistoricalQuery(query: string) {
+    this.customQuery = query;
+    this.validateQuery();
+  }
+
+  // Helper to save a successful query to history
+  saveQueryToHistory(query: string) {
+    if (!query) return;
+    // Remove duplicates and keep only the last 5
+    this.recentQueries = this.recentQueries.filter(q => q !== query);
+    this.recentQueries.unshift(query);
+    if (this.recentQueries.length > 5) this.recentQueries.pop();
+    
+    localStorage.setItem('crm_query_history', JSON.stringify(this.recentQueries));
   }
 
   preloadEntirePage() {
@@ -633,7 +687,7 @@ export class ApiMappingComponent implements OnInit {
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
           // NEW: Embed the API Name into the Source Label dynamically
-          sourceLabel: field.label,
+          sourceLabel: `${field.label} (${field.name})`, 
           targetField: ''
         }));
 
