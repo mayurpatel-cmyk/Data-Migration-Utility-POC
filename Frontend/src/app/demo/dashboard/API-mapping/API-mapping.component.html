@@ -467,19 +467,29 @@
             </button>
           </div>
           
-          <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 400px; overflow-y: auto;">
-            <table class="table table-sm table-bordered align-middle mb-0 text-nowrap">
+          <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 450px; overflow-y: auto;">
+            <table class="table table-sm table-bordered align-middle mb-0 text-nowrap" style="table-layout: auto;">
+              
               <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
                 <tr>
-                  <th class="text-danger fw-bold py-2 ps-3 bg-white">Salesforce Error Rule</th>
+                  <th class="text-danger fw-bold py-3 ps-3 bg-white border-end border-danger-subtle position-sticky start-0 shadow-sm" style="min-width: 280px; max-width: 350px; z-index: 11;">
+                    <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
+                  </th>
+                  
                   @for (mapping of mappings; track mapping.sourceField) {
                     @if (mapping.targetField) {
-                      <th class="py-2" [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
-                        <div class="d-flex justify-content-between align-items-center gap-2">
-                          <div>
-                            <span class="d-block fw-bold lh-1" [class.text-danger]="hasErrorsInColumn(mapping.sourceField)">{{ mapping.sourceField }}</span>
-                            <small class="text-primary" style="font-family: monospace;">➔ {{ mapping.targetField }}</small>
-                          </div>
+                      <th class="py-2 px-3 align-middle" style="min-width: 180px;" 
+                          [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" 
+                          [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
+                        <div class="d-flex flex-column align-items-start gap-1">
+                          <span class="d-block fw-bold lh-1 text-truncate w-100" 
+                                [class.text-danger]="hasErrorsInColumn(mapping.sourceField)" 
+                                title="{{ mapping.sourceField }}">
+                            {{ mapping.sourceField }}
+                          </span>
+                          <small class="text-primary text-truncate w-100" style="font-family: monospace;" title="{{ mapping.targetField }}">
+                            ➔ {{ mapping.targetField }}
+                          </small>
                         </div>
                       </th>
                     }
@@ -488,20 +498,29 @@
               </thead>
               <tbody class="small">
                 @for (record of paginatedErrorRecords; track $index) {
-                <tr>
-                  <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium ps-3 text-wrap" style="min-width: 250px; font-size: 0.8rem;">
+                <tr class="bg-white">
+                  
+                  <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium p-3 text-wrap border-end border-danger-subtle position-sticky start-0 shadow-sm" 
+                      style="min-width: 280px; max-width: 350px; font-size: 0.8rem; z-index: 5;">
                     {{ record.errors }}
                   </td>
+
                   @for (mapping of mappings; track mapping.sourceField) {
                     @if (mapping.targetField) {
-                      <td class="p-1">
-                        <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all"
-                          [(ngModel)]="record.originalRow[mapping.sourceField]"
-                          (ngModelChange)="markAsEdited(record, mapping.sourceField)"
-                          [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
-                          [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
-                          [class.border-success]="record._editedFields?.[mapping.sourceField]"
-                          [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
+                      <td class="p-2 align-middle" style="min-width: 180px;">
+                        <div class="position-relative">
+                          <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
+                            [(ngModel)]="record.originalRow[mapping.sourceField]"
+                            (ngModelChange)="markAsEdited(record, mapping.sourceField)"
+                            [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
+                            [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
+                            [class.border-success]="record._editedFields?.[mapping.sourceField]"
+                            [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
+                            
+                            @if (hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]) {
+                              <i class="feather icon-alert-circle text-danger position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%);"></i>
+                            }
+                        </div>
                       </td>
                     }
                   }
