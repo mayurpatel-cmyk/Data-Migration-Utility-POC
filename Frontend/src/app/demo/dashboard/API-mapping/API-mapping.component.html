@@ -338,6 +338,20 @@
                 <div class="form-select form-select-sm cursor-pointer bg-white shadow-sm border-info" (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.targetField">
                   {{ getTargetFieldLabel(mapping.targetField) || '-- Select Field --' }}
                 </div>
+                @if (isReferenceField(mapping.targetField)) {
+    <div class="mt-1 d-flex align-items-center gap-1 animate__animated animate__fadeIn">
+      <i class="feather icon-link text-warning" title="Relational Lookup"></i>
+      <div class="input-group input-group-sm shadow-sm">
+        <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis" style="font-size: 0.7rem;">
+          Parent Ext ID
+        </span>
+        <input type="text" 
+               class="form-control form-control-sm border-warning-subtle" 
+               [(ngModel)]="mapping.relationalExtIdField" 
+               placeholder="e.g., Zendesk_Id__c or Id">
+      </div>
+    </div>
+  }
                 @if (mapping.isDropdownOpen) {
                   <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
                     <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
@@ -349,12 +363,12 @@
                     <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold" (click)="selectField(mapping, '')" [class.bg-light]="mapping.targetField === ''">
                       <i class="feather icon-slash"></i> -- Ignore --
                     </div>
-                    @for (field of getFilteredTargetFields(mapping.searchQuery); track field.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.targetField === field.name">
-                        <span class="fw-bold text-dark">{{ field.label }}</span>
-                        <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
-                      </div>
-                    }
+                    @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
+  <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.targetField === field.name">
+    <span class="fw-bold text-dark">{{ field.label }}</span>
+    <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+  </div>
+}
                   </div>
                 }
               </div>
@@ -372,9 +386,9 @@
         <div class="mt-3 pt-3 border-top d-flex justify-content-between align-items-center flex-shrink-0">
           <div class="d-flex align-items-center gap-3">
             <div class="form-check form-switch m-0" title="Enforce Strict Salesforce Rules">
-              <input class="form-check-input cursor-pointer" type="checkbox" id="strictMapping" [disabled]="!selectedTargetObject">
-              <label class="form-check-label small text-muted cursor-pointer" for="strictMapping">Strict</label>
-            </div>
+  <input class="form-check-input cursor-pointer" type="checkbox" id="strictMapping" [(ngModel)]="isStrictMapping" [disabled]="!selectedTargetObject">
+  <label class="form-check-label small text-muted cursor-pointer" for="strictMapping">Strict</label>
+</div>
             <div class="d-flex gap-2">
               <button class="btn btn-sm btn-white border shadow-sm text-primary btn-hover-lift" (click)="autoMap()" [disabled]="!selectedTargetObject || mappings.length === 0" title="Auto Map">
                 <i class="feather icon-cpu text-info"></i> Auto
