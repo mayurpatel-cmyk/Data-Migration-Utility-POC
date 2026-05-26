@@ -424,8 +424,8 @@
   </div>
 </div>
 
-@if (aggregateStats.total > 0) {
-<div class="row mb-4 animate__animated animate__fadeIn">
+@if (isValidating || aggregateStats.total > 0) {
+<div class="row mb-4 animate__animated animate__fadeIn" id="validation-results-area">
   <div class="col-sm-12">
     <div class="card shadow-sm border-0">
       <div class="card-body p-4">
@@ -457,115 +457,115 @@
           </div>
         </div>
 
-        @if (aggregateStats.invalid > 0) {
-        <div class="mt-4 border-top pt-4 animate__animated animate__fadeInUp">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="fw-bold text-danger mb-0 d-flex align-items-center gap-2">
-              <i class="feather icon-edit-2"></i> Fix Preview Errors
-            </h5>
-            <button class="btn btn-sm btn-danger shadow-sm fw-bold btn-hover-lift px-3" (click)="revalidatePreview()" [disabled]="isValidating">
-              @if (isValidating) {
-                <span class="spinner-border spinner-border-sm"></span> Checking...
-              } @else {
+        @if (isValidating) {
+        <div class="mt-4 p-5 text-center bg-light border rounded border-primary-subtle animate__animated animate__fadeIn" style="border-style: dashed !important; border-width: 2px !important;">
+          <div class="spinner-grow text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+          <h4 class="text-primary fw-bold">Validating Data Stream...</h4>
+          <p class="text-muted mb-0">Securely downloading and testing records against Salesforce schema rules. <br>Please do not close this page.</p>
+        </div>
+        } 
+        
+        @else {
+          
+          @if (aggregateStats.invalid > 0) {
+          <div class="mt-4 border-top pt-4 animate__animated animate__fadeInUp">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h5 class="fw-bold text-danger mb-0 d-flex align-items-center gap-2">
+                <i class="feather icon-edit-2"></i> Fix Preview Errors
+              </h5>
+              <button class="btn btn-sm btn-danger shadow-sm fw-bold btn-hover-lift px-3" (click)="revalidatePreview()">
                 <i class="feather icon-refresh-cw"></i> Re-Validate Fixes
-              }
-            </button>
-          </div>
-          
-          <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 450px; overflow-y: auto;">
-            <table class="table table-sm table-bordered align-middle mb-0 text-nowrap" style="table-layout: auto;">
-              
-              <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
-                <tr>
-                  <th class="text-danger fw-bold py-3 ps-3 bg-white border-end border-danger-subtle position-sticky start-0 shadow-sm" style="min-width: 280px; max-width: 350px; z-index: 11;">
-                    <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
-                  </th>
-                  
-                  @for (mapping of mappings; track mapping.sourceField) {
-                    @if (mapping.targetField) {
-                      <th class="py-2 px-3 align-middle" style="min-width: 180px;" 
-                          [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" 
-                          [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
-                        <div class="d-flex flex-column align-items-start gap-1">
-                          <span class="d-block fw-bold lh-1 text-truncate w-100" 
-                                [class.text-danger]="hasErrorsInColumn(mapping.sourceField)" 
-                                title="{{ mapping.sourceField }}">
-                            {{ mapping.sourceField }}
-                          </span>
-                          <small class="text-primary text-truncate w-100" style="font-family: monospace;" title="{{ mapping.targetField }}">
-                            ➔ {{ mapping.targetField }}
-                          </small>
-                        </div>
-                      </th>
-                    }
-                  }
-                </tr>
-              </thead>
-              <tbody class="small">
-                @for (record of paginatedErrorRecords; track $index) {
-                <tr class="bg-white">
-                  
-                  <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium p-3 text-wrap border-end border-danger-subtle position-sticky start-0 shadow-sm" 
-                      style="min-width: 280px; max-width: 350px; font-size: 0.8rem; z-index: 5;">
-                    {{ record.errors }}
-                  </td>
-
-                  @for (mapping of mappings; track mapping.sourceField) {
-                    @if (mapping.targetField) {
-                      <td class="p-2 align-middle" style="min-width: 180px;">
-                        <div class="position-relative">
-                          <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
-                            [(ngModel)]="record.originalRow[mapping.sourceField]"
-                            (ngModelChange)="markAsEdited(record, mapping.sourceField)"
-                            [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
-                            [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
-                            [class.border-success]="record._editedFields?.[mapping.sourceField]"
-                            [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
-                            
-                            @if (hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]) {
-                              <i class="feather icon-alert-circle text-danger position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%);"></i>
-                            }
-                        </div>
-                      </td>
-                    }
-                  }
-                </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-          
-          <div class="d-flex justify-content-between align-items-center bg-light p-2 border border-top-0 border-danger-subtle rounded-bottom shadow-sm">
-            <span class="small text-muted fw-bold ms-2">
-              Showing <span class="text-dark">{{ (errorCurrentPage - 1) * errorPageSize + 1 }}</span> to <span class="text-dark">{{ currentErrorMaxBound }}</span> of <span class="text-dark">{{ validationResults.invalidRecords.length }}</span> entries
-            </span>
-
-            <div class="btn-group shadow-sm">
-              <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
-                (click)="prevErrorPage()" [disabled]="errorCurrentPage === 1">
-                <i class="feather icon-chevron-left"></i> Prev
-              </button>
-              <button class="btn btn-sm btn-white border-secondary-subtle text-primary fw-bold px-3" disabled>
-                Page {{ errorCurrentPage }} of {{ errorTotalPages }}
-              </button>
-              <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
-                (click)="nextErrorPage()" [disabled]="errorCurrentPage === errorTotalPages">
-                Next <i class="feather icon-chevron-right"></i>
               </button>
             </div>
+            
+            <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 450px; overflow-y: auto;">
+              <table class="table table-sm table-bordered align-middle mb-0 text-nowrap" style="table-layout: auto;">
+                <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
+                  <tr>
+                    <th class="text-danger fw-bold py-3 ps-3 bg-white border-end border-danger-subtle position-sticky start-0 shadow-sm" style="min-width: 280px; max-width: 350px; z-index: 11;">
+                      <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
+                    </th>
+                    @for (mapping of mappings; track mapping.sourceField) {
+                      @if (mapping.targetField) {
+                        <th class="py-2 px-3 align-middle" style="min-width: 180px;" 
+                            [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" 
+                            [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
+                          <div class="d-flex flex-column align-items-start gap-1">
+                            <span class="d-block fw-bold lh-1 text-truncate w-100" 
+                                  [class.text-danger]="hasErrorsInColumn(mapping.sourceField)" 
+                                  title="{{ mapping.sourceField }}">
+                              {{ mapping.sourceField }}
+                            </span>
+                            <small class="text-primary text-truncate w-100" style="font-family: monospace;" title="{{ mapping.targetField }}">
+                              ➔ {{ mapping.targetField }}
+                            </small>
+                          </div>
+                        </th>
+                      }
+                    }
+                  </tr>
+                </thead>
+                <tbody class="small">
+                  @for (record of paginatedErrorRecords; track $index) {
+                  <tr class="bg-white">
+                    <td class="text-danger bg-danger-subtle bg-opacity-10 fw-medium p-3 text-wrap border-end border-danger-subtle position-sticky start-0 shadow-sm" 
+                        style="min-width: 280px; max-width: 350px; font-size: 0.8rem; z-index: 5;">
+                      {{ record.errors }}
+                    </td>
+                    @for (mapping of mappings; track mapping.sourceField) {
+                      @if (mapping.targetField) {
+                        <td class="p-2 align-middle" style="min-width: 180px;">
+                          <div class="position-relative">
+                            <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
+                              [(ngModel)]="record.originalRow[mapping.sourceField]"
+                              (ngModelChange)="markAsEdited(record, mapping.sourceField)"
+                              [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
+                              [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
+                              [class.border-success]="record._editedFields?.[mapping.sourceField]"
+                              [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
+                              @if (hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]) {
+                                <i class="feather icon-alert-circle text-danger position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%);"></i>
+                              }
+                          </div>
+                        </td>
+                      }
+                    }
+                  </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+            
+            <div class="d-flex justify-content-between align-items-center bg-light p-2 border border-top-0 border-danger-subtle rounded-bottom shadow-sm">
+              <span class="small text-muted fw-bold ms-2">
+                Showing <span class="text-dark">{{ (errorCurrentPage - 1) * errorPageSize + 1 }}</span> to <span class="text-dark">{{ currentErrorMaxBound }}</span> of <span class="text-dark">{{ validationResults.invalidRecords?.length || 0 }}</span> entries
+              </span>
+              <div class="btn-group shadow-sm">
+                <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
+                  (click)="prevErrorPage()" [disabled]="errorCurrentPage === 1">
+                  <i class="feather icon-chevron-left"></i> Prev
+                </button>
+                <button class="btn btn-sm btn-white border-secondary-subtle text-primary fw-bold px-3" disabled>
+                  Page {{ errorCurrentPage }} of {{ errorTotalPages }}
+                </button>
+                <button class="btn btn-sm btn-white border-secondary-subtle text-primary d-flex align-items-center gap-1 btn-hover-lift"
+                  (click)="nextErrorPage()" [disabled]="errorCurrentPage === errorTotalPages">
+                  Next <i class="feather icon-chevron-right"></i>
+                </button>
+              </div>
+            </div>
           </div>
+          }
 
-        </div>
-        }
+          @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
+          <div class="mt-4 p-4 text-center bg-success-subtle border border-success rounded shadow-sm animate__animated animate__zoomIn">
+            <i class="feather icon-check-circle text-success" style="font-size: 3rem;"></i>
+            <h4 class="text-success-emphasis fw-bold mt-2">Preview Validation 100% Successful!</h4>
+            <p class="text-muted mb-0">Your mapping rules are perfect. You are safe to click <strong>Run Job</strong> to migrate the live data.</p>
+          </div>
+          }
 
-        @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
-        <div class="mt-4 p-4 text-center bg-success-subtle border border-success rounded shadow-sm animate__animated animate__zoomIn">
-          <i class="feather icon-check-circle text-success" style="font-size: 3rem;"></i>
-          <h4 class="text-success-emphasis fw-bold mt-2">Preview Validation 100% Successful!</h4>
-          <p class="text-muted mb-0">Your mapping rules are perfect. You are safe to click <strong>Run Job</strong> to migrate the live data.</p>
-        </div>
         }
-        
       </div>
     </div>
   </div>

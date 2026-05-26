@@ -726,32 +726,31 @@ export class ApiMappingComponent implements OnInit {
   }
 
   async validateData() {
-    if (this.previewRecords.length === 0) {
-      this.logError('❌ Validation Aborted: No data available to validate. Please fetch data first.');
-      return;
-    }
-
     if (this.mappedCount === 0) {
-      this.logError('❌ Validation Aborted: You must map at least one field to validate data.');
+      this.toastr.error('Validation Aborted: You must map at least one field to validate data.');
       return;
     }
 
     const confirmResult = await Swal.fire({
-      title: 'Run Data Validation?',
-      text: `This will test ${this.previewRecords.length} records against Salesforce strict schema rules.`,
-      icon: 'question',
+      title: 'Validate Entire Database?',
+      text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+      icon: 'info',
       showCancelButton: true,
       confirmButtonColor: '#0d6efd',
       cancelButtonColor: '#6c757d',
-      confirmButtonText: 'Yes, Validate Data'
+      confirmButtonText: 'Yes, Start Validation Stream'
     });
 
-    if (!confirmResult.isConfirmed) {
-      return; // User cancelled
-    }
+    if (!confirmResult.isConfirmed) return;
 
-    this.jobStatus = 'Validating...';
-    this.logMessages = [...this.logMessages, `System: Sending ${this.previewRecords.length} sample records to validation engine...`];
+    this.jobStatus = 'Connecting...';
+    this.logMessages = [];
+    this.isValidating = true;
+    
+    // Reset stats so UI zeroes out before the counter starts spinning
+    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+    this.validationResults = { invalidRecords: [] };
+    this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
     const activeMappings = this.mappings
@@ -767,40 +766,84 @@ export class ApiMappingComponent implements OnInit {
       sfRules[field.name] = field;
     });
 
+    let safeQuery = this.customQuery.trim();
+    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+      const whereMatch = safeQuery.match(/where\s+(.*)/i);
+      safeQuery = whereMatch ? whereMatch[1].trim() : '';
+    }
+
     const payload = {
-      records: this.previewRecords,
+      crmId: this.sourceCrmId,
+      objectName: this.selectedSourceObject,
+      query: safeQuery,
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
-      sfRules: sfRules
+      sfRules: sfRules,
+      sfToken: localStorage.getItem('sf_token') || '',
+      sfInstance: localStorage.getItem('sf_instance_url') || '',
+      zdToken: localStorage.getItem('zd_token') || '',
+      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
     };
-    try {
-      this.isValidating = true; 
-      const response = await fetch('http://localhost:8000/api/python/revalidate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+    
+    // Connect to the new streaming websocket
+    const ws = new WebSocket('ws://localhost:8000/ws/validate-stream');
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(payload));
+    };
+
+    ws.onmessage = (event) => {
+      this.zone.run(() => {
+        const data = JSON.parse(event.data);
+        
+        if (data.log) {
+          // Keep only the last 15 logs to prevent UI lag on massive streams
+          this.logMessages.push(data.log);
+          if (this.logMessages.length > 15) this.logMessages.shift();
+        }
+
+        if (data.status) {
+          this.jobStatus = data.status;
+        }
+
+        // --- LIVE STAT UPDATES ---
+        if (data.stats) {
+          this.aggregateStats = data.stats;
+        }
+
+        // --- FINAL RESULTS INJECTION ---
+        if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
+           this.validationResults.invalidRecords = data.invalidRecords;
+           
+           if (data.invalidRecords.length >= 500) {
+             this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
+           }
+           this.isValidating = false;
+        }
+
+        this.cdr.detectChanges();
+        setTimeout(() => this.scrollToBottom(), 10);
       });
+    };
 
-      if (!response.ok) throw new Error("Validation engine failed to respond.");
+    ws.onerror = () => {
+      this.zone.run(() => {
+        this.logError('❌ WebSocket Error: Validation stream disconnected.');
+        this.jobStatus = 'Validation Failed';
+        this.isValidating = false;
+        this.cdr.detectChanges();
+      });
+    };
 
-      const result = await response.json();
-      
-      this.validationResults = result;
-      this.aggregateStats = result.stats;
-      this.errorCurrentPage = 1;
-
-      this.logMessages = [...this.logMessages, `✅ Validation Complete: ${result.stats.valid} Valid, ${result.stats.invalid} Invalid, ${result.stats.duplicates} Duplicates.`];
-      this.jobStatus = result.stats.invalid > 0 ? 'Validation Warning' : 'Validation Passed';
-
-    } catch (error) {
-      console.error('Validation Error:', error);
-      this.logError('❌ System Error: Could not reach validation engine.');
-      this.jobStatus = 'Validation Failed';
-    } finally {
-      this.isValidating = false;
-      this.cdr.detectChanges();
-      setTimeout(() => this.scrollToBottom(), 10);
-    }
+    ws.onclose = () => {
+      this.zone.run(() => {
+        if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning' && this.jobStatus !== 'Validation Failed') {
+           this.jobStatus = 'Disconnected';
+        }
+        this.isValidating = false;
+        this.cdr.detectChanges();
+      });
+    };
   }
 
   hasErrorsInColumn(sourceField: string): boolean {
