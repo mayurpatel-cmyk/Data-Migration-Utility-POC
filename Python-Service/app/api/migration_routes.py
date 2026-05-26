@@ -197,11 +197,29 @@ async def websocket_migration(websocket: WebSocket):
                         if extraction_query:
                             # Search API Extraction Loop
                             safe_obj_singular = safe_obj.rstrip('s')
-                            safe_query = urllib.parse.quote(f"{extraction_query} type:{safe_obj_singular}")
-                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=100"
+                            
+                            # FIX 1: Prevent double "type:" modifiers in the query
+                            clean_query = extraction_query.strip()
+                            if f"type:{safe_obj_singular}" in clean_query:
+                                full_query = clean_query
+                            else:
+                                full_query = f"{clean_query} type:{safe_obj_singular}"
+                                
+                            safe_query = urllib.parse.quote(full_query)
+                            
+                            # FIX 2: Upgraded to search/export.json to bypass 1,000 limit
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?query={safe_query}&page[size]=100"
                             
                             while url:
                                 res = await client.get(url, headers=zd_headers)
+                                
+                                # Catch Rate Limits for the Export API
+                                if res.status_code == 429:
+                                    retry_after = int(res.headers.get("Retry-After", 60))
+                                    await send_log(f"⚠️ [Zendesk Rate Limit] Pausing for {retry_after} seconds...", "Paused")
+                                    await asyncio.sleep(retry_after)
+                                    continue
+                                    
                                 res.raise_for_status()
                                 data = res.json()
                                 records = data.get("results", [])
@@ -209,8 +227,15 @@ async def websocket_migration(websocket: WebSocket):
                                 if not records: break
                                 source_records.extend(records)
                                 
-                                await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
-                                url = data.get("next_page")
+                                if len(source_records) % 1000 == 0:
+                                    await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
+                                
+                                # FIX 3: Use Cursor Pagination instead of page numbers
+                                meta = data.get("meta")
+                                if meta and meta.get("has_more"):
+                                    url = data.get("links", {}).get("next")
+                                else:
+                                    url = None
                                 
                         else:
                             # Standard Object Extraction Loop (with Cursor Pagination support)

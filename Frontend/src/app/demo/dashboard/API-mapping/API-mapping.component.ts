@@ -736,6 +736,20 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
+    const confirmResult = await Swal.fire({
+      title: 'Run Data Validation?',
+      text: `This will test ${this.previewRecords.length} records against Salesforce strict schema rules.`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#0d6efd',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, Validate Data'
+    });
+
+    if (!confirmResult.isConfirmed) {
+      return; // User cancelled
+    }
+
     this.jobStatus = 'Validating...';
     this.logMessages = [...this.logMessages, `System: Sending ${this.previewRecords.length} sample records to validation engine...`];
     this.cdr.detectChanges();
@@ -901,7 +915,21 @@ export class ApiMappingComponent implements OnInit {
       });
     } else {
       // If validation passes perfectly, run it directly
-      this.executeMigrationJob(activeMappings);
+      Swal.fire({
+        title: 'Ready to Migrate!',
+        text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonColor: '#198754', // Green button for go
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Yes, Run Job!'
+      }).then((result) => {
+        if (result.isConfirmed) {
+          this.executeMigrationJob(activeMappings);
+        } else {
+          this.jobStatus = 'Idle';
+        }
+      });
     }
   }
 
