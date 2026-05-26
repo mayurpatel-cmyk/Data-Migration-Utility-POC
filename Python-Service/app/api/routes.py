@@ -400,6 +400,7 @@ async def get_filtered_preview(request: Request):
     crm_id = payload.get("crmId", "").lower()
     obj_name = payload.get("objectName", "")
     query = payload.get("query", "").strip()
+    headers_list = payload.get("headers", [])
     
     sf_token = payload.get("sfToken", "")
     sf_instance = payload.get("sfInstance", "")
@@ -419,9 +420,10 @@ async def get_filtered_preview(request: Request):
             if not sf_token or not sf_instance:
                 raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
             
-            # Construct standard SOQL. (Assuming query is just the WHERE clause)
+            # FIX 2: Dynamically construct SOQL based on UI headers
+            fields_str = ", ".join(headers_list) if headers_list else "Id, Name"
             where_clause = f" WHERE {query}" if query else ""
-            soql = f"SELECT Id, Name, CreatedDate FROM {obj_name}{where_clause} LIMIT 5"
+            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT 5"
             
             headers = {
                 "Authorization": f"Bearer {sf_token}",
@@ -439,7 +441,7 @@ async def get_filtered_preview(request: Request):
             data = res.json()
             records = data.get("records", [])
             
-            # Clean up the hidden Salesforce "attributes" block from the JSON response
+            # Clean up the hidden Salesforce "attributes" block
             for r in records:
                 r.pop("attributes", None)
                 
@@ -452,12 +454,10 @@ async def get_filtered_preview(request: Request):
             if not zd_token or not zd_subdomain:
                 raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
             
-            # Zendesk Search API requires singular object names (e.g., "ticket", not "tickets")
             safe_obj = obj_name.lower()
             if safe_obj.endswith("s"):
                 safe_obj = safe_obj[:-1]
 
-            # Append the object type automatically to the user's custom query string
             full_query = f"{query} type:{safe_obj}" if query else f"type:{safe_obj}"
             safe_query = urllib.parse.quote(full_query)
             
@@ -473,9 +473,21 @@ async def get_filtered_preview(request: Request):
                 raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
                 
             data = res.json()
-            records = data.get("results", [])
+            raw_records = data.get("results", [])
             
-            return {"records": records}
+            # FIX 3: Flatten custom fields exactly like the initial schema load
+            flattened_records = []
+            for rec in raw_records:
+                flat_rec = {}
+                for k, v in rec.items():
+                    if k == "custom_fields" and isinstance(v, list):
+                        for cf in v:
+                            flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                    elif not isinstance(v, (dict, list)): 
+                        flat_rec[k] = v
+                flattened_records.append(flat_rec)
+            
+            return {"records": flattened_records}
             
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported CRM: {crm_id}")

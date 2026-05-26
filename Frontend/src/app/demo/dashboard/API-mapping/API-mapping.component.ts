@@ -335,6 +335,7 @@ export class ApiMappingComponent implements OnInit {
     }
 
     this.isPreviewLoading = true;
+    this.previewRecords = [];
     this.cdr.detectChanges(); 
     this.saveQueryToHistory(this.customQuery);
 
@@ -342,6 +343,7 @@ export class ApiMappingComponent implements OnInit {
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
       query: this.customQuery,
+      headers: this.previewHeaders,
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
@@ -363,6 +365,7 @@ export class ApiMappingComponent implements OnInit {
 
     } catch (error) {
       console.error('Filter Error:', error);
+      this.previewRecords = [];
       this.logMessages = [...this.logMessages, 'Error: Failed to fetch filtered data from the API.'];
     } finally {
       this.isPreviewLoading = false;
