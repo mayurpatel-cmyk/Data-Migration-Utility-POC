@@ -572,6 +572,7 @@ async def get_filtered_preview(request: Request):
     crm_id = payload.get("crmId", "").lower()
     obj_name = payload.get("objectName", "")
     query = payload.get("query", "").strip()
+    headers_list = payload.get("headers", [])
     
     sf_token = payload.get("sfToken", "")
     sf_instance = payload.get("sfInstance", "")
@@ -593,8 +594,10 @@ async def get_filtered_preview(request: Request):
             if not sf_token or not sf_instance:
                 raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
             
+            # FIX 2: Dynamically construct SOQL based on UI headers
+            fields_str = ", ".join(headers_list) if headers_list else "Id, Name"
             where_clause = f" WHERE {query}" if query else ""
-            soql = f"SELECT Id, Name, CreatedDate FROM {obj_name}{where_clause} LIMIT 5"
+            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT 5"
             
             headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
             safe_soql = urllib.parse.quote(soql)
@@ -605,8 +608,13 @@ async def get_filtered_preview(request: Request):
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
                 
-            records = res.json().get("records", [])
-            for r in records: r.pop("attributes", None)
+            data = res.json()
+            records = data.get("records", [])
+            
+            # Clean up the hidden Salesforce "attributes" block
+            for r in records:
+                r.pop("attributes", None)
+                
             return {"records": records}
 
         # ==========================================
@@ -629,21 +637,22 @@ async def get_filtered_preview(request: Request):
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
                 
-            return {"records": res.json().get("results", [])}
-
-        # ==========================================
-        # 3. ZOHO LIVE DYNAMIC QUERY
-        # ==========================================
-        elif crm_id == "zoho":
-            if not zoho_token:
-                raise HTTPException(status_code=400, detail="Zoho credentials missing.")
+            data = res.json()
+            raw_records = data.get("results", [])
             
-            # Sanitize the Zoho Domain Protocol
-            if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
-                zoho_api_domain = f"https://{zoho_api_domain}"
-            base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
-
-            headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}", "Content-Type": "application/json"}
+            # FIX 3: Flatten custom fields exactly like the initial schema load
+            flattened_records = []
+            for rec in raw_records:
+                flat_rec = {}
+                for k, v in rec.items():
+                    if k == "custom_fields" and isinstance(v, list):
+                        for cf in v:
+                            flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                    elif not isinstance(v, (dict, list)): 
+                        flat_rec[k] = v
+                flattened_records.append(flat_rec)
+            
+            return {"records": flattened_records}
             
             # Use Zoho's COQL API if a query is provided, otherwise fallback to standard record fetch
             if query:
