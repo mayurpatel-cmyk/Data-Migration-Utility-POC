@@ -40,7 +40,7 @@ def sort_jobs_by_dependency(jobs):
             parent_job = next((j for j in jobs if j.get("targetObject") == dep), None)
             if parent_job:
                 if dep in visiting:
-                    print(f"🔄 Circular dependency detected: {target_obj} <-> {dep}. Deferring to Pass 3.")
+                    print(f" Circular dependency detected: {target_obj} <-> {dep}. Deferring to Pass 3.")
                     defer_references_to.append(dep)
                 else:
                     visit(parent_job)
@@ -385,7 +385,7 @@ async def websocket_migration(websocket: WebSocket):
         await websocket.close()
         
     except WebSocketDisconnect:
-        print("❌ ANGULAR CLIENT DISCONNECTED PREMATURELY")
+        print(" ANGULAR CLIENT DISCONNECTED PREMATURELY")
     except Exception as e:
         traceback.print_exc()
         try:
@@ -482,7 +482,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
                     
                     # Store a max of 500 errors so the UI doesn't crash
-                    if len(all_invalid_records) < 500:
+                    if len(all_invalid_records) < 2000:
                         space_left = 500 - len(all_invalid_records)
                         all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
 
@@ -555,7 +555,7 @@ async def websocket_validate_stream(websocket: WebSocket):
 
         # --- FINAL DELIVERY ---
         await websocket.send_json({
-            "log": f"✅ Stream Validation Complete: {aggregate_stats['total']} total records.",
+            "log": f" Stream Validation Complete: {aggregate_stats['total']} total records.",
             "status": "Validation Passed" if aggregate_stats["invalid"] == 0 else "Validation Warning",
             "stats": aggregate_stats,
             "invalidRecords": all_invalid_records
@@ -569,7 +569,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         import traceback
         traceback.print_exc()
         try:
-            await websocket.send_json({"log": f"❌ Stream Crash: {str(e)}", "status": "Validation Failed"})
+            await websocket.send_json({"log": f" Stream Crash: {str(e)}", "status": "Validation Failed"})
             await websocket.close()
         except:
             pass

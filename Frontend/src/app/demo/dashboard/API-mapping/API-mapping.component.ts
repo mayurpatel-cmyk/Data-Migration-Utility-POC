@@ -433,7 +433,7 @@ export class ApiMappingComponent implements OnInit {
       console.error('Filter Error:', error);
       this.previewRecords = [];
       // --- LOGS EXACT ERROR FROM PYTHON STRAIGHT TO TERMINAL ---
-      this.logMessages = [...this.logMessages, `❌ API Error: ${error.message}`];
+      this.logMessages = [...this.logMessages, ` API Error: ${error.message}`];
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges(); 
@@ -828,7 +828,7 @@ export class ApiMappingComponent implements OnInit {
 
     ws.onerror = () => {
       this.zone.run(() => {
-        this.logError('❌ WebSocket Error: Validation stream disconnected.');
+        this.logError(' WebSocket Error: Validation stream disconnected.');
         this.jobStatus = 'Validation Failed';
         this.isValidating = false;
         this.cdr.detectChanges();

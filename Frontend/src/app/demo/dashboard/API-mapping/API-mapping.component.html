@@ -298,14 +298,14 @@
               <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpInsert" value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
               <label class="form-check-label fw-bold cursor-pointer small" for="apiOpInsert">Insert</label>
             </div>
-            <div class="form-check">
+            <!-- <div class="form-check">
               <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpdate" value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
               <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpdate">Update</label>
             </div>
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpsert" value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
               <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpsert">Upsert</label>
-            </div>
+            </div> -->
           </div>
           <div class="row g-2 mt-1">
             @if (['insert', 'update', 'upsert'].includes(operationMode)) {
