@@ -130,6 +130,24 @@ export class ApiMappingComponent implements OnInit {
     this.isHistoryDropdownOpen = false;
   }
 
+  buildDefaultQuery(entityName: string) {
+    const crm = this.sourceCrmId.toLowerCase();
+    
+    if (crm === 'zendesk') {
+      let singularName = entityName.toLowerCase();
+      if (singularName.endsWith('s') && singularName !== 'macros') {
+        singularName = singularName.slice(0, -1);
+      }
+      this.customQuery = `type:${singularName} `; 
+      
+    } else if (crm === 'salesforce' || crm === 'zoho') {
+      this.customQuery = `SELECT * FROM ${entityName}`; 
+      
+    } else {
+      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+    }
+  }
+
   toggleHistoryDropdown(event: Event) {
     event.stopPropagation();
     const wasOpen = this.isHistoryDropdownOpen;
@@ -271,6 +289,8 @@ export class ApiMappingComponent implements OnInit {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
 
+    this.buildDefaultQuery(entityName);
+
     this.loadMetadata();
   }
 
@@ -358,6 +378,15 @@ export class ApiMappingComponent implements OnInit {
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
+    } else if (crm === 'zoho') {
+      return {
+        title: 'Zoho COQL Filter',
+        placeholder: "e.g., Account_Name != null and Industry = 'Technology'",
+        helpText: "Enter Zoho criteria or a COQL condition to filter your records.",
+        icon: 'icon-filter',
+        buttonText: 'Run Query',
+        loadingText: 'Querying...'
+      };
     } else {
       return {
         title: `${this.sourceSystem} Query Editor`,
@@ -408,7 +437,9 @@ export class ApiMappingComponent implements OnInit {
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
+      zohoToken: localStorage.getItem('zoho_token') || '',
+      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
 
     try {
@@ -454,6 +485,7 @@ export class ApiMappingComponent implements OnInit {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
+    // 1. CRM-Specific Syntax Rules
     if (crm === 'zendesk') {
       if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
         this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved";
@@ -466,11 +498,9 @@ export class ApiMappingComponent implements OnInit {
       } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
         this.queryError = "Use '-' to exclude a value. Format: -status:closed";
       }
-    } else if (crm === 'salesforce') {
+    } else if (crm === 'salesforce' || crm === 'zoho') {
       if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
         this.queryError = "Do not use LIMIT or ORDER BY. The engine handles pagination automatically.";
-      } else if (queryLower.includes('*') && !queryLower.startsWith('select ')) {
-        this.queryError = "Use '%' for wildcards in conditions. Format: Name LIKE 'Tech%'";
       } else if (queryLower.endsWith(';')) {
         this.queryError = "Do not end your query with a semicolon (;).";
       }
@@ -478,13 +508,14 @@ export class ApiMappingComponent implements OnInit {
       if (queryLower.startsWith('select ') && queryLower.includes(' from ')) {
         const fromParts = queryLower.split(' from ');
         const objPart = fromParts[1].split(' ')[0].trim();
-        if (objPart && objPart !== this.selectedSourceObject.toLowerCase()) {
+        if (objPart && objPart.toLowerCase() !== this.selectedSourceObject.toLowerCase()) {
           this.queryError = `Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`;
           return false;
         }
       }
     }
 
+    // 2. Field Schema Verification
     if (!this.queryError && this.sourceFields.length > 0) {
       let extractedConditions: { field: string, value: string }[] = [];
 
@@ -498,13 +529,18 @@ export class ApiMappingComponent implements OnInit {
             extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
           }
         }
-      } else if (crm === 'salesforce') {
-        const sfRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like)\s*('?[a-zA-Z0-9_%\s-]+'?)/gi;
+      } else if (crm === 'salesforce' || crm === 'zoho') {
+        // Shared Regex for SOQL and COQL
+        const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
         let match;
+        const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
         
-        while ((match = sfRegex.exec(this.customQuery)) !== null) {
+        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+          const fieldName = match[1].toLowerCase();
+          if (reservedWords.includes(fieldName)) continue;
+
           extractedConditions.push({ 
-            field: match[1].toLowerCase(), 
+            field: fieldName, 
             value: match[2].replace(/'/g, '').trim()
           });
         }
@@ -521,7 +557,7 @@ export class ApiMappingComponent implements OnInit {
         const val = condition.value || '';
         const type = schemaField.type?.toLowerCase() || 'string';
 
-        if (val.includes('*') || val.includes('%')) continue;
+        if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
 
         if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
           this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
@@ -535,10 +571,10 @@ export class ApiMappingComponent implements OnInit {
 
         if (['date', 'datetime'].includes(type) && isNaN(Date.parse(val))) {
           const sfDateLiterals = ['today', 'yesterday', 'tomorrow', 'this_week', 'last_week', 'this_month'];
-          if (!sfDateLiterals.includes(val.toLowerCase())) {
-            this.queryError = `Type Mismatch: '${condition.field}' requires a valid date (YYYY-MM-DD) or literal (TODAY). You entered '${val}'.`;
-            break;
-          }
+          if (crm === 'salesforce' && sfDateLiterals.includes(val.toLowerCase())) continue;
+          
+          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date format. You entered '${val}'.`;
+          break;
         }
       }
     }
@@ -569,20 +605,22 @@ export class ApiMappingComponent implements OnInit {
       sourceObjs: this.mappingApi.getObjects(this.sourceCrmId),
       targetObjs: this.mappingApi.getObjects(this.targetCrmId)
     }).subscribe({
-      next: ({ sourceObjs, targetObjs }) => {
+     next: ({ sourceObjs, targetObjs }) => {
         this.sourceEntities = sourceObjs || [];
         this.targetEntities = targetObjs || [];
 
         if (this.sourceEntities.length > 0) {
           const defaultSrc = this.sourceEntities.find(
-            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('ticket')
+            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('ticket') || e.name.toLowerCase().includes('contacts')
           );
           this.selectedSourceObject = defaultSrc ? defaultSrc.name : this.sourceEntities[0].name;
+          
+          this.buildDefaultQuery(this.selectedSourceObject);
         }
 
         if (this.targetEntities.length > 0) {
           const defaultTgt = this.targetEntities.find(
-            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('user')
+            (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('user') || e.name.toLowerCase().includes('contacts')
           );
           this.selectedTargetObject = defaultTgt ? defaultTgt.name : this.targetEntities[0].name;
         }
@@ -643,6 +681,10 @@ export class ApiMappingComponent implements OnInit {
         this.updateMappedCount();
         this.isLoading = false;
         this.cdr.detectChanges();
+
+        if (this.customQuery && this.previewHeaders.length > 0) {
+           this.applyFilter();
+        }
       },
       error: (err) => {
         console.error('Metadata payload extraction failed:', err);
@@ -766,7 +808,8 @@ export class ApiMappingComponent implements OnInit {
     });
 
     let safeQuery = this.customQuery.trim();
-    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+    const crmContext = this.sourceCrmId.toLowerCase();
+    if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }
@@ -781,7 +824,9 @@ export class ApiMappingComponent implements OnInit {
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
+      zohoToken: localStorage.getItem('zoho_token') || '',
+      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
     
     // Connect to the new streaming websocket
@@ -1015,7 +1060,9 @@ export class ApiMappingComponent implements OnInit {
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
+      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
+      zohoToken: localStorage.getItem('zoho_token') || '',
+      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
 
     const payload = { queue: [job] };

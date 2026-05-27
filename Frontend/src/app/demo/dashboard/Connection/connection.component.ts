@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
-import { CrmAuthService } from 'src/app/services/CrmAuthService.service'; 
+import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
 
 @Component({
   selector: 'app-connection',
@@ -14,7 +14,7 @@ import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
   styleUrls: ['./connection.component.scss']
 })
 export class ConnectionComponent implements OnInit {
-  
+
   availableCRMs = [
     { id: 'zendesk', name: 'Zendesk', icon: 'icon-headphones' },
     { id: 'salesforce', name: 'Salesforce', icon: 'icon-cloud' },
@@ -25,16 +25,17 @@ export class ConnectionComponent implements OnInit {
 
   selectedSource: string = '';
   selectedTarget: string = '';
-  
+
   isSourceConnected: boolean = false;
   isTargetConnected: boolean = false;
-  
+
   zendeskSubdomain: string = '';
+  zohoRegion: string = 'IN';
 
   constructor(
     private router: Router,
     private route: ActivatedRoute,
-    private crmAuthService: CrmAuthService 
+    private crmAuthService: CrmAuthService
   ) {}
 
   ngOnInit() {
@@ -66,34 +67,38 @@ export class ConnectionComponent implements OnInit {
     // STEP 2: HANDLE NEW INCOMING REDIRECT PARAMETERS
     // =========================================================
   this.route.queryParams.subscribe(params => {
-      const side = params['connected_side']; 
-      const crm = params['crm'];             
+      const side = params['connected_side'];
+      const crm = params['crm'];
       const token = params['access_token'];
       const instanceUrl = params['instance_url'];
+      const apiDomain = params['api_domain'];
+      const accountsServer = params['accounts_server'];
 
       if (side && crm) {
         if (side === 'source') {
           this.selectedSource = crm;
           this.isSourceConnected = true;
-          localStorage.setItem('source_crm_slot', crm); 
+          localStorage.setItem('source_crm_slot', crm);
         } else if (side === 'target') {
           this.selectedTarget = crm;
           this.isTargetConnected = true;
-          localStorage.setItem('target_crm_slot', crm); 
+          localStorage.setItem('target_crm_slot', crm);
         }
 
         if (token) {
           this.crmAuthService.saveConnectionDetails(crm, {
             access_token: token,
             subdomain: this.zendeskSubdomain,
-            instance_url: instanceUrl 
+            instance_url: instanceUrl, // <--- Pass it to CrmAuthService
+            api_domain: apiDomain,
+            accounts_server: accountsServer
           });
         }
 
-        this.router.navigate([], { 
-          relativeTo: this.route, 
-          queryParams: {}, 
-          replaceUrl: true 
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: {},
+          replaceUrl: true
         });
       }
     });
@@ -124,7 +129,7 @@ export class ConnectionComponent implements OnInit {
 
   loginToCRM(side: 'source' | 'target') {
     const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
-    
+
     if (selectedCrmId === 'zendesk') {
       if (!this.zendeskSubdomain || this.zendeskSubdomain.trim() === '') {
         alert('Please enter your Zendesk subdomain to continue.');
@@ -134,12 +139,12 @@ export class ConnectionComponent implements OnInit {
       localStorage.setItem('zd_subdomain', this.zendeskSubdomain);
     }
 
-    this.crmAuthService.connectCrm(selectedCrmId, side, this.zendeskSubdomain);
+    this.crmAuthService.connectCrm(selectedCrmId, side, this.zendeskSubdomain , this.zohoRegion);
   }
 
   disconnectCRM(side: 'source' | 'target') {
     const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
-    
+
     this.crmAuthService.disconnectCrm(selectedCrmId);
 
     if (side === 'source') {
@@ -155,12 +160,12 @@ export class ConnectionComponent implements OnInit {
 
   goToMappingPage() {
     if (this.isSourceConnected && this.isTargetConnected) {
-      this.router.navigate(['/api-mapping'], { 
-        state: { 
-          sourceCrm: this.selectedSource, 
-          targetCrm: this.selectedTarget 
-        } 
-      }); 
+      this.router.navigate(['/api-mapping'], {
+        state: {
+          sourceCrm: this.selectedSource,
+          targetCrm: this.selectedTarget
+        }
+      });
     }
   }
 }

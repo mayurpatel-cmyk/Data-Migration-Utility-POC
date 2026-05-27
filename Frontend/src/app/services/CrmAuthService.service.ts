@@ -8,7 +8,7 @@ import { Observable, timeout } from 'rxjs';
 })
 export class CrmAuthService {
   private http = inject(HttpClient);
-  
+
   // Point this to your NODE.JS Gateway auth routes
   private authBaseUrl = 'http://localhost:8000/api/auth';
 
@@ -17,20 +17,26 @@ export class CrmAuthService {
   // ==========================================
   /**
    * Redirects the user's browser to the backend OAuth login endpoint.
-   * * @param crmId - 'salesforce', 'zendesk', 'zoho', etc.
+   * @param crmId - 'salesforce', 'zendesk', 'zoho', etc.
    * @param side - 'source' (where data comes from) or 'target' (where data goes)
    * @param subdomain - Required for CRMs like Zendesk (e.g., 'sureshift')
+   * @param region - UPDATED: Captures 'US', 'IN', 'EU', etc., dynamically for Zoho routing
    */
-  connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string): void {
+  connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string): void {
     const safeCrmId = crmId.toLowerCase();
     let loginUrl = `${this.authBaseUrl}/${safeCrmId}/login?side=${side}`;
-    
+
     if (subdomain) {
       // encodeURIComponent prevents special characters from breaking the URL
       loginUrl += `&subdomain=${encodeURIComponent(subdomain)}`;
     }
 
-    // We do NOT use this.http.get() for this. 
+    if (safeCrmId === 'zoho' && region) {
+      // Forwards selection to python gateway URL parameter
+      loginUrl += `&region=${encodeURIComponent(region)}`;
+    }
+
+    // We do NOT use this.http.get() for this.
     // OAuth requires a full browser context switch to the CRM's login screen.
     window.location.href = loginUrl;
   }
@@ -43,7 +49,7 @@ export class CrmAuthService {
    */
   checkConnectionStatus(crmId: string): Observable<any> {
     const safeCrmId = crmId.toLowerCase();
-    
+
     return this.http.get<any>(`${this.authBaseUrl}/${safeCrmId}/status`, {
       headers: this.getAuthHeaders(),
       withCredentials: true
@@ -60,7 +66,9 @@ export class CrmAuthService {
     return new HttpHeaders({
       'sf-accesstoken': localStorage.getItem('sf_token') || '',
       'zd-accesstoken': localStorage.getItem('zd_token') || '',
-      'zoho-accesstoken': localStorage.getItem('zoho_token') || ''
+      'zoho-accesstoken': localStorage.getItem('zoho_token') || '',
+      'zoho-token': localStorage.getItem('zoho_token') || '',
+      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
     });
   }
 
@@ -78,10 +86,11 @@ export class CrmAuthService {
       localStorage.setItem('zd_subdomain', tokens.subdomain || '');
     } else if (safeCrmId === 'zoho') {
       localStorage.setItem('zoho_token', tokens.access_token || '');
-      localStorage.setItem('zoho_region', tokens.region || '');
+      localStorage.setItem('zoho_api_domain', tokens.api_domain || '');
+      localStorage.setItem('zoho_accounts_server', tokens.accounts_server || '');
     }
   }
-  
+
   disconnectCrm(crmId: string): void {
     const safeCrmId = crmId.toLowerCase();
 
@@ -92,6 +101,10 @@ export class CrmAuthService {
     } else if (safeCrmId === 'zendesk') {
       localStorage.removeItem('zd_token');
       localStorage.removeItem('zd_subdomain');
+    } else if (safeCrmId === 'zoho') {
+      localStorage.removeItem('zoho_token');
+      localStorage.removeItem('zoho_api_domain');
+      localStorage.removeItem('zoho_accounts_server');
     }
   }
 }
