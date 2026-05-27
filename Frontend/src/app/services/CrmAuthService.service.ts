@@ -64,11 +64,13 @@ export class CrmAuthService {
    */
   private getAuthHeaders(): HttpHeaders {
     return new HttpHeaders({
-      'sf-accesstoken': localStorage.getItem('sf_token') || '',
+      'sf-token': localStorage.getItem('sf_token') || '',
       'zd-accesstoken': localStorage.getItem('zd_token') || '',
       'zoho-accesstoken': localStorage.getItem('zoho_token') || '',
       'zoho-token': localStorage.getItem('zoho_token') || '',
-      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
+      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || '',
+      'ms-token': localStorage.getItem('msdynamics_token') || '',
+      'ms-instance-url': localStorage.getItem('msdynamics_instance_url') || '',
     });
   }
 
@@ -88,6 +90,9 @@ export class CrmAuthService {
       localStorage.setItem('zoho_token', tokens.access_token || '');
       localStorage.setItem('zoho_api_domain', tokens.api_domain || '');
       localStorage.setItem('zoho_accounts_server', tokens.accounts_server || '');
+    } else if (safeCrmId === 'msdynamics') {
+      localStorage.setItem('msdynamics_token', tokens.access_token || '');
+      localStorage.setItem('msdynamics_instance_url', tokens.instance_url || '');
     }
   }
 
@@ -105,6 +110,10 @@ export class CrmAuthService {
       localStorage.removeItem('zoho_token');
       localStorage.removeItem('zoho_api_domain');
       localStorage.removeItem('zoho_accounts_server');
+    } else if (safeCrmId === 'msdynamics') { // <--- ADDED
+      localStorage.removeItem('msdynamics_token');
+      localStorage.removeItem('msdynamics_instance_url');
+      localStorage.removeItem('msdynamics_url');
     }
   }
 }

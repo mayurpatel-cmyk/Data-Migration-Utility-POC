@@ -195,3 +195,104 @@ class CrmMetadataService:
             "sampleRecords": sample_records,
             "fields": sorted(fields_list, key=lambda x: x["name"])
         }
+    
+    @staticmethod
+    async def fetch_zoho_objects(zoho_token: str, zoho_api_domain: str):
+        if not zoho_token or not zoho_api_domain:
+            raise HTTPException(status_code=401, detail="Missing active Zoho dynamic session token headers.")
+        
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{zoho_api_domain.rstrip('/')}/crm/v6/settings/modules", 
+                headers={"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+            )
+            if res.status_code != 200: 
+                raise HTTPException(status_code=res.status_code, detail=f"Zoho Rejected Handshake: {res.text}")
+                
+            data = res.json()
+            objects = [
+                {"name": m["api_name"], "label": m["plural_label"]} 
+                for m in data.get("modules", []) 
+                if m.get("visible")
+            ]
+            return sorted(objects, key=lambda x: x["label"])
+
+    @staticmethod
+    async def fetch_zoho_fields(zoho_token: str, zoho_api_domain: str, object_name: str):
+        if not zoho_token or not zoho_api_domain:
+            raise HTTPException(status_code=401, detail="Missing active Zoho multi-region session parameters.")
+            
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{zoho_api_domain.rstrip('/')}/crm/v6/settings/fields?module={object_name}", 
+                headers={"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+            )
+            
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail=f"Failed to fetch field metadata schema from Zoho for module: {object_name}")
+                
+            data = res.json()
+            fields_list = data.get("fields", [])
+            
+            return {
+                "headers": [f["api_name"] for f in fields_list],
+                "sampleRecords": [],  # Maintained structural consistency for the Angular interactive table 
+                "fields": [
+                    {
+                        "name": f["api_name"],
+                        "label": f["field_label"],
+                        "type": f["data_type"],
+                        "required": f.get("required", False)
+                    } for f in fields_list
+                ]
+            }
+    
+    # ==========================================
+    # MICROSOFT DYNAMICS 365 METADATA FLOW
+    # ==========================================
+    @staticmethod
+    async def fetch_msdynamics_objects(token: str, instance_url: str):
+        if not token or not instance_url:
+            return []
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{instance_url}/api/data/v9.2/EntityDefinitions?$select=LogicalName,DisplayName,IsVisibleInMetadata",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            if res.status_code != 200:
+                return []
+            data = res.json()
+            return [
+                {
+                    "name": item["LogicalName"],
+                    "label": item.get("DisplayName", {}).get("UserLocalizedLabel", {}).get("Label", item["LogicalName"])
+                } for item in data.get("value", []) if item.get("IsVisibleInMetadata", True)
+            ]
+
+    @staticmethod
+    async def fetch_msdynamics_fields(token: str, instance_url: str, object_name: str):
+        if not token or not instance_url:
+            raise HTTPException(status_code=400, detail="Missing Microsoft Dynamics session parameters.")
+            
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{instance_url}/api/data/v9.2/EntityDefinitions(LogicalName='{object_name}')/Attributes?$select=LogicalName,DisplayName,AttributeType,RequiredLevel",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail="Failed to fetch field metadata schema from MS Dynamics.")
+                
+            data = res.json()
+            fields_list = data.get("value", [])
+            
+            return {
+                "headers": [f["LogicalName"] for f in fields_list],
+                "fields": [
+                    {
+                        "name": f["LogicalName"],
+                        "label": f.get("DisplayName", {}).get("UserLocalizedLabel", {}).get("Label", f["LogicalName"]),
+                        "type": f["AttributeType"],
+                        "required": f.get("RequiredLevel", {}).get("Value") != "None"
+                    } for f in fields_list
+                ]
+            }

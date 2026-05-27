@@ -57,9 +57,13 @@ ZOHO_REGIONS = {
     "uk": "https://accounts.zoho.uk",
     "cn": "https://accounts.zoho.com.cn"
 }
-FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200")
 ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zoho/callback"
+
+# MICROSOFT DYNAMICS CONFIGURATIONS
+MSD_CLIENT_ID = os.getenv("MSD_CLIENT_ID", "").strip()
+MSD_CLIENT_SECRET = os.getenv("MSD_CLIENT_SECRET", "").strip()
+MSD_TENANT_ID = os.getenv("MSD_TENANT_ID", "common").strip()
+MSD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/msdynamics/callback"
 
 
 # =========================================================
@@ -116,7 +120,7 @@ async def crm_oauth_login(
         # CORRECTED FIXED PARAMS BLOCK BELOW:
         params = {
             "scope": ",".join(scopes),
-            "client_id": ZOHO_CLIENT_ID,       # <--- FIXED: Replaced config["client_id"] with universal variable
+            "client_id": ZOHO_CLIENT_ID,       
             "response_type": "code",
             "access_type": "offline",
             "redirect_uri": ZOHO_REDIRECT_URI,
@@ -126,6 +130,27 @@ async def crm_oauth_login(
         
         query_string = urllib.parse.urlencode(params)
         auth_url = f"{base_accounts_url}/oauth/v2/auth?{query_string}"
+        return RedirectResponse(auth_url)
+    elif crm_id_lower == "msdynamics":
+        if not subdomain:
+            raise HTTPException(status_code=400, detail="Microsoft Dynamics 365 requires an environment instance URL.")
+        
+        # Cleans formatting entries to create a clean base host path string
+        clean_url = subdomain.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        
+        # Requests permissions context scopes explicitly bound to their unique business domain node
+        scopes = [f"https://{clean_url}/.default", "offline_access", "openid"]
+        
+        params = {
+            "client_id": MSD_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": MSD_REDIRECT_URI,
+            "response_mode": "query",
+            "scope": " ".join(scopes),
+            "state": f"{side}:{clean_url}"
+        }
+        query_string = urllib.parse.urlencode(params)
+        auth_url = f"https://login.microsoftonline.com/{MSD_TENANT_ID}/oauth2/v2.0/authorize?{query_string}"
         return RedirectResponse(auth_url)
     raise HTTPException(status_code=400, detail=f"CRM engine '{crm_id}' is not yet supported via OAuth.")
 
@@ -219,6 +244,39 @@ async def zoho_callback(code: str, state: str,request: Request):
     return RedirectResponse(
         f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zoho&access_token={access_token}&api_domain={safe_api_domain}&accounts_server={safe_accounts_server}"
     )
+
+
+# =========================================================
+# ROUTE: MICROSOFT DYNAMICS OAUTH CALLBACK
+# =========================================================
+@router.get("/api/auth/msdynamics/callback")
+async def msdynamics_callback(code: str, state: str):
+    try:
+        side, instance_url = state.split(":")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="State parameter validation failed.")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://login.microsoftonline.com/{MSD_TENANT_ID}/oauth2/v2.0/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": MSD_CLIENT_ID,
+                "client_secret": MSD_CLIENT_SECRET,
+                "redirect_uri": MSD_REDIRECT_URI,
+                "scope": f"https://{instance_url}/.default offline_access openid"
+            }
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to retrieve token from Microsoft Graph Directory.")
+            
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+
+    safe_instance = urllib.parse.quote(f"https://{instance_url}")
+    return RedirectResponse(f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=msdynamics&access_token={access_token}&instance_url={safe_instance}")
 
 # ==========================================
 # ROUTE 1: FAST HEADER EXTRACTION
@@ -434,7 +492,9 @@ async def get_crm_objects(
     zd_token: str = Header(None, alias="zd-token"),
     zd_subdomain: str = Header(None, alias="zd-subdomain"),
     zoho_token: str = Header(None, alias="zoho-token"),
-    zoho_api_domain: str = Header(None, alias="zoho-api-domain")
+    zoho_api_domain: str = Header(None, alias="zoho-api-domain"),
+    ms_token: str = Header(None, alias="ms-token"),                 # <--- ADDED Microsoft metadata context headers
+    ms_instance_url: str = Header(None, alias="ms-instance-url")
 ):
     crm_lower = crm_id.lower()
     
@@ -444,13 +504,9 @@ async def get_crm_objects(
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_objects()
     elif crm_lower == "zoho":
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{zoho_api_domain}/crm/v6/settings/modules", headers={
-                "Authorization": f"Zoho-oauthtoken {zoho_token}"
-            })
-            if res.status_code != 200: return []
-            data = res.json()
-            return [{"name": m["api_name"], "label": m["plural_label"]} for m in data.get("modules", []) if m.get("visible")]    
+        return await CrmMetadataService.fetch_zoho_objects(zoho_token, zoho_api_domain)
+    elif crm_lower == "msdynamics":
+        return await CrmMetadataService.fetch_msdynamics_objects(ms_token, ms_instance_url)
     else:
         return [
             {"name": "account", "label": "Account (Mock)"},
@@ -470,7 +526,9 @@ async def get_crm_fields(
     zd_token: str = Header(None, alias="zd-token"),
     zd_subdomain: str = Header(None, alias="zd-subdomain"),
     zoho_token: str = Header(None, alias="zoho-token"),            # Regional token header context
-    zoho_api_domain: str = Header(None, alias="zoho-api-domain")  # Dynamic data center domain mapping
+    zoho_api_domain: str = Header(None, alias="zoho-api-domain"),
+    ms_token: str = Header(None, alias="ms-token"),               
+    ms_instance_url: str = Header(None, alias="ms-instance-url")
 ):
     crm_lower = crm_id.lower()
     
@@ -480,32 +538,10 @@ async def get_crm_fields(
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_fields(zd_token, zd_subdomain, object_name)
     elif crm_lower == "zoho":
-        # Dynamic query targeting the user's specific global server cluster (US, EU, IN, etc.)
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                f"{zoho_api_domain}/crm/v6/settings/fields?module={object_name}", 
-                headers={"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-            )
-            
-            if res.status_code != 200:
-                raise HTTPException(status_code=res.status_code, detail="Failed to fetch field metadata schema from Zoho.")
-                
-            data = res.json()
-            fields_list = data.get("fields", [])
-            
-            # Formats layout to feed directly into your Angular API-mapping interactive table configuration
-            return {
-                "headers": [f["api_name"] for f in fields_list],
-                "fields": [
-                    {
-                        "name": f["api_name"],
-                        "label": f["field_label"],
-                        "type": f["data_type"],
-                        "required": f.get("required", False)
-                    } for f in fields_list
-                ]
-            }
-       
+        return await CrmMetadataService.fetch_zoho_fields(zoho_token, zoho_api_domain, object_name)
+    elif crm_lower == "msdynamics":
+        # REPLACED INLINE CODE WITH SERVICE CALL:
+        return await CrmMetadataService.fetch_msdynamics_fields(ms_token, ms_instance_url, object_name)            
     else:
         return {
             "headers": ["id", "name", "status"],
@@ -519,3 +555,4 @@ async def get_crm_fields(
                 {"name": "status", "label": "Status Flag", "type": "picklist", "required": False}
             ]
         }
+        

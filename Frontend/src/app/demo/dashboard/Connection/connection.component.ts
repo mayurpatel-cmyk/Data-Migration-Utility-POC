@@ -31,6 +31,7 @@ export class ConnectionComponent implements OnInit {
 
   zendeskSubdomain: string = '';
   zohoRegion: string = 'IN';
+  msDynamicsUrl: string = '';
 
   constructor(
     private router: Router,
@@ -46,6 +47,9 @@ export class ConnectionComponent implements OnInit {
     if (storedSubdomain) {
       this.zendeskSubdomain = storedSubdomain;
     }
+    // RESTORE MSDYNAMICS URL FROM DISK ON COMPONENT MOUNT
+    const storedMSD = localStorage.getItem('msdynamics_url');
+    if (storedMSD) this.msDynamicsUrl = storedMSD;
 
     // =========================================================
     // STEP 1: RESTORE PREVIOUS CONNECTIONS ON LOAD
@@ -89,7 +93,7 @@ export class ConnectionComponent implements OnInit {
           this.crmAuthService.saveConnectionDetails(crm, {
             access_token: token,
             subdomain: this.zendeskSubdomain,
-            instance_url: instanceUrl, // <--- Pass it to CrmAuthService
+            instance_url: instanceUrl || this.msDynamicsUrl, // <--- Pass it to CrmAuthService
             api_domain: apiDomain,
             accounts_server: accountsServer
           });
@@ -110,6 +114,7 @@ export class ConnectionComponent implements OnInit {
     if (cleanId === 'salesforce') return !!localStorage.getItem('sf_token');
     if (cleanId === 'zendesk') return !!localStorage.getItem('zd_token');
     if (cleanId === 'zoho') return !!localStorage.getItem('zoho_token');
+    if (cleanId === 'msdynamics') return !!localStorage.getItem('msdynamics_token');
     return false;
   }
 
@@ -137,6 +142,16 @@ export class ConnectionComponent implements OnInit {
       }
       // FIX: Save the subdomain to local storage BEFORE leaving the page
       localStorage.setItem('zd_subdomain', this.zendeskSubdomain);
+    }
+    if (selectedCrmId === 'msdynamics') {
+      if (!this.msDynamicsUrl || this.msDynamicsUrl.trim() === '') {
+        alert('Please enter your Dynamics CRM Resource URL.');
+        return;
+      }
+      localStorage.setItem('msdynamics_url', this.msDynamicsUrl.trim());
+      // Reuses the third function parameter slot to pass your instance URL string down to the OAuth redirect builder
+      this.crmAuthService.connectCrm(selectedCrmId, side, this.msDynamicsUrl.trim());
+      return;
     }
 
     this.crmAuthService.connectCrm(selectedCrmId, side, this.zendeskSubdomain , this.zohoRegion);
