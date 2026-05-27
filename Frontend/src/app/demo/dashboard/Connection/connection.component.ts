@@ -69,7 +69,7 @@ export class ConnectionComponent implements OnInit {
       const side = params['connected_side']; 
       const crm = params['crm'];             
       const token = params['access_token'];
-      const instanceUrl = params['instance_url']; // <--- Capture from URL
+      const instanceUrl = params['instance_url'];
 
       if (side && crm) {
         if (side === 'source') {
@@ -86,7 +86,7 @@ export class ConnectionComponent implements OnInit {
           this.crmAuthService.saveConnectionDetails(crm, {
             access_token: token,
             subdomain: this.zendeskSubdomain,
-            instance_url: instanceUrl // <--- Pass it to CrmAuthService
+            instance_url: instanceUrl 
           });
         }
 

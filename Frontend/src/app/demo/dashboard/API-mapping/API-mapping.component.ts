@@ -255,7 +255,6 @@ export class ApiMappingComponent implements OnInit {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
-    // --- NEW: AUTO-POPULATE DEFAULT QUERY ---
     const crm = this.sourceCrmId.toLowerCase();
     
     if (crm === 'zendesk') {
@@ -797,9 +796,9 @@ export class ApiMappingComponent implements OnInit {
         const data = JSON.parse(event.data);
         
         if (data.log) {
-          // Keep only the last 15 logs to prevent UI lag on massive streams
+          // Keep only the last 50 logs to prevent UI lag on massive streams
           this.logMessages.push(data.log);
-          if (this.logMessages.length > 15) this.logMessages.shift();
+          if (this.logMessages.length > 50) this.logMessages.shift();
         }
 
         if (data.status) {
@@ -921,7 +920,6 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
-    // --- NEW: Intercept with Validation Warnings ---
     const missingFields = this.getMissingRequiredFields();
     const incompleteRefs = this.getIncompleteReferenceMappings();
 
