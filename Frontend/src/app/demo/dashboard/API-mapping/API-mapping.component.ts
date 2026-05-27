@@ -6,12 +6,15 @@ import { forkJoin } from 'rxjs';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
+import { ToastrService } from 'ngx-toastr';
+import Swal from 'sweetalert2';
 
 interface FieldMeta {
   name: string;
   label: string;
   type?: string;
   required?: boolean;
+  isRequired?: boolean;
   referenceTo?: string[];
   relationshipName?: string;
 }
@@ -43,6 +46,7 @@ export class ApiMappingComponent implements OnInit {
   private mappingApi = inject(MappingApiService);
   private cdr = inject(ChangeDetectorRef);
   private zone = inject(NgZone);
+  private toastr = inject(ToastrService);
 
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
@@ -88,6 +92,7 @@ export class ApiMappingComponent implements OnInit {
   sourceSearchQuery = '';
   isTargetDropdownOpen = false;
   targetSearchQuery = '';
+  isHistoryDropdownOpen = false;
   
   operationMode: string = 'insert';
   batchSize: number = 5000;
@@ -122,6 +127,14 @@ export class ApiMappingComponent implements OnInit {
     this.mappings.forEach(m => m.isDropdownOpen = false);
     this.isSourceDropdownOpen = false;
     this.isTargetDropdownOpen = false;
+    this.isHistoryDropdownOpen = false;
+  }
+
+  toggleHistoryDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isHistoryDropdownOpen;
+    this.closeAllDropdowns();
+    this.isHistoryDropdownOpen = !wasOpen;
   }
 
   toggleDropdown(mapping: any, event: Event) {
@@ -147,6 +160,31 @@ export class ApiMappingComponent implements OnInit {
     }
 
     return false;
+  }
+
+  getMissingRequiredFields(): string[] {
+    if (this.operationMode === 'delete') return [];
+    if (!this.targetFields || this.targetFields.length === 0) return [];
+
+    const requiredFields = this.targetFields
+      .filter(f => f.isRequired || f.required)
+      .map(f => f.name);
+
+    const mappedFields = this.mappings
+      .filter(m => m.targetField !== '')
+      .map(m => m.targetField);
+
+    return requiredFields.filter(reqField => !mappedFields.includes(reqField));
+  }
+
+  getIncompleteReferenceMappings(): string[] {
+    const incomplete: string[] = [];
+    this.mappings.forEach(m => {
+      if (m.targetField && this.isReferenceField(m.targetField) && !m.relationalExtIdField) {
+        incomplete.push(m.targetField);
+      }
+    });
+    return incomplete;
   }
 
   selectField(mapping: any, fieldName: string) {
@@ -213,9 +251,27 @@ export class ApiMappingComponent implements OnInit {
     if (this.isTargetDropdownOpen) this.targetSearchQuery = '';
   }
 
-  selectSourceEntity(entityName: string) {
+ selectSourceEntity(entityName: string) {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
+
+    // --- NEW: AUTO-POPULATE DEFAULT QUERY ---
+    const crm = this.sourceCrmId.toLowerCase();
+    
+    if (crm === 'zendesk') {
+      let singularName = entityName.toLowerCase();
+      if (singularName.endsWith('s') && singularName !== 'macros') {
+        singularName = singularName.slice(0, -1);
+      }
+      this.customQuery = `type:${singularName} `; 
+      
+    } else if (crm === 'salesforce') {
+      this.customQuery = `SELECT * FROM ${entityName}`; 
+      
+    } else {
+      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+    }
+
     this.loadMetadata();
   }
 
@@ -336,7 +392,7 @@ export class ApiMappingComponent implements OnInit {
     }
   }
 
- async applyFilter() {
+  async applyFilter() {
     if (!this.customQuery || !this.selectedSourceObject) return;
 
     if (!this.validateQuery()) {
@@ -348,10 +404,16 @@ export class ApiMappingComponent implements OnInit {
     this.cdr.detectChanges(); 
     this.saveQueryToHistory(this.customQuery);
 
+    let safeQuery = this.customQuery.trim();
+    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+      const whereMatch = safeQuery.match(/where\s+(.*)/i);
+      safeQuery = whereMatch ? whereMatch[1].trim() : '';
+    }
+
     const payload = {
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
-      query: this.customQuery,
+      query: safeQuery, // Sent as safeQuery
       headers: this.previewHeaders,
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
@@ -368,16 +430,21 @@ export class ApiMappingComponent implements OnInit {
         body: JSON.stringify(payload)
       });
 
-      if (!response.ok) throw new Error("Failed to fetch filtered data.");
+      // --- DETAILED ERROR LOGGING EXTRACTED FROM BACKEND ---
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "Unknown Server Error" }));
+        throw new Error(errorData.detail || "Failed to fetch filtered data.");
+      }
       
       const data = await response.json();
       this.previewRecords = data.records || [];
       this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Filter Error:', error);
       this.previewRecords = [];
-      this.logMessages = [...this.logMessages, 'Error: Failed to fetch filtered data from the API.'];
+      // --- LOGS EXACT ERROR FROM PYTHON STRAIGHT TO TERMINAL ---
+      this.logMessages = [...this.logMessages, ` API Error: ${error.message}`];
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges(); 
@@ -401,7 +468,7 @@ export class ApiMappingComponent implements OnInit {
 
     if (crm === 'zendesk') {
       if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
-        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved created>2023-01-01";
+        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved";
       } else if (queryLower.includes(',')) {
         this.queryError = "Do not use commas. Format: status:open tags:urgent";
       } else if (queryLower.includes(' = ')) {
@@ -410,19 +477,23 @@ export class ApiMappingComponent implements OnInit {
         this.queryError = "Use '*' for wildcards. Format: name:tech*";
       } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
         this.queryError = "Use '-' to exclude a value. Format: -status:closed";
-      } else if (queryLower.includes('type:')) {
-        this.customQuery = this.customQuery.replace(/type:[a-zA-Z0-9_]+\s*/gi, '');
-        this.logMessages = [...this.logMessages, `System: Automatically removed "type:" modifier (handled natively).`];
       }
     } else if (crm === 'salesforce') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' where ')) {
-        this.queryError = "Enter conditions only. Format: Amount > 5000 AND StageName = 'Closed Won'";
-      } else if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
-        this.queryError = "Do not use LIMIT. The engine handles pagination automatically.";
-      } else if (queryLower.includes('*')) {
-        this.queryError = "Use '%' for wildcards. Format: Name LIKE 'Tech%'";
+      if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
+        this.queryError = "Do not use LIMIT or ORDER BY. The engine handles pagination automatically.";
+      } else if (queryLower.includes('*') && !queryLower.startsWith('select ')) {
+        this.queryError = "Use '%' for wildcards in conditions. Format: Name LIKE 'Tech%'";
       } else if (queryLower.endsWith(';')) {
         this.queryError = "Do not end your query with a semicolon (;).";
+      }
+
+      if (queryLower.startsWith('select ') && queryLower.includes(' from ')) {
+        const fromParts = queryLower.split(' from ');
+        const objPart = fromParts[1].split(' ')[0].trim();
+        if (objPart && objPart !== this.selectedSourceObject.toLowerCase()) {
+          this.queryError = `Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`;
+          return false;
+        }
       }
     }
 
@@ -460,11 +531,11 @@ export class ApiMappingComponent implements OnInit {
         }
 
         const val = condition.value || '';
-        const type = schemaField.type;
+        const type = schemaField.type?.toLowerCase() || 'string';
 
         if (val.includes('*') || val.includes('%')) continue;
 
-        if (type === 'number' && isNaN(Number(val))) {
+        if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
           this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
           break;
         }
@@ -474,9 +545,12 @@ export class ApiMappingComponent implements OnInit {
           break;
         }
 
-        if (type === 'date' && isNaN(Date.parse(val))) {
-          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date (YYYY-MM-DD). You entered '${val}'.`;
-          break;
+        if (['date', 'datetime'].includes(type) && isNaN(Date.parse(val))) {
+          const sfDateLiterals = ['today', 'yesterday', 'tomorrow', 'this_week', 'last_week', 'this_month'];
+          if (!sfDateLiterals.includes(val.toLowerCase())) {
+            this.queryError = `Type Mismatch: '${condition.field}' requires a valid date (YYYY-MM-DD) or literal (TODAY). You entered '${val}'.`;
+            break;
+          }
         }
       }
     } else if (crm === 'zoho') {
@@ -490,6 +564,7 @@ export class ApiMappingComponent implements OnInit {
 
   loadHistoricalQuery(query: string) {
     this.customQuery = query;
+    this.isHistoryDropdownOpen = false;
     this.validateQuery();
   }
 
@@ -662,21 +737,35 @@ export class ApiMappingComponent implements OnInit {
 
   updateMappedCount() {
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
+    this.cdr.detectChanges();
   }
 
   async validateData() {
-    if (this.previewRecords.length === 0) {
-      this.logError('❌ Validation Aborted: No data available to validate. Please fetch data first.');
-      return;
-    }
-
     if (this.mappedCount === 0) {
-      this.logError('❌ Validation Aborted: You must map at least one field to validate data.');
+      this.toastr.error('Validation Aborted: You must map at least one field to validate data.');
       return;
     }
 
-    this.jobStatus = 'Validating...';
-    this.logMessages = [...this.logMessages, `System: Sending ${this.previewRecords.length} sample records to validation engine...`];
+    const confirmResult = await Swal.fire({
+      title: 'Validate Entire Database?',
+      text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+      icon: 'info',
+      showCancelButton: true,
+      confirmButtonColor: '#0d6efd',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, Start Validation Stream'
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
+    this.jobStatus = 'Connecting...';
+    this.logMessages = [];
+    this.isValidating = true;
+    
+    // Reset stats so UI zeroes out before the counter starts spinning
+    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+    this.validationResults = { invalidRecords: [] };
+    this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
     const activeMappings = this.mappings
@@ -692,40 +781,84 @@ export class ApiMappingComponent implements OnInit {
       sfRules[field.name] = field;
     });
 
+    let safeQuery = this.customQuery.trim();
+    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+      const whereMatch = safeQuery.match(/where\s+(.*)/i);
+      safeQuery = whereMatch ? whereMatch[1].trim() : '';
+    }
+
     const payload = {
-      records: this.previewRecords,
+      crmId: this.sourceCrmId,
+      objectName: this.selectedSourceObject,
+      query: safeQuery,
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
-      sfRules: sfRules
+      sfRules: sfRules,
+      sfToken: localStorage.getItem('sf_token') || '',
+      sfInstance: localStorage.getItem('sf_instance_url') || '',
+      zdToken: localStorage.getItem('zd_token') || '',
+      zdSubdomain: localStorage.getItem('zd_subdomain') || ''
     };
-    try {
-      this.isValidating = true; 
-      const response = await fetch('http://localhost:8000/api/python/revalidate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+    
+    // Connect to the new streaming websocket
+    const ws = new WebSocket('ws://localhost:8000/ws/validate-stream');
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(payload));
+    };
+
+    ws.onmessage = (event) => {
+      this.zone.run(() => {
+        const data = JSON.parse(event.data);
+        
+        if (data.log) {
+          // Keep only the last 15 logs to prevent UI lag on massive streams
+          this.logMessages.push(data.log);
+          if (this.logMessages.length > 15) this.logMessages.shift();
+        }
+
+        if (data.status) {
+          this.jobStatus = data.status;
+        }
+
+        // --- LIVE STAT UPDATES ---
+        if (data.stats) {
+          this.aggregateStats = data.stats;
+        }
+
+        // --- FINAL RESULTS INJECTION ---
+        if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
+           this.validationResults.invalidRecords = data.invalidRecords;
+           
+           if (data.invalidRecords.length >= 500) {
+             this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
+           }
+           this.isValidating = false;
+        }
+
+        this.cdr.detectChanges();
+        setTimeout(() => this.scrollToBottom(), 10);
       });
+    };
 
-      if (!response.ok) throw new Error("Validation engine failed to respond.");
+    ws.onerror = () => {
+      this.zone.run(() => {
+        this.logError(' WebSocket Error: Validation stream disconnected.');
+        this.jobStatus = 'Validation Failed';
+        this.isValidating = false;
+        this.cdr.detectChanges();
+      });
+    };
 
-      const result = await response.json();
-      
-      this.validationResults = result;
-      this.aggregateStats = result.stats;
-      this.errorCurrentPage = 1;
-
-      this.logMessages = [...this.logMessages, `✅ Validation Complete: ${result.stats.valid} Valid, ${result.stats.invalid} Invalid, ${result.stats.duplicates} Duplicates.`];
-      this.jobStatus = result.stats.invalid > 0 ? 'Validation Warning' : 'Validation Passed';
-
-    } catch (error) {
-      console.error('Validation Error:', error);
-      this.logError('❌ System Error: Could not reach validation engine.');
-      this.jobStatus = 'Validation Failed';
-    } finally {
-      this.isValidating = false;
-      this.cdr.detectChanges();
-      setTimeout(() => this.scrollToBottom(), 10);
-    }
+    ws.onclose = () => {
+      this.zone.run(() => {
+        if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning' && this.jobStatus !== 'Validation Failed') {
+           this.jobStatus = 'Disconnected';
+        }
+        this.isValidating = false;
+        this.cdr.detectChanges();
+      });
+    };
   }
 
   hasErrorsInColumn(sourceField: string): boolean {
@@ -782,17 +915,10 @@ export class ApiMappingComponent implements OnInit {
     document.body.removeChild(a);
   }
 
-  // --- REFACTORED TO EXECUTE SINGLE MAPPED JOB DIRECTLY ---
   runMigration() {
-    this.successData = [];
-    this.errorData = [];
-    this.jobStatus = 'Initializing...';
-    this.logMessages = [];
-    this.cdr.detectChanges();
-
     if (this.customQuery && !this.validateQuery()) {
       this.jobStatus = 'Validation Failed';
-      this.cdr.detectChanges();
+      this.toastr.error('Please fix your query criteria before running.', 'Query Error');
       return;
     }
 
@@ -800,17 +926,79 @@ export class ApiMappingComponent implements OnInit {
 
     if (activeMappings.length === 0) {
       this.jobStatus = 'Failed';
-      this.logError('❌ Error: Please map at least one field before running the migration.');
-      this.cdr.detectChanges();
+      this.toastr.warning('Please map at least one field before running the migration.', 'No Mappings');
       return;
     }
 
     if (!this.selectedSourceObject || !this.selectedTargetObject) {
       this.jobStatus = 'Failed';
-      this.logError('❌ Error: Source and Target objects must be selected.');
-      this.cdr.detectChanges();
+      this.toastr.error('Source and Target objects must be selected.', 'Missing Setup');
       return;
     }
+
+    // --- NEW: Intercept with Validation Warnings ---
+    const missingFields = this.getMissingRequiredFields();
+    const incompleteRefs = this.getIncompleteReferenceMappings();
+
+    if (missingFields.length > 0 || incompleteRefs.length > 0) {
+      let warningHtml = '<div class="text-start mt-2">';
+      
+      if (missingFields.length > 0) {
+        warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
+                        <ul class="small mb-3 text-muted"><li>${missingFields.join('</li><li>')}</li></ul>`;
+      }
+      
+      if (incompleteRefs.length > 0) {
+        warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
+                        <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (It will default to 'Id'):</p>
+                        <ul class="small mb-0 text-muted"><li>${incompleteRefs.join('</li><li>')}</li></ul>`;
+      }
+      warningHtml += '</div>';
+
+      Swal.fire({
+        title: 'Mapping Warnings',
+        html: warningHtml,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Run Anyway',
+        cancelButtonText: 'Fix Mapping',
+        confirmButtonColor: '#dc3545',
+        customClass: { popup: 'rounded-4 shadow-lg border-0' }
+      }).then((result) => {
+        if (result.isConfirmed) {
+          this.executeMigrationJob(activeMappings);
+        } else {
+          this.jobStatus = 'Idle';
+        }
+      });
+    } else {
+      // If validation passes perfectly, run it directly
+      Swal.fire({
+        title: 'Ready to Migrate!',
+        text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonColor: '#198754', // Green button for go
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Yes, Run Job!'
+      }).then((result) => {
+        if (result.isConfirmed) {
+          this.executeMigrationJob(activeMappings);
+        } else {
+          this.jobStatus = 'Idle';
+        }
+      });
+    }
+  }
+
+  // --- Separated execution logic for clean popup handling ---
+  private executeMigrationJob(activeMappings: any[]) {
+    this.successData = [];
+    this.errorData = [];
+    this.jobStatus = 'Initializing...';
+    this.logMessages = [];
+    this.cdr.detectChanges();
+    this.toastr.info('Connecting to Migration Engine...', 'Job Started');
 
     const enhancedMappings = activeMappings.map(m => {
       const fieldMeta = this.targetFields.find(t => t.name === m.targetField);
@@ -826,10 +1014,16 @@ export class ApiMappingComponent implements OnInit {
       };
     });
 
+    let safeQuery = this.customQuery.trim();
+    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+      const whereMatch = safeQuery.match(/where\s+(.*)/i);
+      safeQuery = whereMatch ? whereMatch[1].trim() : '';
+    }
+
     const job = {
       sourceObject: this.selectedSourceObject,
       targetObject: this.selectedTargetObject,
-      extractionQuery: this.customQuery,
+      extractionQuery: safeQuery,
       mappings: enhancedMappings,
       operationMode: this.operationMode,
       batchSize: this.batchSize,
@@ -841,45 +1035,37 @@ export class ApiMappingComponent implements OnInit {
       zdSubdomain: localStorage.getItem('zd_subdomain') || ''
     };
 
-    // We pass it in an array to match Python's expectations seamlessly
     const payload = { queue: [job] };
-
     const ws = new WebSocket('ws://localhost:8000/ws/migrate');
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify(payload));
-    };
+    ws.onopen = () => { ws.send(JSON.stringify(payload)); };
 
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
-
-        if (data.log) {
-          this.logMessages = [...this.logMessages, data.log];
-        }
-        
+        if (data.log) this.logMessages = [...this.logMessages, data.log];
         if (data.status) {
           this.jobStatus = data.status;
+          if (data.status === 'Finished') {
+             this.toastr.success('Migration process has finished.', 'Job Complete');
+          }
         }
-
         if (data.successData) this.successData = data.successData;
         if (data.errorData) this.errorData = data.errorData;
 
         this.cdr.detectChanges();
-
         setTimeout(() => {
           const logContainer = document.querySelector('.bg-dark.overflow-auto, .shadow-inner');
-          if (logContainer) {
-            logContainer.scrollTop = logContainer.scrollHeight;
-          }
+          if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
         }, 10);
       });
     };
 
-    ws.onerror = (error) => {
+    ws.onerror = () => {
       this.zone.run(() => {
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
+        this.toastr.error('WebSocket connection failed.', 'Engine Error');
         this.cdr.detectChanges();
       });
     };

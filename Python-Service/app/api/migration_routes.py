@@ -3,6 +3,8 @@ import asyncio
 import httpx
 import traceback
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.services.validator_service import process_validation_batch
+import re
 
 router = APIRouter()
 
@@ -38,7 +40,7 @@ def sort_jobs_by_dependency(jobs):
             parent_job = next((j for j in jobs if j.get("targetObject") == dep), None)
             if parent_job:
                 if dep in visiting:
-                    print(f"🔄 Circular dependency detected: {target_obj} <-> {dep}. Deferring to Pass 3.")
+                    print(f" Circular dependency detected: {target_obj} <-> {dep}. Deferring to Pass 3.")
                     defer_references_to.append(dep)
                 else:
                     visit(parent_job)
@@ -194,14 +196,33 @@ async def websocket_migration(websocket: WebSocket):
                     source_records = []
                     
                     try:
-                        if extraction_query:
+                        if extraction_query or not extraction_query: # Safely catches all scenarios
                             # Search API Extraction Loop
                             safe_obj_singular = safe_obj.rstrip('s')
-                            safe_query = urllib.parse.quote(f"{extraction_query} type:{safe_obj_singular}")
-                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=100"
+                            
+                            import re
+                            
+                            # --- FIX: Zendesk Export API strictly requires a 'query' parameter ---
+                            # 1. Clean out duplicate 'type:' modifiers from the user's input
+                            clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', extraction_query, flags=re.IGNORECASE).strip()
+                            
+                            # 2. Always ensure we have a base query so Zendesk doesn't throw a 422
+                            final_query = f"{clean_query} type:{safe_obj_singular}".strip()
+                            safe_query = urllib.parse.quote(final_query)
+                            
+                            # 3. Use BOTH filter[type] and the query string for maximum stability
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
                             
                             while url:
                                 res = await client.get(url, headers=zd_headers)
+                                
+                                # Catch Rate Limits for the Export API
+                                if res.status_code == 429:
+                                    retry_after = int(res.headers.get("Retry-After", 60))
+                                    await send_log(f"⚠️ [Zendesk Rate Limit] Pausing for {retry_after} seconds...", "Paused")
+                                    await asyncio.sleep(retry_after)
+                                    continue
+                                    
                                 res.raise_for_status()
                                 data = res.json()
                                 records = data.get("results", [])
@@ -209,8 +230,15 @@ async def websocket_migration(websocket: WebSocket):
                                 if not records: break
                                 source_records.extend(records)
                                 
-                                await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
-                                url = data.get("next_page")
+                                if len(source_records) % 1000 == 0:
+                                    await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
+                                
+                                # FIX 3: Use Cursor Pagination instead of page numbers
+                                meta = data.get("meta")
+                                if meta and meta.get("has_more"):
+                                    url = data.get("links", {}).get("next")
+                                else:
+                                    url = None
                                 
                         else:
                             # Standard Object Extraction Loop (with Cursor Pagination support)
@@ -357,11 +385,191 @@ async def websocket_migration(websocket: WebSocket):
         await websocket.close()
         
     except WebSocketDisconnect:
-        print("❌ ANGULAR CLIENT DISCONNECTED PREMATURELY")
+        print(" ANGULAR CLIENT DISCONNECTED PREMATURELY")
     except Exception as e:
         traceback.print_exc()
         try:
             await websocket.send_json({"log": f"SYSTEM CRASH: {str(e)}", "status": "Failed"})
+            await websocket.close()
+        except:
+            pass
+
+
+
+
+    # ==========================================
+# ROUTE: MASSIVE STREAMING VALIDATION (WS)
+# ==========================================
+@router.websocket("/ws/validate-stream")
+async def websocket_validate_stream(websocket: WebSocket):
+    await websocket.accept()
+    
+    try:
+        payload = await websocket.receive_json()
+        
+        crm_id = payload.get("crmId", "").lower()
+        obj_name = payload.get("objectName", "")
+        query = payload.get("query", "").strip()
+        mappings = payload.get("mappings", [])
+        dedupe_key = payload.get("dedupeKey", "")
+        sf_rules = payload.get("sfRules", {})
+        
+        sf_token = payload.get("sfToken", "")
+        sf_instance = payload.get("sfInstance", "")
+        zd_token = payload.get("zdToken", "")
+        zd_subdomain = payload.get("zdSubdomain", "")
+
+        # Track running totals for the Angular UI
+        aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
+        all_invalid_records = [] # Capped at 500 to protect browser memory
+
+        await websocket.send_json({"log": f"System: Initializing Streaming Validation for {obj_name}...", "status": "Connecting"})
+
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            
+            # ------------------------------------------
+            # 1. ZENDESK STREAMING VALIDATION
+            # ------------------------------------------
+            if crm_id == "zendesk":
+                safe_obj = obj_name.lower()
+                safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
+                
+                import re
+                
+                # --- FIX: Zendesk Export API strictly requires a 'query' parameter ---
+                # 1. Clean out duplicate 'type:' modifiers from the user's input
+                clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip()
+                
+                # 2. Always ensure we have a base query so Zendesk doesn't throw a 422
+                final_query = f"{clean_query} type:{safe_obj_singular}".strip()
+                safe_query = urllib.parse.quote(final_query)
+                
+                # 3. Use BOTH filter[type] and the query string for maximum stability
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
+                zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+                
+                while url:
+                    res = await client.get(url, headers=zd_headers)
+                    if res.status_code == 429:
+                        retry = int(res.headers.get("Retry-After", 60))
+                        await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
+                        await asyncio.sleep(retry)
+                        continue
+                        
+                    res.raise_for_status()
+                    data = res.json()
+                    
+                    # Flatten the Zendesk chunk
+                    chunk_records = []
+                    for rec in data.get("results", []):
+                        flat_rec = {}
+                        for k, v in rec.items():
+                            if k == "custom_fields" and isinstance(v, list):
+                                for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                            elif not isinstance(v, (dict, list)):
+                                flat_rec[k] = v
+                        chunk_records.append(flat_rec)
+
+                    if not chunk_records: break
+                    
+                    # --- MAGIC: Validate JUST this chunk of 1000 using your service ---
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    
+                    # Update running totals
+                    aggregate_stats["total"] += chunk_result["stats"]["total"]
+                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+                    
+                    # Store a max of 500 errors so the UI doesn't crash
+                    if len(all_invalid_records) < 2000:
+                        space_left = 500 - len(all_invalid_records)
+                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
+
+                    # Stream live progress to the Angular UI
+                    await websocket.send_json({
+                        "log": f"Validated {aggregate_stats['total']} records so far...",
+                        "status": "Validating",
+                        "stats": aggregate_stats
+                    })
+                    
+                    # Grab next page URL
+                    meta = data.get("meta")
+                    if meta and meta.get("has_more"):
+                        url = data.get("links", {}).get("next")
+                    else:
+                        url = None
+
+            # ------------------------------------------
+            # 2. SALESFORCE STREAMING VALIDATION
+            # ------------------------------------------
+            elif crm_id == "salesforce":
+                headers_list = [m["csvField"] for m in mappings if m.get("csvField")]
+                fields_str = ", ".join(headers_list) if headers_list else "Id"
+                where_clause = f" WHERE {query}" if query else ""
+                soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
+                
+                headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
+                safe_soql = urllib.parse.quote(soql)
+                base_url = sf_instance.rstrip('/')
+                url = f"{base_url}/services/data/v60.0/query?q={safe_soql}"
+                
+                while url:
+                    res = await client.get(url, headers=headers)
+                    res.raise_for_status()
+                    data = res.json()
+                    
+                    chunk_records = []
+                    for r in data.get("records", []):
+                        r.pop("attributes", None)
+                        chunk_records.append(r)
+                        
+                    if not chunk_records: break
+                    
+                    # --- MAGIC: Validate chunk ---
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    
+                    aggregate_stats["total"] += chunk_result["stats"]["total"]
+                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+                    
+                    if len(all_invalid_records) < 500:
+                        space_left = 500 - len(all_invalid_records)
+                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
+
+                    await websocket.send_json({
+                        "log": f"Validated {aggregate_stats['total']} records so far...",
+                        "status": "Validating",
+                        "stats": aggregate_stats
+                    })
+                    
+                    if not data.get("done"):
+                        url = f"{base_url}{data.get('nextRecordsUrl')}"
+                    else:
+                        url = None
+            else:
+                await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
+                await websocket.close()
+                return
+
+        # --- FINAL DELIVERY ---
+        await websocket.send_json({
+            "log": f" Stream Validation Complete: {aggregate_stats['total']} total records.",
+            "status": "Validation Passed" if aggregate_stats["invalid"] == 0 else "Validation Warning",
+            "stats": aggregate_stats,
+            "invalidRecords": all_invalid_records
+        })
+        
+        await websocket.close()
+        
+    except WebSocketDisconnect:
+        print("Client disconnected from validation stream.")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            await websocket.send_json({"log": f" Stream Crash: {str(e)}", "status": "Validation Failed"})
             await websocket.close()
         except:
             pass

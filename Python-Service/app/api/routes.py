@@ -444,7 +444,7 @@ async def get_crm_objects(
         return await CrmMetadataService.fetch_salesforce_objects(sf_token, sf_instance_url)
         
     elif crm_lower == "zendesk":
-        return await CrmMetadataService.fetch_zendesk_objects()
+        return await CrmMetadataService.fetch_zendesk_objects(zd_token, zd_subdomain)
         
     elif crm_lower == "zoho":
         # 1. Sanitize the Zoho Domain Protocol
