@@ -149,9 +149,17 @@ async def websocket_migration(websocket: WebSocket):
         sf_instance = payload.get("sfInstance") or raw_queue[0].get("sfInstance")
         zd_token = payload.get("zdToken") or raw_queue[0].get("zdToken")
         zd_subdomain = payload.get("zdSubdomain") or raw_queue[0].get("zdSubdomain")
+        zoho_token = payload.get("zohoToken", "") or raw_queue[0].get("zohoToken")
+        zoho_api_domain = payload.get("zohoDomain", "") or raw_queue[0].get("zohoDomain")
 
-        if not all([sf_token, sf_instance, zd_token, zd_subdomain]):
-            await websocket.send_json({"log": "FATAL: Missing CRM Credentials. Please reconnect.", "status": "Failed"})
+        if not sf_token or not sf_instance:
+            await websocket.send_json({"log": "FATAL: Missing Target Salesforce Credentials.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        # 2. Check Source (Must have EITHER Zendesk OR Zoho)
+        if not zd_token and not zoho_token:
+            await websocket.send_json({"log": "FATAL: Missing Source CRM Credentials (Zendesk or Zoho).", "status": "Failed"})
             await websocket.close()
             return
 
@@ -189,34 +197,103 @@ async def websocket_migration(websocket: WebSocket):
                 source_records = job.get("rawRecords")
                 
                 if not source_records:
-                    await send_log(f"[{target_object}] Initializing extraction from Zendesk...")
-                    zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-                    safe_obj = source_object.lower()
-                    
                     source_records = []
                     
-                    try:
-                        if extraction_query or not extraction_query: # Safely catches all scenarios
+                    # ======================================
+                    # ZOHO EXTRACTION ENGINE
+                    # ======================================
+                    if zoho_token:
+                        await send_log(f"[{target_object}] Initializing extraction from Zoho CRM...")
+                        if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+                            zoho_api_domain = f"https://{zoho_api_domain}"
+                        base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+                        z_headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+                        
+                        # Grab source fields for the API call
+                        headers_list = [m["sourceField"] for m in mappings if m.get("sourceField")]
+                        safe_fields = headers_list[:40] if headers_list else ["id"]
+                        fields_str = ",".join(safe_fields)
+                        
+                        page = 1
+                        more_records = True
+                        
+                        try:
+                            while more_records:
+                                if extraction_query:
+                                    coql_query = extraction_query.strip()
+                                    if coql_query.lower().startswith("select "):
+                                        import re
+                                        if "*" in coql_query:
+                                            coql_query = coql_query.replace("*", fields_str, 1)
+                                        match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
+                                        if match:
+                                            clean_select = match.group(1).replace(" ", "")
+                                            coql_query = coql_query.replace(match.group(1), clean_select, 1)
+                                        if " where " not in coql_query.lower():
+                                            coql_query += " where id is not null"
+                                        coql_query = re.sub(r'(?i)\s+limit\s+\d+', '', coql_query)
+                                    else:
+                                        coql_query = f"select {fields_str} from {source_object} where {coql_query}"
+                                        
+                                    paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
+                                    res = await client.post(f"{base_url}/crm/v6/coql", headers=z_headers, json={"select_query": paginated_coql})
+                                else:
+                                    res = await client.get(f"{base_url}/crm/v6/{source_object}?page={page}&per_page=200&fields={fields_str}", headers=z_headers)
+                                    
+                                if res.status_code == 429:
+                                    await send_log("⚠️ Zoho Rate Limit. Pausing 30s...", "Paused")
+                                    await asyncio.sleep(30)
+                                    continue
+                                    
+                                res.raise_for_status()
+                                data = res.json()
+                                raw_records = data.get("data") or []
+                                
+                                if not raw_records: break
+                                
+                                # Flatten Zoho Data
+                                for r in raw_records:
+                                    flat_rec = {}
+                                    for k, v in r.items():
+                                        if isinstance(v, dict) and "id" in v:
+                                            flat_rec[k] = v.get("name", v["id"])
+                                        else:
+                                            flat_rec[k] = v
+                                    source_records.append(flat_rec)
+                                    
+                                await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
+                                    
+                                info = data.get("info", {})
+                                more_records = info.get("more_records", False)
+                                page += 1
+                                
+                            job["rawRecords"] = source_records 
+                            await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
+                        except Exception as e:
+                            await send_log(f"[{target_object}] Zoho Extract Failed: {str(e)}", "Failed")
+                            continue
+
+                    # ======================================
+                    # ZENDESK EXTRACTION ENGINE
+                    # ======================================
+                    elif zd_token:
+                        await send_log(f"[{target_object}] Initializing extraction from Zendesk...")
+                        zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+                        safe_obj = source_object.lower()
+                        
+                        try:
                             # Search API Extraction Loop
                             safe_obj_singular = safe_obj.rstrip('s')
-                            
                             import re
-                            
-                            # --- FIX: Zendesk Export API strictly requires a 'query' parameter ---
-                            # 1. Clean out duplicate 'type:' modifiers from the user's input
                             clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', extraction_query, flags=re.IGNORECASE).strip()
-                            
-                            # 2. Always ensure we have a base query so Zendesk doesn't throw a 422
                             final_query = f"{clean_query} type:{safe_obj_singular}".strip()
                             safe_query = urllib.parse.quote(final_query)
                             
-                            # 3. Use BOTH filter[type] and the query string for maximum stability
                             url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
                             
                             while url:
                                 res = await client.get(url, headers=zd_headers)
                                 
-                                # Catch Rate Limits for the Export API
                                 if res.status_code == 429:
                                     retry_after = int(res.headers.get("Retry-After", 60))
                                     await send_log(f"⚠️ [Zendesk Rate Limit] Pausing for {retry_after} seconds...", "Paused")
@@ -233,49 +310,18 @@ async def websocket_migration(websocket: WebSocket):
                                 if len(source_records) % 1000 == 0:
                                     await send_log(f"[{target_object}] Extracted {len(source_records)} records...")
                                 
-                                # FIX 3: Use Cursor Pagination instead of page numbers
                                 meta = data.get("meta")
                                 if meta and meta.get("has_more"):
                                     url = data.get("links", {}).get("next")
                                 else:
                                     url = None
-                                
-                        else:
-                            # Standard Object Extraction Loop (with Cursor Pagination support)
-                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/{safe_obj}.json?page[size]=100"
-                            
-                            while url:
-                                res = await client.get(url, headers=zd_headers)
-                                
-                                # THE DEFENDER: Catch Rate Limits
-                                if res.status_code == 429:
-                                    retry_after = int(res.headers.get("Retry-After", 60))
-                                    await send_log(f"⚠️ [Zendesk Rate Limit Hit] Engine pausing for {retry_after} seconds...", "Paused")
-                                    await asyncio.sleep(retry_after)
-                                    continue # Safely retry the exact same URL!
                                     
-                                res.raise_for_status()
-                                data = res.json()
-                                records = data.get(safe_obj, [])
-                                
-                                if not records: break
-                                source_records.extend(records)
-                                
-                                if len(source_records) % 2000 == 0:
-                                    await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
-                                
-                                meta = data.get("meta")
-                                if meta and meta.get("has_more"):
-                                    url = data.get("links", {}).get("next")
-                                else:
-                                    url = data.get("next_page")
+                            job["rawRecords"] = source_records 
+                            await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
                             
-                        job["rawRecords"] = source_records 
-                        await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
-                        
-                    except Exception as e:
-                        await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
-                        continue
+                        except Exception as e:
+                            await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
+                            continue
 
                 # ------------------------------------------
                 # Helper: Salesforce Upload Function
@@ -548,6 +594,112 @@ async def websocket_validate_stream(websocket: WebSocket):
                         url = f"{base_url}{data.get('nextRecordsUrl')}"
                     else:
                         url = None
+
+            # ------------------------------------------
+            # 3. ZOHO STREAMING VALIDATION
+            # ------------------------------------------
+            elif crm_id == "zoho":
+                zoho_token = payload.get("zohoToken", "")
+                zoho_api_domain = payload.get("zohoDomain", "")
+                
+                if not zoho_token:
+                    await websocket.send_json({"log": "❌ Zoho Token Missing", "status": "Failed"})
+                    await websocket.close()
+                    return
+
+                if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+                    zoho_api_domain = f"https://{zoho_api_domain}"
+                base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+                headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+                
+                # Setup fields to extract
+                headers_list = [m["csvField"] for m in mappings if m.get("csvField")]
+                safe_fields = headers_list[:40] if headers_list else ["id"]
+                fields_str = ",".join(safe_fields)
+
+                page = 1
+                more_records = True
+
+                while more_records:
+                    # Sanitize and prepare the query
+                    if query:
+                        coql_query = query.strip()
+                        if coql_query.lower().startswith("select "):
+                            import re
+                            if "*" in coql_query:
+                                coql_query = coql_query.replace("*", fields_str, 1)
+                            
+                            match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
+                            if match:
+                                clean_select = match.group(1).replace(" ", "")
+                                coql_query = coql_query.replace(match.group(1), clean_select, 1)
+
+                            if " where " not in coql_query.lower():
+                                coql_query += " where id is not null"
+                                
+                            # Strip out any custom limits so we can apply pagination
+                            coql_query = re.sub(r'(?i)\s+limit\s+\d+', '', coql_query)
+                        else:
+                            coql_query = f"select {fields_str} from {obj_name} where {coql_query}"
+
+                        # Inject Zoho Pagination (Limit 200 is Zoho's Max)
+                        paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
+                        
+                        res = await client.post(f"{base_url}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
+                    else:
+                        # Standard GET Pagination
+                        res = await client.get(f"{base_url}/crm/v6/{obj_name}?page={page}&per_page=200&fields={fields_str}", headers=headers)
+
+                    # Handle Strict Zoho API Limits
+                    if res.status_code == 429:
+                        await websocket.send_json({"log": "⚠️ Zoho Rate Limit. Pausing for 30s...", "status": "Paused"})
+                        await asyncio.sleep(30)
+                        continue
+
+                    if res.status_code != 200:
+                        await websocket.send_json({"log": f"❌ Zoho Error: {res.text}", "status": "Validation Failed"})
+                        break
+
+                    data = res.json()
+                    raw_records = data.get("data") or []
+                    
+                    if not raw_records:
+                        break
+                        
+                    # Flatten Zoho's nested dictionary outputs
+                    chunk_records = []
+                    for r in raw_records:
+                        flat_rec = {}
+                        for k, v in r.items():
+                            if isinstance(v, dict) and "id" in v:
+                                flat_rec[k] = v.get("name", v["id"]) 
+                            else:
+                                flat_rec[k] = v
+                        chunk_records.append(flat_rec)
+
+                    # --- MAGIC: Validate this specific chunk ---
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    
+                    aggregate_stats["total"] += chunk_result["stats"]["total"]
+                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+                    
+                    if len(all_invalid_records) < 500:
+                        space_left = 500 - len(all_invalid_records)
+                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
+
+                    await websocket.send_json({
+                        "log": f"Validated {aggregate_stats['total']} records so far...",
+                        "status": "Validating",
+                        "stats": aggregate_stats
+                    })
+                    
+                    # Check if Zoho has another page of data waiting
+                    info = data.get("info", {})
+                    more_records = info.get("more_records", False)
+                    page += 1
+
             else:
                 await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
                 await websocket.close()

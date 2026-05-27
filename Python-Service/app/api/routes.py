@@ -110,13 +110,14 @@ async def crm_oauth_login(
             "ZohoCRM.modules.ALL",
             "ZohoCRM.bulk.READ",
             "ZohoCRM.settings.FIELDS.READ",
-            "ZohoCRM.settings.modules.READ"
+            "ZohoCRM.settings.modules.READ",
+            "ZohoCRM.coql.READ"
         ]
         
         # CORRECTED FIXED PARAMS BLOCK BELOW:
         params = {
             "scope": ",".join(scopes),
-            "client_id": ZOHO_CLIENT_ID,       # <--- FIXED: Replaced config["client_id"] with universal variable
+            "client_id": ZOHO_CLIENT_ID,
             "response_type": "code",
             "access_type": "offline",
             "redirect_uri": ZOHO_REDIRECT_URI,
@@ -190,16 +191,17 @@ async def zendesk_callback(code: str, state: str):
 # ROUTE: ZOHO OAUTH CALLBACK
 # =========================================================
 @router.get("/api/auth/zoho/callback")
-async def zoho_callback(code: str, state: str,request: Request):
+async def zoho_callback(code: str, state: str, request: Request):
     try:
         side, reg_key = state.split(":") 
     except ValueError:
         side = state
-        reg_key="us"
+        reg_key = "us"
     base_accounts_url = ZOHO_REGIONS.get(reg_key.lower(), ZOHO_REGIONS["us"])
     accounts_server = request.query_params.get("accounts-server", base_accounts_url)
     
-    async with httpx.AsyncClient() as client:
+    # 👇 CRITICAL FIX: Added verify=False here to match your other routes!
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.post(f"{accounts_server}/oauth/v2/token", data={
             "grant_type": "authorization_code",
             "code": code,
@@ -453,7 +455,7 @@ async def get_crm_objects(
         base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
 
         # 2. Execute with verify=False for SSL safety
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             res = await client.get(f"{base_url}/crm/v6/settings/modules", headers={
                 "Authorization": f"Zoho-oauthtoken {zoho_token}"
             })
@@ -503,7 +505,7 @@ async def get_crm_fields(
             zoho_api_domain = f"https://{zoho_api_domain}"
         base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
 
             # --- CALL 1: Fetch the Field Schema (Columns) ---
@@ -567,114 +569,180 @@ async def get_crm_fields(
     
 @router.post("/api/metadata/preview-filter")
 async def get_filtered_preview(request: Request):
-    payload = await request.json()
-    
-    crm_id = payload.get("crmId", "").lower()
-    obj_name = payload.get("objectName", "")
-    query = payload.get("query", "").strip()
-    headers_list = payload.get("headers", [])
-    
-    sf_token = payload.get("sfToken", "")
-    sf_instance = payload.get("sfInstance", "")
-    zd_token = payload.get("zdToken", "")
-    zd_subdomain = payload.get("zdSubdomain", "")
-    zoho_token = payload.get("zohoToken", "")
-    zoho_api_domain = payload.get("zohoDomain", "")
-    
-    if not obj_name:
-        raise HTTPException(status_code=400, detail="Object name is required.")
-
-    # Using verify=False to bypass corporate SSL proxy issues
-    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+    try:
+        payload = await request.json()
         
-        # ==========================================
-        # 1. SALESFORCE LIVE DYNAMIC QUERY
-        # ==========================================
-        if crm_id == "salesforce":
-            if not sf_token or not sf_instance:
-                raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
-            
-            # FIX 2: Dynamically construct SOQL based on UI headers
-            fields_str = ", ".join(headers_list) if headers_list else "Id, Name"
-            where_clause = f" WHERE {query}" if query else ""
-            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT 5"
-            
-            headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
-            safe_soql = urllib.parse.quote(soql)
-            base_url = sf_instance.rstrip('/')
-            url = f"{base_url}/services/data/v60.0/query?q={safe_soql}"
-            
-            res = await client.get(url, headers=headers)
-            if res.status_code != 200:
-                raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
-                
-            data = res.json()
-            records = data.get("records", [])
-            
-            # Clean up the hidden Salesforce "attributes" block
-            for r in records:
-                r.pop("attributes", None)
-                
-            return {"records": records}
+        crm_id = payload.get("crmId", "").lower()
+        obj_name = payload.get("objectName", "")
+        query = payload.get("query", "").strip()
+        headers_list = payload.get("headers", [])
+        
+        sf_token = payload.get("sfToken", "")
+        sf_instance = payload.get("sfInstance", "")
+        zd_token = payload.get("zdToken", "")
+        zd_subdomain = payload.get("zdSubdomain", "")
+        zoho_token = payload.get("zohoToken", "")
+        zoho_api_domain = payload.get("zohoDomain", "")
+        
+        if not obj_name:
+            raise HTTPException(status_code=400, detail="Object name is required.")
 
-        # ==========================================
-        # 2. ZENDESK LIVE DYNAMIC QUERY
-        # ==========================================
-        elif crm_id == "zendesk":
-            if not zd_token or not zd_subdomain:
-                raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
+        # Using verify=False to bypass corporate proxy environment disruptions
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             
-            safe_obj = obj_name.lower()
-            if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
-
-            full_query = f"{query} type:{safe_obj}" if query else f"type:{safe_obj}"
-            safe_query = urllib.parse.quote(full_query)
-            
-            headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-            url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=5"
-            
-            res = await client.get(url, headers=headers)
-            if res.status_code != 200:
-                raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
+            # ==========================================
+            # 1. SALESFORCE LIVE DYNAMIC QUERY
+            # ==========================================
+            if crm_id == "salesforce":
+                if not sf_token or not sf_instance:
+                    raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
                 
-            data = res.json()
-            raw_records = data.get("results", [])
-            
-            # FIX 3: Flatten custom fields exactly like the initial schema load
-            flattened_records = []
-            for rec in raw_records:
-                flat_rec = {}
-                for k, v in rec.items():
-                    if k == "custom_fields" and isinstance(v, list):
-                        for cf in v:
-                            flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                    elif not isinstance(v, (dict, list)): 
-                        flat_rec[k] = v
-                flattened_records.append(flat_rec)
-            
-            return {"records": flattened_records}
-            
-            # Use Zoho's COQL API if a query is provided, otherwise fallback to standard record fetch
-            if query:
-                coql_query = f"select id from {obj_name} where {query} limit 5"
-                res = await client.post(
-                    f"{base_url}/crm/v6/coql", 
-                    headers=headers, 
-                    json={"select_query": coql_query}
-                )
-            else:
-                res = await client.get(
-                    f"{base_url}/crm/v6/{obj_name}?page=1&per_page=5", 
-                    headers=headers
-                )
-
-            if res.status_code != 200:
-                raise HTTPException(status_code=400, detail=f"Zoho Error: {res.text}")
+                # Trust the user's custom SOQL if provided, otherwise build it
+                if query.lower().startswith("select "):
+                    soql = query
+                    if "limit " not in soql.lower():
+                        soql += " LIMIT 5"
+                else:
+                    fields_str = ", ".join(headers_list) if headers_list else "Id, Name"
+                    where_clause = f" WHERE {query}" if query else ""
+                    soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT 5"
                 
-            return {"records": res.json().get("data", [])}
-            
-        # ==========================================
-        # 4. UNSUPPORTED CRM (Must be at the very end)
-        # ==========================================
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported CRM: {crm_id}")
+                headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
+                import urllib.parse
+                safe_soql = urllib.parse.quote(soql)
+                base_url = sf_instance.rstrip('/')
+                url = f"{base_url}/services/data/v60.0/query?q={safe_soql}"
+                
+                res = await client.get(url, headers=headers)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
+                    
+                data = res.json()
+                records = data.get("records", [])
+                for r in records:
+                    r.pop("attributes", None)
+                    
+                return {"records": records}
+
+            # ==========================================
+            # 2. ZENDESK LIVE DYNAMIC QUERY
+            # ==========================================
+            elif crm_id == "zendesk":
+                if not zd_token or not zd_subdomain:
+                    raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
+                
+                safe_obj = obj_name.lower()
+                if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
+
+                # Strip out SQL junk if the frontend accidentally sent it to Zendesk
+                import re
+                clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
+
+                full_query = f"{clean_query} type:{safe_obj}" if clean_query else f"type:{safe_obj}"
+                import urllib.parse
+                safe_query = urllib.parse.quote(full_query)
+                
+                headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=5"
+                
+                res = await client.get(url, headers=headers)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
+                    
+                raw_records = res.json().get("results", [])
+                flattened_records = []
+                for rec in raw_records:
+                    flat_rec = {}
+                    for k, v in rec.items():
+                        if k == "custom_fields" and isinstance(v, list):
+                            for cf in v:
+                                flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                        elif not isinstance(v, (dict, list)): 
+                            flat_rec[k] = v
+                    flattened_records.append(flat_rec)
+                
+                return {"records": flattened_records}
+
+            # ==========================================
+            # 3. ZOHO LIVE DYNAMIC QUERY
+            # ==========================================
+            elif crm_id == "zoho":
+                if not zoho_token:
+                    raise HTTPException(status_code=400, detail="Zoho authentication token context missing.")
+                
+                if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
+                    zoho_api_domain = f"https://{zoho_api_domain}"
+                base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
+                
+                headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+                
+                if query:
+                    coql_query = query.strip()
+                    
+                    # If user provides a full SELECT query, trust it but sanitize it
+                    if coql_query.lower().startswith("select "):
+                        
+                        # 1. Replace '*' with actual headers (NO SPACES ALLOWED)
+                        if "*" in coql_query:
+                            safe_fields = headers_list[:40] if headers_list else ["id"]
+                            coql_query = coql_query.replace("*", ",".join(safe_fields), 1)
+                            
+                        # 2. ZOHO STRICT RULE: Erase all spaces after commas in the SELECT list
+                        import re
+                        match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
+                        if match:
+                            clean_select = match.group(1).replace(" ", "")
+                            coql_query = coql_query.replace(match.group(1), clean_select, 1)
+
+                        # 3. ZOHO STRICT RULE: A WHERE clause is 100% mandatory
+                        if " where " not in coql_query.lower():
+                            if " limit " in coql_query.lower():
+                                coql_query = re.sub(r'(?i)\s+limit\s+', ' where id is not null limit ', coql_query)
+                            else:
+                                coql_query += " where id is not null"
+
+                        if " limit " not in coql_query.lower():
+                            coql_query += " limit 5"
+                            
+                    else:
+                        # User only provided a WHERE clause
+                        safe_fields = headers_list[:40] if headers_list else ["id"]
+                        coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query} limit 5"
+
+                    res = await client.post(
+                        f"{base_url}/crm/v6/coql", 
+                        headers=headers, 
+                        json={"select_query": coql_query}
+                    )
+                else:
+                    # Empty query fallback
+                    safe_fields = headers_list[:40] if headers_list else ["id"]
+                    fields_str = ",".join(safe_fields)
+                    res = await client.get(
+                        f"{base_url}/crm/v6/{obj_name}?page=1&per_page=5&fields={fields_str}", 
+                        headers=headers
+                    )
+
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"Zoho Query Error: {res.text}")
+                    
+                raw_records = res.json().get("data") or []
+                sample_records = []
+                
+                for r in raw_records:
+                    flat_rec = {}
+                    for k, v in r.items():
+                        if isinstance(v, dict) and "id" in v:
+                            flat_rec[k] = v.get("name", v["id"]) 
+                        else:
+                            flat_rec[k] = v
+                    sample_records.append(flat_rec)
+                    
+                return {"records": sample_records}
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"System Crash: {e.__class__.__name__} - {str(e)}")
