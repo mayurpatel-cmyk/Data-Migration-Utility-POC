@@ -4,7 +4,7 @@ from fastapi import HTTPException
 class CrmMetadataService:
     
     # =========================================================
-    # SALESFORCE METADATA EXTRACTION ENGINE (Fully Dynamic)
+    # SALESFORCE METADATA EXTRACTION ENGINE 
     # =========================================================
     @staticmethod
     async def fetch_salesforce_objects(sf_token: str, instance_url: str):
@@ -69,7 +69,7 @@ class CrmMetadataService:
                     if f.get("createable") or f.get("updateable") or f.get("name") == "Id":
                         select_fields_list.append(f["name"])
                         
-                    # Node.js Logic Applied: Extract length, custom flag, exact isRequired logic, and referenceTo
+                    #  Extract length, custom flag, exact isRequired logic, and referenceTo
                     is_required = (not f.get("nillable", True)) and f.get("createable", False) and (not f.get("defaultedOnCreate", False))
                     
                     parsed_fields.append({

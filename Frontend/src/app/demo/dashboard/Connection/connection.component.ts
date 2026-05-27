@@ -70,7 +70,7 @@ export class ConnectionComponent implements OnInit {
       const side = params['connected_side'];
       const crm = params['crm'];
       const token = params['access_token'];
-      const instanceUrl = params['instance_url']; // <--- Capture from URL
+      const instanceUrl = params['instance_url'];
       const apiDomain = params['api_domain'];
       const accountsServer = params['accounts_server'];
 

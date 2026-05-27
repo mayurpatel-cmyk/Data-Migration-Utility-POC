@@ -9,14 +9,14 @@ import re
 router = APIRouter()
 
 # ==========================================
-# HELPER 1: CHUNK DATASET
+#  CHUNK DATASET
 # ==========================================
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
 # ==========================================
-# HELPER 2: DEPENDENCY SORTER
+#  DEPENDENCY SORTER
 # ==========================================
 def sort_jobs_by_dependency(jobs):
     sorted_jobs = []
@@ -63,7 +63,7 @@ def sort_jobs_by_dependency(jobs):
     return sorted_jobs + pass3_jobs
 
 # ==========================================
-# HELPER 3: PAYLOAD BUILDER 
+#  PAYLOAD BUILDER 
 # ==========================================
 def build_payload(raw_records, mappings, options):
     skip_self_ref = options.get("skipSelfReferencing", False)
@@ -192,7 +192,7 @@ async def websocket_migration(websocket: WebSocket):
                 if not mappings: continue
 
                 # ------------------------------------------
-                # STEP 1: EXTRACT (With Massive Pagination)
+                # EXTRACT (With Massive Pagination)
                 # ------------------------------------------
                 source_records = job.get("rawRecords")
                 
@@ -324,7 +324,7 @@ async def websocket_migration(websocket: WebSocket):
                             continue
 
                 # ------------------------------------------
-                # Helper: Salesforce Upload Function
+                # Salesforce Upload Function
                 # ------------------------------------------
                 async def execute_sf_bulk(sf_payload, sf_op, pass_name="Standard"):
                     nonlocal total_success, total_error
@@ -442,9 +442,8 @@ async def websocket_migration(websocket: WebSocket):
 
 
 
-
-    # ==========================================
-# ROUTE: MASSIVE STREAMING VALIDATION (WS)
+# ==========================================
+# MASSIVE STREAMING VALIDATION (WS)
 # ==========================================
 @router.websocket("/ws/validate-stream")
 async def websocket_validate_stream(websocket: WebSocket):
@@ -518,7 +517,7 @@ async def websocket_validate_stream(websocket: WebSocket):
 
                     if not chunk_records: break
                     
-                    # --- MAGIC: Validate JUST this chunk of 1000 using your service ---
+                    # --- Validate JUST this chunk of 1000 using your service ---
                     chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
                     
                     # Update running totals
@@ -572,7 +571,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                         
                     if not chunk_records: break
                     
-                    # --- MAGIC: Validate chunk ---
+                    # ---  Validate chunk ---
                     chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
                     
                     aggregate_stats["total"] += chunk_result["stats"]["total"]
