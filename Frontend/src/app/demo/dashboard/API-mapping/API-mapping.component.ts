@@ -27,6 +27,7 @@ interface MappingRow {
   searchQuery?: string;
   relationalExtIdField?: string;
   parentObjectName?: string;
+  massUpdateValue?: string;
 }
 
 interface CrmEntity {
@@ -53,6 +54,7 @@ export class ApiMappingComponent implements OnInit {
   targetCrmId: string = '';
   sourceSystem = 'Unknown';
   targetSystem = 'Unknown';
+  currentSessionId: string = '';
 
   // Dynamic Entity Lists for Dropdowns
   sourceEntities: CrmEntity[] = [];
@@ -766,31 +768,37 @@ export class ApiMappingComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
-  async validateData() {
+  async validateData(isRevalidation: boolean = false, fixedRecords: any[] = []) {
     if (this.mappedCount === 0) {
       this.toastr.error('Validation Aborted: You must map at least one field to validate data.');
       return;
     }
 
-    const confirmResult = await Swal.fire({
-      title: 'Validate Entire Database?',
-      text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
-      icon: 'info',
-      showCancelButton: true,
-      confirmButtonColor: '#0d6efd',
-      cancelButtonColor: '#6c757d',
-      confirmButtonText: 'Yes, Start Validation Stream'
-    });
+    // Only show the big popup and wipe stats if it is a FRESH run
+    if (!isRevalidation) {
+      const confirmResult = await Swal.fire({
+        title: 'Validate Entire Database?',
+        text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonColor: '#0d6efd',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Yes, Start Validation Stream'
+      });
 
-    if (!confirmResult.isConfirmed) return;
+      if (!confirmResult.isConfirmed) return;
 
-    this.jobStatus = 'Connecting...';
-    this.logMessages = [];
+      this.jobStatus = 'Connecting...';
+      this.logMessages = [];
+      this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+      this.validationResults = { invalidRecords: [] };
+      this.currentSessionId = ''; 
+    } else {
+      this.jobStatus = 'Re-validating...';
+      this.toastr.info('Checking fixed records against Salesforce rules...', 'Re-validating');
+    }
+
     this.isValidating = true;
-    
-    // Reset stats so UI zeroes out before the counter starts spinning
-    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
-    this.validationResults = { invalidRecords: [] };
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
@@ -814,7 +822,11 @@ export class ApiMappingComponent implements OnInit {
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }
 
+    // Inject the Revalidation flags into the payload
     const payload = {
+      isRevalidation: isRevalidation,        // <--- NEW
+      sessionId: this.currentSessionId,      // <--- NEW
+      fixedRecords: fixedRecords,            // <--- NEW
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
       query: safeQuery,
@@ -858,6 +870,9 @@ export class ApiMappingComponent implements OnInit {
         // --- FINAL RESULTS INJECTION ---
         if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
            this.validationResults.invalidRecords = data.invalidRecords;
+           if (data.sessionId) {
+             this.currentSessionId = data.sessionId; // Save the session!
+           }
            
            if (data.invalidRecords.length >= 500) {
              this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
@@ -890,6 +905,34 @@ export class ApiMappingComponent implements OnInit {
     };
   }
 
+  applyMassUpdate(sourceField: string, value: string | undefined) {
+    if (value === undefined) value = '';
+    
+    // Check if there are actually records to update
+    if (!this.validationResults || !this.validationResults.invalidRecords || this.validationResults.invalidRecords.length === 0) {
+      return;
+    }
+
+    let updatedCount = 0;
+
+    // Loop through ALL error records, but ONLY apply the fix if that specific cell failed!
+    this.validationResults.invalidRecords.forEach((record: any) => {
+      if (this.hasCellError(record, sourceField)) {
+        record.originalRow[sourceField] = value;
+        this.markAsEdited(record, sourceField);
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
+      this.toastr.success(`Updated '${sourceField}' across ${updatedCount} records. Correct data was left untouched!`, 'Mass Update Applied');
+    } else {
+      this.toastr.info(`No records had an error in '${sourceField}', so nothing was changed.`, 'No Updates Needed');
+    }
+
+    this.cdr.detectChanges();
+  }
+
   hasErrorsInColumn(sourceField: string): boolean {
     if (!this.validationResults?.invalidRecords) return false;
     const searchStr = `[${sourceField}:`;
@@ -907,11 +950,14 @@ export class ApiMappingComponent implements OnInit {
     record._editedFields[fieldName] = true;
   }
 
-  async revalidatePreview() {
+ async revalidatePreview() {
     if (!this.validationResults?.invalidRecords?.length) return;
+    
+    // Grab all the rows currently in the error grid (including the user's edits)
     const recordsToTest = this.validationResults.invalidRecords.map((ir: any) => ir.originalRow);
-    this.previewRecords = recordsToTest; 
-    await this.validateData(); 
+    
+    // Pass True to trigger the shortcut in Python
+    await this.validateData(true, recordsToTest); 
   }
 
   downloadCSV(data: any[], filename: string) {
@@ -1048,7 +1094,13 @@ export class ApiMappingComponent implements OnInit {
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }
 
+    const fixedRecords = this.validationResults?.invalidRecords
+      ?.filter((rec: any) => rec._editedFields) // Only grab rows the user actually touched
+      ?.map((rec: any) => rec.originalRow) || [];
+
     const job = {
+      sessionId: this.currentSessionId,
+      fixedRecords: fixedRecords,
       sourceObject: this.selectedSourceObject,
       targetObject: this.selectedTargetObject,
       extractionQuery: safeQuery,

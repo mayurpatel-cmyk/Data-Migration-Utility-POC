@@ -486,11 +486,13 @@
                       <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
                     </th>
                     @for (mapping of mappings; track mapping.sourceField) {
-                      @if (mapping.targetField) {
-                        <th class="py-2 px-3 align-middle" style="min-width: 180px;" 
-                            [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" 
-                            [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
-                          <div class="d-flex flex-column align-items-start gap-1">
+                    @if (mapping.targetField) {
+                      <th class="py-2 px-3 align-middle transition-all" style="min-width: 180px;" 
+                          [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)" 
+                          [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
+                        
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                          <div class="d-flex flex-column align-items-start gap-1 w-100">
                             <span class="d-block fw-bold lh-1 text-truncate w-100" 
                                   [class.text-danger]="hasErrorsInColumn(mapping.sourceField)" 
                                   title="{{ mapping.sourceField }}">
@@ -500,9 +502,26 @@
                               ➔ {{ mapping.targetField }}
                             </small>
                           </div>
-                        </th>
-                      }
+                          
+                          @if (hasErrorsInColumn(mapping.sourceField)) {
+                            <span class="badge bg-danger shadow-sm"><i class="feather icon-alert-circle"></i> Error</span>
+                          }
+                        </div>
+
+                        @if (hasErrorsInColumn(mapping.sourceField)) {
+                          <div class="input-group input-group-sm mt-2 shadow-sm animate__animated animate__fadeIn">
+                            <input type="text" class="form-control border-danger-subtle" placeholder="Fix all {{mapping.sourceField}}..."
+                                   [(ngModel)]="mapping.massUpdateValue">
+                            <button class="btn btn-danger px-2" type="button" title="Apply to all error rows"
+                                    (click)="applyMassUpdate(mapping.sourceField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
+                              <i class="feather icon-check"></i>
+                            </button>
+                          </div>
+                        }
+
+                      </th>
                     }
+                  }
                   </tr>
                 </thead>
                 <tbody class="small">
