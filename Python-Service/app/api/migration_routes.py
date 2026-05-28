@@ -226,39 +226,43 @@ async def websocket_migration(websocket: WebSocket):
                 fixed_records = job.get("fixedRecords", [])
                 source_records = []
                 
-                used_staging_db = False # NEW: Strict flag to prevent accidental API fallbacks
-
+                # 1. If we are running from the UI, we MUST have a Session ID
                 if session_id:
-                    import tempfile
-                    # FORCE the absolute path so Python never loses the file
-                    db_path = os.path.join(tempfile.gettempdir(), f"temp_staging_{session_id}.db")
+                    db_path = get_db_path(session_id)
                     
                     if os.path.exists(db_path):
-                        used_staging_db = True
-                        await send_log(f"[{target_object}] Reading validated payload from staging database...")
+                        await send_log(f"[{target_object}] Reading strictly validated payload from staging database...")
                         import sqlite3
                         import json
-                        conn = sqlite3.connect(db_path)
-                        cursor = conn.cursor()
                         
-                        # Load ONLY the valid records
-                        cursor.execute("SELECT data FROM records WHERE is_valid = 1")
-                        source_records = [json.loads(row[0]) for row in cursor.fetchall()]
-                        conn.close()
-                        
-                        # Apply the user's manual UI fixes to the payload
-                        if fixed_records:
-                            await send_log(f"[{target_object}] Merging {len(fixed_records)} manual UI corrections into payload...")
-                            source_records.extend(fixed_records)
-                        
-                        job["rawRecords"] = source_records
-                        
-                        # THE FIX: We REMOVED os.remove(db_path) here. 
-                        # This allows you to click 'Run Job' multiple times safely without it deleting your data!
+                        try:
+                            conn = sqlite3.connect(db_path)
+                            cursor = conn.cursor()
+                            
+                            # ONLY load records that perfectly passed validation
+                            cursor.execute("SELECT data FROM records WHERE is_valid = 1")
+                            source_records = [json.loads(row[0]) for row in cursor.fetchall()]
+                            conn.close()
+                            
+                            if not source_records:
+                                await send_log(f"[{target_object}] FATAL: No valid records found in database. Fix errors and Re-Validate first.", "Failed")
+                                continue # Skip this job entirely
+                                
+                            job["rawRecords"] = source_records
+                            await send_log(f"[{target_object}] Loaded {len(source_records)} perfectly valid records ready for migration.")
+                            
+                        except Exception as e:
+                            await send_log(f"[{target_object}] FATAL: Database read error: {str(e)}", "Failed")
+                            continue
+                            
                     else:
-                        await send_log("Warning: Staging payload expired or missing. Falling back to live API fetch.", "Warning")
+                        # THE FIX: If the file is missing, ABORT! Do not fall back to the API.
+                        await send_log(f"[{target_object}] FATAL: Staging payload expired or missing. Please click 'Validate' to generate a fresh payload.", "Failed")
+                        continue # Skip this job entirely
                 
-                if not used_staging_db:
+                # 2. Only allow live API fetching if there is NO session ID at all (e.g., Scheduled Background Jobs)
+                else:
+                    await send_log(f"[{target_object}] No UI session detected. Initiating direct API extraction...")
                     source_records = []
                     
                     # ======================================
@@ -519,7 +523,6 @@ async def websocket_validate_stream(websocket: WebSocket):
         session_id = payload.get("sessionId", "")
 
         if is_revalidation and session_id:
-            # THE FIX: Now it looks in the exact same temporary folder for Re-Validation!
             db_path = get_db_path(session_id) 
             
             if not os.path.exists(db_path):
@@ -537,13 +540,21 @@ async def websocket_validate_stream(websocket: WebSocket):
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # 1. Process the fixed records through the validation engine
+            # 1. EXTRACT DB IDs & CLEAN PAYLOAD
+            db_ids_to_delete = []
+            for rec in fixed_records:
+                if "_db_id" in rec:
+                    db_ids_to_delete.append(rec.pop("_db_id")) # Remove ID so it doesn't break Salesforce schema
+
+            # 2. Process the fixed records through the validation engine
             chunk_result = process_validation_batch(fixed_records, mappings, dedupe_key, sf_rules, "")
 
-            # 2. Wipe the OLD errors from the database
-            cursor.execute("DELETE FROM records WHERE is_valid = 0")
+            # 3. DELETE ONLY THE SPECIFIC 500 ROWS THE USER JUST FIXED
+            if db_ids_to_delete:
+                placeholders = ','.join(['?'] * len(db_ids_to_delete))
+                cursor.execute(f"DELETE FROM records WHERE id IN ({placeholders})", db_ids_to_delete)
 
-            # 3. Insert the newly tested records (some might pass, some might fail again)
+            # 4. Insert the newly tested records (If they failed again, they go back to errors)
             valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
             invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
 
@@ -551,13 +562,27 @@ async def websocket_validate_stream(websocket: WebSocket):
             conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
             conn.commit()
 
-            # 4. Recalculate totals directly from the database
+            # 5. Recalculate totals directly from the database
             cursor.execute("SELECT COUNT(*) FROM records")
             total_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 1")
             valid_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 0")
             invalid_count = cursor.fetchone()[0]
+
+            # 6. GRAB THE NEXT 500 ERRORS FOR THE CONTINUOUS INBOX
+            cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
+            db_errors = cursor.fetchall()
+            
+            all_invalid_records = []
+            for row in db_errors:
+                rec_data = json.loads(row[1])
+                rec_data["_db_id"] = row[0] # Inject DB ID for the next round
+                all_invalid_records.append({
+                    "originalRow": rec_data,
+                    "errors": row[2]
+                })
+
             conn.close()
 
             aggregate_stats = {
@@ -567,10 +592,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                 "duplicates": chunk_result["stats"].get("duplicates", 0)
             }
 
-            all_invalid_records = chunk_result.get("invalidRecords", [])[:500]
-
             await websocket.send_json({
-                "log": f"Re-validation Complete: {len(valid_inserts)} fixed, {len(invalid_inserts)} still invalid.",
+                "log": f"Re-validation Complete: Fixed {len(valid_inserts)} records. {invalid_count} errors remaining.",
                 "status": "Validation Passed" if invalid_count == 0 else "Validation Warning",
                 "stats": aggregate_stats,
                 "invalidRecords": all_invalid_records,
@@ -596,26 +619,19 @@ async def websocket_validate_stream(websocket: WebSocket):
         zoho_token = payload.get("zohoToken", "")
         zoho_api_domain = payload.get("zohoDomain", "")
 
-        # 1. Clean the object name so it is safe for file paths (e.g. removes spaces/slashes)
+        # Generate Smart Session ID
         safe_obj = ''.join(e for e in obj_name if e.isalnum()).lower()
         if not safe_obj: safe_obj = "unknown"
-        
-        # 2. Get current timestamp (YYYYMMDD_HHMMSS)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # 3. Get a short 8-character UUID to guarantee uniqueness if two jobs run the exact same second
         short_uuid = str(uuid.uuid4())[:8]
-
-        # 4. Construct the Smart Session ID
-        # Example Output: salesforce_account_20260528_153000_a1b2c3d4
         session_id = f"{crm_id}_{safe_obj}_{timestamp}_{short_uuid}"
+        
         db_path = get_db_path(session_id)
         
         conn = sqlite3.connect(db_path)
         conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
         
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
-        all_invalid_records = [] 
 
         await websocket.send_json({"log": f"System: Initializing Streaming Validation...", "status": "Connecting"})
 
@@ -670,10 +686,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
 
-                    if len(all_invalid_records) < 500:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
-
                     await websocket.send_json({
                         "log": f"Validated {aggregate_stats['total']} records so far...",
                         "status": "Validating",
@@ -722,10 +734,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     aggregate_stats["valid"] += chunk_result["stats"]["valid"]
                     aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
-                    
-                    if len(all_invalid_records) < 500:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
 
                     await websocket.send_json({
                         "log": f"Validated {aggregate_stats['total']} records so far...",
@@ -816,10 +824,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     aggregate_stats["valid"] += chunk_result["stats"]["valid"]
                     aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
-                    
-                    if len(all_invalid_records) < 500:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
 
                     await websocket.send_json({
                         "log": f"Validated {aggregate_stats['total']} records so far...",
@@ -835,6 +839,22 @@ async def websocket_validate_stream(websocket: WebSocket):
                 await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
                 await websocket.close()
                 return
+
+        # ----------------------------------------------------
+        # GRAB THE TOP 500 ERRORS FOR INITIAL UI LOAD
+        # ----------------------------------------------------
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
+        db_errors = cursor.fetchall()
+        
+        all_invalid_records = []
+        for row in db_errors:
+            rec_data = json.loads(row[1])
+            rec_data["_db_id"] = row[0] # Inject DB ID
+            all_invalid_records.append({
+                "originalRow": rec_data,
+                "errors": row[2]
+            })
 
         conn.close()
 
