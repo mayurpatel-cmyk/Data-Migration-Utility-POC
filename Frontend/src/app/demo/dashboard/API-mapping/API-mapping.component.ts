@@ -545,16 +545,33 @@ export class ApiMappingComponent implements OnInit {
         return false;
       }
 
-      // Catch random text strings by enforcing SQL operators
-      if (!queryLower.includes('=') && !queryLower.includes('<') && !queryLower.includes('>') && 
-          !queryLower.includes('like') && !queryLower.includes(' is ')) {
-        this.queryError = "Invalid Syntax: Your query is missing SQL operators (e.g., =, <, >, LIKE).";
-        return false;
+      // Check if this is a SELECT query and if it has a WHERE clause
+      const hasSelect = queryLower.startsWith('select ');
+      const hasWhere = queryLower.includes(' where ');
+      let conditionPart = '';
+
+      if (hasSelect) {
+        if (hasWhere) {
+          conditionPart = queryLower.split(' where ')[1];
+        }
+        // If it has SELECT but no WHERE, there are no conditions to check!
+      } else {
+        // If it doesn't start with SELECT, we assume the whole string is a WHERE clause
+        conditionPart = queryLower;
       }
 
-      if (queryLower.startsWith('select ') && queryLower.includes(' from ')) {
+      // Only enforce operators if there is actually a condition typed out
+      if (conditionPart.trim() !== '') {
+        if (!conditionPart.includes('=') && !conditionPart.includes('<') && !conditionPart.includes('>') && 
+            !conditionPart.includes('like') && !conditionPart.includes(' is ')) {
+          this.queryError = "Invalid Syntax: Your query condition is missing SQL operators (e.g., =, <, >, LIKE).";
+          return false;
+        }
+      }
+
+      if (hasSelect && queryLower.includes(' from ')) {
         const fromParts = queryLower.split(' from ');
-        const objPart = fromParts[1].split(' ')[0].trim();
+        const objPart = fromParts[1].trim().split(' ')[0];
         if (objPart && objPart.toLowerCase() !== this.selectedSourceObject.toLowerCase()) {
           this.queryError = `Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`;
           return false;
@@ -594,7 +611,7 @@ export class ApiMappingComponent implements OnInit {
       }
     }
 
-    return this.queryError === null; 
+    return this.queryError === null;
   }
 
   loadHistoricalQuery(query: string) {
