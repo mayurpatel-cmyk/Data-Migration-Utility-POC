@@ -184,18 +184,20 @@
           </div>
         </div>
         
-        <textarea 
-          class="form-control form-control-sm font-monospace shadow-sm" 
-          [ngClass]="queryError ? 'is-invalid border-danger text-danger' : 'border-secondary'"
-          rows="3" 
-          [(ngModel)]="customQuery" 
-          (ngModelChange)="queryError = null" 
-          placeholder="{{ queryContext.placeholder }}"
-          [disabled]="!selectedSourceObject">
-        </textarea>
+        <div class="border rounded shadow-sm overflow-hidden" 
+             [ngClass]="queryError ? 'border-danger' : 'border-secondary-subtle'" 
+             style="height: 120px; border-width: 2px !important;">
+          <ngx-monaco-editor
+            [options]="editorOptions"
+            [(ngModel)]="customQuery"
+            (ngModelChange)="queryError = null"
+            (onInit)="onEditorInit($event)"
+            style="height: 100%; width: 100%;">
+          </ngx-monaco-editor>
+        </div>
         
         @if (queryError) {
-          <div class="text-danger small fw-bold mt-1 animate__animated animate__headShake" style="font-size: 0.75rem;">
+          <div class="text-danger small fw-bold mt-2 animate__animated animate__headShake" style="font-size: 0.75rem;">
             <i class="feather icon-alert-triangle"></i> {{ queryError }}
           </div>
         }
@@ -216,10 +218,22 @@
     </div>
 
     <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1" style="height: 400px; overflow: hidden;">
-      <div class="card-header bg-white py-3 border-bottom flex-shrink-0">
+      <div class="card-header bg-white py-3 border-bottom flex-shrink-0 d-flex justify-content-between align-items-center">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
           <i class="feather icon-list text-primary"></i> Source Data Preview
         </h6>
+        
+        <div class="d-flex align-items-center gap-2 animate__animated animate__fadeIn">
+          <label class="small fw-bold text-muted mb-0">Rows:</label>
+          <select class="form-select form-select-sm shadow-sm border-secondary-subtle" 
+                  style="width: 70px; cursor: pointer; font-size: 0.8rem;"
+                  [(ngModel)]="previewLimit"
+                  (change)="changePreviewLimit(previewLimit)">
+            <option [value]="5">5</option>
+            <option [value]="25">25</option>
+            <option [value]="50">50</option>
+          </select>
+        </div>
       </div>
       <div class="card-body p-0 flex-grow-1 overflow-auto bg-white">
         @if (isLoading || isPreviewLoading) {
@@ -252,21 +266,42 @@
               </tr>
               } @else if(previewRecords.length === 0) {
               <tr>
-                <td [colSpan]="previewHeaders.length + 1" class="text-center text-muted p-5">
+                <td colspan="100%" class="text-center text-muted p-5">
                   <i class="feather icon-inbox fs-2 mb-2 d-block opacity-50"></i>
                   No records found matching this criteria.
                 </td>
               </tr>
               }
-              @for (row of previewRecords; track $index) {
-              <tr style="cursor: default;">
-                <td class="text-center text-muted fw-bold bg-light border-end" style="width: 40px;">{{ $index + 1 }}</td>
+              
+              @for (row of previewRecords; track $index; let i = $index) {
+              <tr class="cursor-pointer btn-hover-lift" (click)="toggleRowExpand(i)" [class.bg-light]="expandedRowIndex === i">
+                <td class="text-center text-muted fw-bold border-end align-middle" style="width: 40px; background-color: inherit;">
+                  @if (expandedRowIndex === i) {
+                    <i class="feather icon-chevron-down text-primary"></i>
+                  } @else {
+                    <i class="feather icon-chevron-right"></i>
+                  }
+                </td>
+                
                 @for (header of previewHeaders; track header) {
-                <td class="text-truncate px-3 text-secondary" style="max-width: 180px;" title="{{ row[header] }}">
-                  {{ row[header] !== null && row[header] !== undefined && row[header] !== '' ? row[header] : '--' }}
+                <td class="text-truncate px-3 align-middle text-secondary" style="max-width: 180px;" title="{{ row[header] }}">
+                  {{ row[header] !== null && row[header] !== undefined && row[header] !== '' ? row[header] : '' }}
                 </td>
                 }
               </tr>
+
+              @if (expandedRowIndex === i) {
+                <tr class="animate__animated animate__fadeIn">
+                  <td colspan="100%" class="p-0 border-bottom">
+                    <div class="bg-dark p-3 m-2 rounded shadow-inner position-relative" style="box-shadow: inset 0 3px 6px rgba(0,0,0,0.16);">
+                      <div class="position-absolute top-0 end-0 p-2">
+                        <span class="badge bg-primary">Raw Payload</span>
+                      </div>
+                      <pre class="text-light mb-0 font-monospace" style="font-size: 0.75rem; white-space: pre-wrap; word-break: break-word;">{{ row | json }}</pre>
+                    </div>
+                  </td>
+                </tr>
+              }
               }
             </tbody>
           </table>
@@ -278,21 +313,25 @@
   
   <div class="col-xl-5 col-lg-6">
     <div class="card shadow-sm border-0 bg-light d-flex flex-column" style="height: 550px;">
-      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center flex-shrink-0">
-        <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
-          <i class="feather icon-git-merge text-info"></i> Field Mapping
-        </h6>
-        <span class="badge bg-primary-subtle text-primary">{{ mappedCount }} / {{ mappings.length }} Mapped</span>
+      
+      <div class="card-header bg-white py-3 border-bottom flex-shrink-0">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
+            <i class="feather icon-git-merge text-info"></i> Field Mapping
+          </h6>
+          <span class="badge bg-primary-subtle text-primary">{{ mappedCount }} / {{ mappings.length }} Mapped</span>
+        </div>
       </div>
+
       @if (targetFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
-          <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle flex-shrink-0 animate__animated animate__fadeIn">
+          <div class="alert alert-warning py-2 mb-0 d-flex align-items-center gap-2 small border-warning-subtle flex-shrink-0 border-start-0 border-end-0 rounded-0 animate__animated animate__fadeIn">
             <i class="feather icon-alert-triangle text-warning fs-5"></i>
             <div>
-              <strong class="text-dark">Missing Required Fields:</strong> You must map columns to the following fields:
+              <strong class="text-dark">Missing Required Fields:</strong>
               <span class="text-danger fw-bold ms-1">{{ getMissingRequiredFields().join(', ') }}</span>
             </div>
           </div>
-        }
+      }
 
       <div class="card-body p-3 d-flex flex-column flex-grow-1 overflow-hidden">
 
@@ -300,20 +339,18 @@
              style="transition: 0.3s ease;"
              [class.opacity-50]="!selectedTargetObject"
              [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
-          <h6 class="fw-bold text-primary-emphasis mb-2"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-primary-emphasis m-0"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
+            <!-- <div class="form-check form-switch m-0" title="Hide fields you have already mapped">
+              <input class="form-check-input cursor-pointer" type="checkbox" id="hideMapped" [(ngModel)]="hideMappedFields">
+              <label class="form-check-label small text-primary-emphasis fw-bold cursor-pointer" for="hideMapped">Hide Mapped</label>
+            </div> -->
+          </div>
           <div class="d-flex flex-wrap gap-3 mb-2">
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpInsert" value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
               <label class="form-check-label fw-bold cursor-pointer small" for="apiOpInsert">Insert</label>
             </div>
-            <!-- <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpdate" value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpdate">Update</label>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpsert" value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpsert">Upsert</label>
-            </div> -->
           </div>
           <div class="row g-2 mt-1">
             @if (['insert', 'update', 'upsert'].includes(operationMode)) {
@@ -333,9 +370,7 @@
             }
             <div class="col-auto">
               <div class="input-group input-group-sm shadow-sm" style="width: 160px;">
-                <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold" title="Batch Size">
-                  <i class="feather icon-database text-primary me-1"></i> Batch
-                </span>
+                <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold">Batch</span>
                 <input type="number" class="form-control border-secondary-subtle text-center fw-bold text-primary" [(ngModel)]="batchSize" min="10" max="10000" step="1000">
               </div>
             </div>
@@ -351,35 +386,59 @@
           <div class="d-flex flex-column align-items-center justify-content-center h-100 text-muted opacity-50 pt-2">
             <i class="feather icon-git-merge mb-3" style="font-size: 3.5rem;"></i>
             <h5 class="fw-bold">Awaiting Schema</h5>
-            <small>Select entities above to map fields.</small>
+          </div>
+          } @else if (visibleMappings.length === 0 && hideMappedFields) {
+          <div class="d-flex flex-column align-items-center justify-content-center h-100 text-success pt-2 animate__animated animate__fadeIn">
+            <i class="feather icon-check-circle mb-3" style="font-size: 3.5rem;"></i>
+            <h5 class="fw-bold">All Fields Mapped!</h5>
           </div>
           } @else {
-          @for (mapping of mappings; track mapping.sourceField; let i = $index) {
+          
+          @for (mapping of visibleMappings; track mapping.sourceField; let i = $index) {
           <div class="d-flex align-items-center gap-2 mb-2 animate__animated animate__fadeIn">
+            
             <div class="flex-grow-1" style="flex-basis: 45%;">
-              <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed" title="{{ mapping.sourceLabel }}">
-                <small class="fw-bold text-dark">{{ mapping.sourceLabel }}</small>
+              <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center" title="{{ mapping.sourceLabel }}">
+                <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+                <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1" style="font-size: 0.6rem;">
+                  {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
+                </span>
               </div>
             </div>
+            
             <div class="text-center text-muted px-1">
               <i class="feather icon-arrow-right small"></i>
             </div>
+            
             <div class="flex-grow-1" style="flex-basis: 45%;">
               <div class="position-relative" (click)="$event.stopPropagation()">
-                <div class="form-select form-select-sm cursor-pointer bg-white shadow-sm border-info" (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.targetField">
-                  {{ getTargetFieldLabel(mapping.targetField) || '-- Select Field --' }}
+                <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
+                     [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                     (click)="toggleDropdown(mapping, $event)">
+                  
+                  <span class="text-truncate" [class.text-muted]="!mapping.targetField">
+                    {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
+                  </span>
+                  
+                  @if (isTypeMismatch(mapping)) {
+                    <i class="feather icon-alert-triangle text-danger" title="Type Mismatch! You are mapping incompatible data types."></i>
+                  } @else if (mapping.targetField) {
+                    <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}" style="font-size: 0.6rem;">
+                      {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+                    </span>
+                  }
                 </div>
+
                 @if (isReferenceField(mapping.targetField)) {
                   <div class="mt-1 d-flex align-items-center gap-1 animate__animated animate__fadeIn">
-                    <i class="feather icon-link text-warning" title="Relational Lookup"></i>
+                    <i class="feather icon-link text-warning"></i>
                     <div class="input-group input-group-sm shadow-sm">
-                      <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis" style="font-size: 0.7rem;">
-                        Parent Ext ID
-                      </span>
-                      <input type="text" class="form-control form-control-sm border-warning-subtle" [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Zendesk_Id__c or Id">
+                      <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis" style="font-size: 0.7rem;">Parent Ext ID</span>
+                      <input type="text" class="form-control form-control-sm border-warning-subtle" [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id">
                     </div>
                   </div>
                 }
+
                 @if (mapping.isDropdownOpen) {
                   <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
                     <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
@@ -392,15 +451,23 @@
                       <i class="feather icon-slash"></i> -- Ignore --
                     </div>
                     @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectField(mapping, field.name)" [class.bg-light]="mapping.targetField === field.name">
-                        <span class="fw-bold text-dark">{{ field.label }}</span>
-                        <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+                      <div class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start" 
+                           (click)="selectField(mapping, field.name)" 
+                           [class.bg-light]="mapping.targetField === field.name">
+                        <div>
+                          <span class="fw-bold text-dark">{{ field.label }} 
+                            @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
+                          </span>
+                          <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+                        </div>
+                        <span class="badge {{ getFieldTypeBadge(field.type) }} mt-1" style="font-size: 0.6rem;">{{ field.type || 'string' }}</span>
                       </div>
                     }
                   </div>
                 }
               </div>
             </div>
+            
             <div>
               <button class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex" (click)="clearMapping(i)">
                 <i class="feather icon-x"></i>
@@ -415,11 +482,11 @@
           <div class="d-flex align-items-center gap-3">
             <div class="form-check form-switch m-0" title="Enforce Strict Salesforce Rules">
               <input class="form-check-input cursor-pointer" type="checkbox" id="strictMapping" [(ngModel)]="isStrictMapping" [disabled]="!selectedTargetObject">
-              <label class="form-check-label small text-muted cursor-pointer" for="strictMapping">Strict</label>
+              <label class="form-check-label small text-muted cursor-pointer" for="strictMapping">Strict Type Match</label>
             </div>
             <div class="d-flex gap-2">
               <button class="btn btn-sm btn-white border shadow-sm text-primary btn-hover-lift" (click)="autoMap()" [disabled]="!selectedTargetObject || mappings.length === 0" title="Auto Map">
-                <i class="feather icon-cpu text-info"></i> Auto
+                <i class="feather icon-cpu text-info"></i> Auto Map
               </button>
               <button class="btn btn-sm btn-white border shadow-sm text-danger btn-hover-lift" (click)="resetAllMappings()" [disabled]="!selectedTargetObject || mappings.length === 0" title="Clear All">
                 <i class="feather icon-trash-2 text-danger"></i> Clear

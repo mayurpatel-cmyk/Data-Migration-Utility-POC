@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { forkJoin } from 'rxjs';
@@ -8,7 +8,10 @@ import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
+import { EditorComponent } from 'ngx-monaco-editor-v2';
+import { environment } from 'src/environments/environment';
 
+declare const monaco: any;
 interface FieldMeta {
   name: string;
   label: string;
@@ -35,19 +38,22 @@ interface CrmEntity {
   label: string;
 }
 
+
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent],
+  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent,EditorComponent],
   templateUrl: './API-mapping.component.html',
   styleUrls: ['./API-mapping.component.scss']
 })
-export class ApiMappingComponent implements OnInit {
+export class ApiMappingComponent implements OnInit,OnDestroy {
   private router = inject(Router);
   private mappingApi = inject(MappingApiService);
   private cdr = inject(ChangeDetectorRef);
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
+  private validationSocket: WebSocket | null = null;
+  private migrationSocket: WebSocket | null = null;
 
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
@@ -55,6 +61,7 @@ export class ApiMappingComponent implements OnInit {
   sourceSystem = 'Unknown';
   targetSystem = 'Unknown';
   currentSessionId: string = '';
+  previewLimit: number = 5;
 
   // Dynamic Entity Lists for Dropdowns
   sourceEntities: CrmEntity[] = [];
@@ -74,6 +81,7 @@ export class ApiMappingComponent implements OnInit {
   externalIdField = '';
   mappedCount = 0;
   isStrictMapping = false;
+  hideMappedFields = false;
 
   // Execution Variables
   jobStatus = 'Idle';
@@ -96,10 +104,30 @@ export class ApiMappingComponent implements OnInit {
   targetSearchQuery = '';
   isHistoryDropdownOpen = false;
   
+  expandedRowIndex: number | null = null;
+  
   operationMode: string = 'insert';
   batchSize: number = 5000;
   
   recentQueries: string[] = [];
+  // --- MONACO EDITOR CONFIGURATION ---
+  editorOptions = {
+    theme: 'vs', // Use 'vs-dark' if you want a dark code editor!
+    language: 'sql', // Highlights SELECT, WHERE, AND, OR automatically
+    minimap: { enabled: false }, // Hides the code minimap on the right
+    scrollBeyondLastLine: false,
+    wordWrap: 'on',
+    lineNumbers: 'off',
+    renderLineHighlight: 'none',
+    fontSize: 13,
+    padding: { top: 10, bottom: 10 },
+    suggestOnTriggerCharacters: true
+  };
+  
+  monacoEditorInstance: any;
+  completionProvider: any;
+
+  
 
   ngOnInit(): void {
     this.sourceSystem = localStorage.getItem('source_crm_slot') || 'Zendesk';
@@ -112,6 +140,263 @@ export class ApiMappingComponent implements OnInit {
     this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
     this.preloadEntirePage();
+  }
+
+  ngOnDestroy() {
+    // 1. Kill active websockets
+    if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
+      this.validationSocket.close();
+    }
+    if (this.migrationSocket && this.migrationSocket.readyState === WebSocket.OPEN) {
+      this.migrationSocket.close();
+    }
+    
+    // 2. Kill the VS Code engine to free up RAM
+    if (this.monacoEditorInstance) {
+      this.monacoEditorInstance.dispose();
+    }
+  }
+
+
+  get visibleMappings() {
+    return this.hideMappedFields ? this.mappings.filter(m => !m.targetField) : this.mappings;
+  }
+
+  changePreviewLimit(newLimit: number) {
+    // Force JavaScript to treat the dropdown value as a number
+    this.previewLimit = Number(newLimit); 
+    
+    // If they already selected an object, instantly fetch the new rows!
+    if (this.selectedSourceObject) {
+      this.applyFilter();
+    }
+  }
+
+  getFieldMeta(fieldName: string, side: 'source' | 'target'): FieldMeta | undefined {
+    return side === 'source' 
+      ? this.sourceFields.find(f => f.name === fieldName)
+      : this.targetFields.find(f => f.name === fieldName);
+  }
+  toggleRowExpand(index: number) {
+    this.expandedRowIndex = this.expandedRowIndex === index ? null : index;
+  }
+
+  getFieldTypeBadge(type: string | undefined): string {
+    if (!type) return 'bg-secondary';
+    const t = type.toLowerCase();
+    if (t.includes('string') || t.includes('text') || t.includes('email')) return 'bg-info text-dark';
+    if (t.includes('number') || t.includes('int') || t.includes('double') || t.includes('currency')) return 'bg-success';
+    if (t.includes('boolean')) return 'bg-warning text-dark';
+    if (t.includes('reference') || t.includes('lookup')) return 'bg-primary';
+    if (t.includes('date') || t.includes('time')) return 'bg-danger';
+    if (t.includes('picklist')) return 'bg-secondary';
+    return 'bg-secondary';
+  }
+
+  isTypeMismatch(mapping: MappingRow): boolean {
+    if (!mapping.targetField) return false;
+    const srcType = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase() || 'string';
+    const tgtType = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase() || 'string';
+
+    if (srcType === tgtType) return false;
+    
+    // Forgiving logic: Strings can usually map to picklists or text areas
+    if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
+    // Numbers can map to other numbers
+    if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType)) return false;
+
+    return true; // If it reaches here, it's a dangerous mismatch!
+  }
+
+ onEditorInit(editor: any) {
+    this.monacoEditorInstance = editor;
+
+    // Ensure we only register these providers once
+    if (!this.completionProvider) {
+      
+      // ==========================================
+      // FEATURE 1: DYNAMIC AUTOCOMPLETE
+      // ==========================================
+      this.completionProvider = monaco.languages.registerCompletionItemProvider('sql', {
+        provideCompletionItems: (model: any, position: any) => {
+          const word = model.getWordUntilPosition(position);
+          const range = {
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: word.startColumn, endColumn: word.endColumn
+          };
+
+          const suggestions: any[] = [];
+          const crm = this.sourceCrmId.toLowerCase();
+
+          // ------------------------------------
+          // A. ZENDESK MODE
+          // ------------------------------------
+          if (crm === 'zendesk') {
+            
+            // --- NEW: Context-Aware Value Suggestions ---
+            const lineContent = model.getLineContent(position.lineNumber);
+            const textBeforeCursor = lineContent.substring(0, position.column - 1);
+            
+            // 1. If typing a Status
+            if (textBeforeCursor.match(/\bstatus:[a-zA-Z]*$/)) {
+              const statuses = ['new', 'open', 'pending', 'hold', 'solved', 'closed'];
+              statuses.forEach(s => suggestions.push({
+                label: s, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: s + ' ', range: range,
+                detail: 'Zendesk Ticket Status'
+              }));
+              return { suggestions: suggestions }; // Return early so ONLY statuses show up
+            }
+            
+            // 2. If typing a Priority
+            if (textBeforeCursor.match(/\bpriority:[a-zA-Z]*$/)) {
+              const priorities = ['low', 'normal', 'high', 'urgent'];
+              priorities.forEach(p => suggestions.push({
+                label: p, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: p + ' ', range: range,
+                detail: 'Zendesk Ticket Priority'
+              }));
+              return { suggestions: suggestions }; 
+            }
+
+            // 3. If typing a Type
+            if (textBeforeCursor.match(/\btype:[a-zA-Z]*$/)) {
+              const types = ['ticket', 'user', 'organization', 'group'];
+              types.forEach(t => suggestions.push({
+                label: t, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: t + ' ', range: range,
+                detail: 'Zendesk Record Type'
+              }));
+              return { suggestions: suggestions }; 
+            }
+
+            // --- STANDARD ZENDESK SUGGESTIONS ---
+
+            // 4. Zendesk Smart Snippet
+            suggestions.push({
+              label: 'Active Tickets (Snippet)',
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: `type:ticket status<solved `,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Auto-generates a search for all unresolved tickets.',
+              range: range
+            });
+
+            // 5. Zendesk Keywords
+            const zdKeywords = ['type:', 'status:', 'priority:', 'tags:', 'assignee:', 'requester:', 'group:', 'created>', 'updated>', 'order_by:', 'sort:'];
+            zdKeywords.forEach(kw => {
+              suggestions.push({
+                label: kw,
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: kw, // No space after so they can type the value immediately
+                range: range
+              });
+            });
+
+            // 6. Zendesk CRM Fields
+            if (this.sourceFields && this.sourceFields.length > 0) {
+              this.sourceFields.forEach(field => {
+                suggestions.push({
+                  label: field.name,
+                  detail: `${field.label} (${field.type})`,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: field.name + ':', 
+                  range: range
+                });
+              });
+            }
+          }
+          // ------------------------------------
+          // B. SALESFORCE & ZOHO (SQL) MODE
+          // ------------------------------------
+          else {
+            suggestions.push({
+              label: 'SELECT (Basic)',
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: `SELECT * FROM ${this.selectedSourceObject || 'Object'} WHERE `,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Auto-generates a basic SELECT query for the current object.',
+              range: range
+            });
+
+            const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'LIKE', 'LIMIT', 'ORDER BY', 'ASC', 'DESC', 'NULL', 'IS', 'NOT', 'IN'];
+            sqlKeywords.forEach(kw => {
+              suggestions.push({
+                label: kw,
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: kw + ' ',
+                range: range
+              });
+            });
+
+            if (this.sourceFields && this.sourceFields.length > 0) {
+              this.sourceFields.forEach(field => {
+                suggestions.push({
+                  label: field.name,
+                  detail: `${field.label} (${field.type})`, 
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: field.name,
+                  range: range
+                });
+              });
+            }
+          }
+
+          return { suggestions: suggestions };
+        }
+      });
+
+      // ==========================================
+      // FEATURE 2: SMART HOVER TOOLTIPS
+      // ==========================================
+      monaco.languages.registerHoverProvider('sql', {
+        provideHover: (model: any, position: any) => {
+          const wordInfo = model.getWordAtPosition(position);
+          if (!wordInfo) return null;
+
+          // CLEANUP: Strip out Zendesk operators (:, <, >) so we can match the pure field name
+          const cleanWord = wordInfo.word.replace(/[:<>]/g, '').toLowerCase();
+
+          const field = this.sourceFields.find(f => f.name.toLowerCase() === cleanWord);
+          
+          if (field) {
+            return {
+              range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
+              contents: [
+                { value: `**${field.label}**` },
+                { value: `API Name: \`${field.name}\`` },
+                { value: `Type: **${field.type || 'String'}** | Required: **${field.isRequired || field.required ? 'Yes' : 'No'}**` }
+              ]
+            };
+          }
+          return null;
+        }
+      });
+    }
+  }
+
+  // Overwrite the old inject function to use Monaco's cursor placement
+  injectFieldAtCursor(fieldName: string) {
+    if (this.monacoEditorInstance) {
+      // Get the user's current cursor position inside the editor
+      const position = this.monacoEditorInstance.getPosition();
+      
+      // Inject the text exactly where they clicked
+      this.monacoEditorInstance.executeEdits('custom-inject', [{
+        range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+        text: fieldName + ' ',
+        forceMoveMarkers: true
+      }]);
+      
+      // Keep the editor focused so they can keep typing
+      this.monacoEditorInstance.focus();
+      this.customQuery = this.monacoEditorInstance.getValue();
+    } else {
+      // Fallback just in case Monaco hasn't fully loaded
+      if (!this.customQuery) {
+        this.customQuery = fieldName;
+      } else {
+        this.customQuery += ` ${fieldName}`;
+      }
+    }
+    this.validateQuery();
   }
 
   @HostListener('document:click', ['$event'])
@@ -436,6 +721,7 @@ export class ApiMappingComponent implements OnInit {
       objectName: this.selectedSourceObject,
       query: safeQuery, // Sent as safeQuery
       headers: this.previewHeaders,
+      limit: this.previewLimit,
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
@@ -445,7 +731,7 @@ export class ApiMappingComponent implements OnInit {
     };
 
     try {
-      const response = await fetch('http://localhost:8000/api/metadata/preview-filter', {
+      const response = await fetch(`${environment.apiUrl}/api/metadata/preview-filter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -489,46 +775,73 @@ export class ApiMappingComponent implements OnInit {
 
   validateQuery(): boolean {
     this.queryError = null; 
+
+    // --- NEW: Clear existing red squiggles every time they type ---
+    if (this.monacoEditorInstance) {
+      monaco.editor.setModelMarkers(this.monacoEditorInstance.getModel(), 'sql-validation', []);
+    }
+
     if (!this.customQuery) return true;
 
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
+    // --- NEW: Helper Function to Draw Red Squiggles ---
+    const applySquiggle = (errorMsg: string, offendingText: string): boolean => {
+      this.queryError = errorMsg;
+      
+      if (this.monacoEditorInstance && offendingText) {
+        const model = this.monacoEditorInstance.getModel();
+        const fullText = model.getValue().toLowerCase();
+        
+        // Find exactly where the bad text starts in the query
+        const startIndex = fullText.indexOf(offendingText.toLowerCase());
+        
+        if (startIndex !== -1) {
+          const startPos = model.getPositionAt(startIndex);
+          const endPos = model.getPositionAt(startIndex + offendingText.length);
+          
+          // Command Monaco to draw the red squiggly line!
+          monaco.editor.setModelMarkers(model, 'sql-validation', [{
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column,
+            message: errorMsg,
+            severity: monaco.MarkerSeverity.Error
+          }]);
+        }
+      }
+      return false;
+    };
+
     // ==========================================
     // 1. ZENDESK STRICT TOKEN VALIDATION
     // ==========================================
     if (crm === 'zendesk') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
-        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved";
-        return false;
+      if (queryLower.startsWith('select ') || queryLower.includes(' from ')) {
+        return applySquiggle("Zendesk doesn't support SQL. Format: type:ticket status<solved", "select");
       } else if (queryLower.includes(',')) {
-        this.queryError = "Do not use commas. Format: status:open tags:urgent";
-        return false;
+        return applySquiggle("Do not use commas. Format: status:open tags:urgent", ",");
       } else if (queryLower.includes(' = ')) {
-        this.queryError = "Use colons for exact matches. Format: status:open";
-        return false;
+        return applySquiggle("Use colons for exact matches. Format: status:open", "=");
       }
 
-      // Split by spaces and validate every single word/token
       const tokens = queryLower.split(/\s+/);
       const zendeskSystemFields = ['type', 'tags', 'status', 'priority', 'group_id', 'assignee_id', 'requester_id', 'submitter_id', 'organization_id', 'created', 'updated', 'order_by', 'sort'];
 
       for (const token of tokens) {
-        // If the token uses a Zendesk operator (:, <, >)
         const match = token.match(/^(-)?([a-zA-Z0-9_]+)[:<>](.*)$/);
         if (match) {
           const fieldName = match[2];
           if (!zendeskSystemFields.includes(fieldName)) {
             const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
             if (!schemaField) {
-              this.queryError = `Invalid Zendesk Field: '${fieldName}' does not exist on ${this.selectedSourceObject}.`;
-              return false;
+              return applySquiggle(`Invalid Zendesk Field: '${fieldName}' does not exist.`, fieldName);
             }
           }
         } else if (token.length > 0 && !token.includes('*') && !token.includes('-')) {
-          // Catch random junk words that have no operators
-          this.queryError = `Invalid Syntax: '${token}' is not formatted correctly. Use 'field:value' (e.g., status:open).`;
-          return false;
+          return applySquiggle(`Invalid Syntax: '${token}' is not formatted correctly.`, token);
         }
       }
     } 
@@ -537,15 +850,14 @@ export class ApiMappingComponent implements OnInit {
     // 2. SALESFORCE & ZOHO SQL VALIDATION
     // ==========================================
     else if (crm === 'salesforce' || crm === 'zoho') {
-      if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
-        this.queryError = "Do not use LIMIT or ORDER BY. The engine handles pagination automatically.";
-        return false;
+      if (queryLower.includes('limit ')) {
+        return applySquiggle("Do not use LIMIT. The engine handles pagination automatically.", "limit");
+      } else if (queryLower.includes('order by ')) {
+        return applySquiggle("Do not use ORDER BY.", "order by");
       } else if (queryLower.endsWith(';')) {
-        this.queryError = "Do not end your query with a semicolon (;).";
-        return false;
+        return applySquiggle("Do not end your query with a semicolon (;).", ";");
       }
 
-      // Check if this is a SELECT query and if it has a WHERE clause
       const hasSelect = queryLower.startsWith('select ');
       const hasWhere = queryLower.includes(' where ');
       let conditionPart = '';
@@ -554,18 +866,14 @@ export class ApiMappingComponent implements OnInit {
         if (hasWhere) {
           conditionPart = queryLower.split(' where ')[1];
         }
-        // If it has SELECT but no WHERE, there are no conditions to check!
       } else {
-        // If it doesn't start with SELECT, we assume the whole string is a WHERE clause
         conditionPart = queryLower;
       }
 
-      // Only enforce operators if there is actually a condition typed out
       if (conditionPart.trim() !== '') {
         if (!conditionPart.includes('=') && !conditionPart.includes('<') && !conditionPart.includes('>') && 
             !conditionPart.includes('like') && !conditionPart.includes(' is ')) {
-          this.queryError = "Invalid Syntax: Your query condition is missing SQL operators (e.g., =, <, >, LIKE).";
-          return false;
+          return applySquiggle("Invalid Syntax: Missing SQL operators (e.g., =, <, >, LIKE).", conditionPart.trim().split(' ')[0]);
         }
       }
 
@@ -573,12 +881,11 @@ export class ApiMappingComponent implements OnInit {
         const fromParts = queryLower.split(' from ');
         const objPart = fromParts[1].trim().split(' ')[0];
         if (objPart && objPart.toLowerCase() !== this.selectedSourceObject.toLowerCase()) {
-          this.queryError = `Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`;
-          return false;
+          return applySquiggle(`Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`, objPart);
         }
       }
 
-      // Deep Field Validation using Regex
+      // Deep Field & Type Validation
       const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
       let match;
       const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
@@ -590,8 +897,7 @@ export class ApiMappingComponent implements OnInit {
         const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
         
         if (!schemaField) {
-          this.queryError = `Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`;
-          return false; 
+          return applySquiggle(`Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`, match[1]);
         }
 
         const val = match[2].replace(/'/g, '').trim();
@@ -600,18 +906,16 @@ export class ApiMappingComponent implements OnInit {
         if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
 
         if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          this.queryError = `Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`;
-          return false;
+          return applySquiggle(`Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`, match[2]);
         }
 
         if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          this.queryError = `Type Mismatch: '${match[1]}' is a Boolean (True/False). You entered '${val}'.`;
-          return false;
+          return applySquiggle(`Type Mismatch: '${match[1]}' is a Boolean. You entered '${val}'.`, match[2]);
         }
       }
     }
 
-    return this.queryError === null;
+    return this.queryError === null; 
   }
 
   loadHistoricalQuery(query: string) {
@@ -741,7 +1045,7 @@ export class ApiMappingComponent implements OnInit {
     let matchCount = 0;
 
     this.mappings.forEach((m) => {
-      if (m.targetField) return;
+      if (m.targetField) return; // Skip if already mapped
 
       const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -749,35 +1053,68 @@ export class ApiMappingComponent implements OnInit {
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
       
-      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '');
+      // Clean names (remove underscores, spaces, __c, etc. for fuzzy matching)
+      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+      const srcType = (sourceMeta.type || 'string').toLowerCase();
 
-      let match = null;
+      let bestMatch: FieldMeta | null = null;
+      let highestScore = 0;
 
-      match = this.targetFields.find(t => t.name.toLowerCase() === srcApiExact);
-      if (!match) match = this.targetFields.find(t => t.label.toLowerCase() === srcLabelExact);
-      if (!match) match = this.targetFields.find(t => t.name.toLowerCase().replace(/[^a-z0-9]/g, '') === srcApiClean);
-      if (!match) match = this.targetFields.find(t => t.label.toLowerCase().replace(/[^a-z0-9]/g, '') === srcLabelClean);
-      if (!match && srcApiClean.length > 3) {
-         match = this.targetFields.find(t => {
-           const tgtApiClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-           return tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean);
-         });
-      }
+      // Grade this source field against EVERY target field
+      this.targetFields.forEach(t => {
+        let score = 0;
+        const tgtApiExact = t.name.toLowerCase();
+        const tgtLabelExact = t.label.toLowerCase();
+        const tgtApiClean = tgtApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
+        const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
+        const tgtType = (t.type || 'string').toLowerCase();
 
-      if (this.isStrictMapping && match) {
-        const sType = sourceMeta.type;
-        const tType = match.type;
-        const isCompatible = sType === tType || (sType === 'string' && ['string', 'picklist', 'reference'].includes(tType || ''));
+        // 1. DATA TYPE COMPATIBILITY CHECK
+        const isExactTypeMatch = srcType === tgtType;
+        const isForgivingTypeMatch = 
+          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
+          (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType));
         
-        if (!isCompatible) {
-          match = null; 
-        }
-      }
+        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
 
-      if (match) {
-        m.targetField = match.name;
-        if (this.isReferenceField(match.name)) {
+        // 2. STRICT MODE ENFORCEMENT
+        if (this.isStrictMapping && !isCompatible) {
+          return; // Instantly disqualify if strict mode is on and types clash
+        }
+
+        // 3. THE SCORING ALGORITHM
+        if (tgtApiExact === srcApiExact) {
+          score += 100; // Perfect API Name Match
+        } else if (tgtLabelExact === srcLabelExact) {
+          score += 90;  // Perfect Label Match
+        } else if (tgtApiClean === srcApiClean) {
+          score += 80;  // Cleaned API Name Match (e.g., Account_Id__c matches AccountId)
+        } else if (tgtLabelClean === srcLabelClean) {
+          score += 70;  // Cleaned Label Match
+        } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
+          score += 40;  // Fuzzy Substring Match (e.g., 'Desc' matches 'Description')
+        }
+
+        // 4. DATA TYPE BONUS
+        // Only award the type bonus if there is at least some name resemblance
+        if (score >= 40 && isExactTypeMatch) {
+           score += 25; 
+        } else if (score >= 40 && isForgivingTypeMatch) {
+           score += 10;
+        }
+
+        // 5. TRACK THE WINNER
+        if (score > highestScore && score >= 50) { // Require a minimum confidence score of 50 to auto-map
+          highestScore = score;
+          bestMatch = t;
+        }
+      });
+
+      // Apply the best match found for this specific source field
+      if (bestMatch) {
+        m.targetField = bestMatch['name'];
+        if (this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
         matchCount++;
@@ -786,10 +1123,13 @@ export class ApiMappingComponent implements OnInit {
 
     this.updateMappedCount();
     
+    // UI Feedback Upgrade
     if (matchCount > 0) {
-      this.logMessages.unshift(`System: Auto-mapping applied. ${matchCount} fields mapped.`);
+      this.toastr.success(`Intelligently matched ${matchCount} fields!`, 'Auto-Map Complete');
+      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} fields mapped using Heuristic Scoring.`);
     } else {
-      this.logMessages.unshift(`System: Auto-mapping ran, but no new matching fields were found.`);
+      this.toastr.info(`No high-confidence matches found.`, 'Auto-Map Finished');
+      this.logMessages.unshift(`System: Auto-mapping ran, but no high-confidence data-type matches were found.`);
     }
   }
 
@@ -880,7 +1220,7 @@ export class ApiMappingComponent implements OnInit {
     };
     
     // Connect to the new streaming websocket
-    const ws = new WebSocket('ws://localhost:8000/ws/validate-stream');
+    const ws = new WebSocket(`${environment.wsUrl}/ws/validate-stream`);
 
     ws.onopen = () => {
       ws.send(JSON.stringify(payload));
@@ -1120,7 +1460,7 @@ export class ApiMappingComponent implements OnInit {
     this.toastr.info(`Generating ${type} audit report...`, 'Downloading');
     
     // Trigger the browser's native download behavior via the FastAPI route
-    const url = `http://localhost:8000/api/audit/download/${this.currentSessionId}?type=${type}`;
+    const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
     window.open(url, '_blank');
   }
 
@@ -1177,7 +1517,7 @@ export class ApiMappingComponent implements OnInit {
     };
 
     const payload = { queue: [job] };
-    const ws = new WebSocket('ws://localhost:8000/ws/migrate');
+    const ws = new WebSocket(`${environment.wsUrl}/ws/migrate`);
 
     ws.onopen = () => { ws.send(JSON.stringify(payload)); };
 

@@ -576,6 +576,7 @@ async def get_filtered_preview(request: Request):
         obj_name = payload.get("objectName", "")
         query = payload.get("query", "").strip()
         headers_list = payload.get("headers", [])
+        limit = int(payload.get("limit", 5))
         
         sf_token = payload.get("sfToken", "")
         sf_instance = payload.get("sfInstance", "")
@@ -601,11 +602,11 @@ async def get_filtered_preview(request: Request):
                 if query.lower().startswith("select "):
                     soql = query
                     if "limit " not in soql.lower():
-                        soql += " LIMIT 5"
+                        soql += f" LIMIT {limit}"
                 else:
                     fields_str = ", ".join(headers_list) if headers_list else "Id, Name"
                     where_clause = f" WHERE {query}" if query else ""
-                    soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT 5"
+                    soql = f"SELECT {fields_str} FROM {obj_name}{where_clause} LIMIT {limit}"
                 
                 headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
                 import urllib.parse
@@ -649,7 +650,7 @@ async def get_filtered_preview(request: Request):
                 safe_query = urllib.parse.quote(full_query)
                 
                 headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page=5"
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page={limit}"
                 
                 res = await client.get(url, headers=headers)
                 if res.status_code != 200:
@@ -701,6 +702,7 @@ async def get_filtered_preview(request: Request):
                             coql_query = coql_query.replace(match.group(1), clean_select, 1)
 
                         # 3. ZOHO STRICT RULE: A WHERE clause is 100% mandatory
+                        # 3. ZOHO STRICT RULE: A WHERE clause is 100% mandatory
                         if " where " not in coql_query.lower():
                             if " limit " in coql_query.lower():
                                 coql_query = re.sub(r'(?i)\s+limit\s+', ' where id is not null limit ', coql_query)
@@ -708,12 +710,12 @@ async def get_filtered_preview(request: Request):
                                 coql_query += " where id is not null"
 
                         if " limit " not in coql_query.lower():
-                            coql_query += " limit 5"
+                            coql_query += f" limit {limit}"
                             
                     else:
                         # User only provided a WHERE clause
                         safe_fields = headers_list[:40] if headers_list else ["id"]
-                        coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query} limit 5"
+                        coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query} limit {limit}"
 
                     res = await client.post(
                         f"{base_url}/crm/v6/coql", 
@@ -725,7 +727,7 @@ async def get_filtered_preview(request: Request):
                     safe_fields = headers_list[:40] if headers_list else ["id"]
                     fields_str = ",".join(safe_fields)
                     res = await client.get(
-                        f"{base_url}/crm/v6/{obj_name}?page=1&per_page=5&fields={fields_str}", 
+                        f"{base_url}/crm/v6/{obj_name}?page=1&per_page={limit}&fields={fields_str}", 
                         headers=headers
                     )
 
