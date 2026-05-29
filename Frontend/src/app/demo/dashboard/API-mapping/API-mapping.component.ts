@@ -464,8 +464,15 @@ export class ApiMappingComponent implements OnInit {
     } catch (error: any) {
       console.error('Filter Error:', error);
       this.previewRecords = [];
-      // --- LOGS EXACT ERROR FROM PYTHON STRAIGHT TO TERMINAL ---
-      this.logMessages = [...this.logMessages, ` API Error: ${error.message}`];
+      
+      // --- THE FIX: Bind the CRM API error directly to the query editor! ---
+      const errorMessage = error.message || "Invalid Query Syntax rejected by CRM.";
+      this.queryError = `API Error: ${errorMessage}`; 
+      
+      // Show popup and log it
+      this.toastr.error('Your query was rejected by the source CRM.', 'Query Error');
+      this.logMessages = [...this.logMessages, ` API Error: ${errorMessage}`];
+      
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges(); 
@@ -487,24 +494,62 @@ export class ApiMappingComponent implements OnInit {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    // 1. CRM-Specific Syntax Rules
+    // ==========================================
+    // 1. ZENDESK STRICT TOKEN VALIDATION
+    // ==========================================
     if (crm === 'zendesk') {
       if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
         this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved";
+        return false;
       } else if (queryLower.includes(',')) {
         this.queryError = "Do not use commas. Format: status:open tags:urgent";
+        return false;
       } else if (queryLower.includes(' = ')) {
         this.queryError = "Use colons for exact matches. Format: status:open";
-      } else if (queryLower.includes('%')) {
-        this.queryError = "Use '*' for wildcards. Format: name:tech*";
-      } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
-        this.queryError = "Use '-' to exclude a value. Format: -status:closed";
+        return false;
       }
-    } else if (crm === 'salesforce' || crm === 'zoho') {
+
+      // Split by spaces and validate every single word/token
+      const tokens = queryLower.split(/\s+/);
+      const zendeskSystemFields = ['type', 'tags', 'status', 'priority', 'group_id', 'assignee_id', 'requester_id', 'submitter_id', 'organization_id', 'created', 'updated', 'order_by', 'sort'];
+
+      for (const token of tokens) {
+        // If the token uses a Zendesk operator (:, <, >)
+        const match = token.match(/^(-)?([a-zA-Z0-9_]+)[:<>](.*)$/);
+        if (match) {
+          const fieldName = match[2];
+          if (!zendeskSystemFields.includes(fieldName)) {
+            const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
+            if (!schemaField) {
+              this.queryError = `Invalid Zendesk Field: '${fieldName}' does not exist on ${this.selectedSourceObject}.`;
+              return false;
+            }
+          }
+        } else if (token.length > 0 && !token.includes('*') && !token.includes('-')) {
+          // Catch random junk words that have no operators
+          this.queryError = `Invalid Syntax: '${token}' is not formatted correctly. Use 'field:value' (e.g., status:open).`;
+          return false;
+        }
+      }
+    } 
+    
+    // ==========================================
+    // 2. SALESFORCE & ZOHO SQL VALIDATION
+    // ==========================================
+    else if (crm === 'salesforce' || crm === 'zoho') {
       if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
         this.queryError = "Do not use LIMIT or ORDER BY. The engine handles pagination automatically.";
+        return false;
       } else if (queryLower.endsWith(';')) {
         this.queryError = "Do not end your query with a semicolon (;).";
+        return false;
+      }
+
+      // Catch random text strings by enforcing SQL operators
+      if (!queryLower.includes('=') && !queryLower.includes('<') && !queryLower.includes('>') && 
+          !queryLower.includes('like') && !queryLower.includes(' is ')) {
+        this.queryError = "Invalid Syntax: Your query is missing SQL operators (e.g., =, <, >, LIKE).";
+        return false;
       }
 
       if (queryLower.startsWith('select ') && queryLower.includes(' from ')) {
@@ -515,68 +560,36 @@ export class ApiMappingComponent implements OnInit {
           return false;
         }
       }
-    }
 
-    // 2. Field Schema Verification
-    if (!this.queryError && this.sourceFields.length > 0) {
-      let extractedConditions: { field: string, value: string }[] = [];
+      // Deep Field Validation using Regex
+      const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
+      let match;
+      const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
+      
+      while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+        const fieldName = match[1].toLowerCase();
+        if (reservedWords.includes(fieldName)) continue;
 
-      if (crm === 'zendesk') {
-        const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
-        let match;
-        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated']; 
-        
-        while ((match = zendeskRegex.exec(this.customQuery)) !== null) {
-          if (!ignoreList.includes(match[2].toLowerCase())) {
-            extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
-          }
-        }
-      } else if (crm === 'salesforce' || crm === 'zoho') {
-        // Shared Regex for SOQL and COQL
-        const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
-        let match;
-        const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
-        
-        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
-          const fieldName = match[1].toLowerCase();
-          if (reservedWords.includes(fieldName)) continue;
-
-          extractedConditions.push({ 
-            field: fieldName, 
-            value: match[2].replace(/'/g, '').trim()
-          });
-        }
-      }
-
-      for (const condition of extractedConditions) {
-        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
+        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
         
         if (!schemaField) {
-          this.queryError = `Invalid Field: '${condition.field}' does not exist on ${this.selectedSourceObject}.`;
-          break; 
+          this.queryError = `Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`;
+          return false; 
         }
 
-        const val = condition.value || '';
+        const val = match[2].replace(/'/g, '').trim();
         const type = schemaField.type?.toLowerCase() || 'string';
 
         if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
 
         if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
-          break;
+          this.queryError = `Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`;
+          return false;
         }
 
         if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          this.queryError = `Type Mismatch: '${condition.field}' is a Boolean (True/False). You entered '${val}'.`;
-          break;
-        }
-
-        if (['date', 'datetime'].includes(type) && isNaN(Date.parse(val))) {
-          const sfDateLiterals = ['today', 'yesterday', 'tomorrow', 'this_week', 'last_week', 'this_month'];
-          if (crm === 'salesforce' && sfDateLiterals.includes(val.toLowerCase())) continue;
-          
-          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date format. You entered '${val}'.`;
-          break;
+          this.queryError = `Type Mismatch: '${match[1]}' is a Boolean (True/False). You entered '${val}'.`;
+          return false;
         }
       }
     }
@@ -774,6 +787,14 @@ export class ApiMappingComponent implements OnInit {
       return;
     }
 
+    if (!isRevalidation && this.customQuery && !this.validateQuery()) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error('Please fix your query criteria before validating.', 'Query Error');
+      // Scroll to the top so the user sees the red query box
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     // Only show the big popup and wipe stats if it is a FRESH run
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
@@ -890,6 +911,13 @@ export class ApiMappingComponent implements OnInit {
         this.logError(' WebSocket Error: Validation stream disconnected.');
         this.jobStatus = 'Validation Failed';
         this.isValidating = false;
+        Swal.fire({
+          title: 'Connection Lost',
+          text: 'The server disconnected unexpectedly while streaming data. Please check your network or server logs and try again.',
+          icon: 'error',
+          confirmButtonColor: '#0d6efd',
+          customClass: { popup: 'rounded-4 shadow-lg border-0' }
+        });
         this.cdr.detectChanges();
       });
     };
@@ -1065,6 +1093,20 @@ export class ApiMappingComponent implements OnInit {
     }
   }
 
+
+  downloadAudit(type: 'valid' | 'invalid') {
+    if (!this.currentSessionId) {
+      this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
+      return;
+    }
+    
+    this.toastr.info(`Generating ${type} audit report...`, 'Downloading');
+    
+    // Trigger the browser's native download behavior via the FastAPI route
+    const url = `http://localhost:8000/api/audit/download/${this.currentSessionId}?type=${type}`;
+    window.open(url, '_blank');
+  }
+
   // --- Separated execution logic for clean popup handling ---
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
@@ -1125,19 +1167,62 @@ export class ApiMappingComponent implements OnInit {
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
-        if (data.log) this.logMessages = [...this.logMessages, data.log];
+        
+        if (data.log) {
+          this.logMessages = [...this.logMessages, data.log];
+        }
+        
         if (data.status) {
           this.jobStatus = data.status;
+          
+          // --- THE NEW POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
-             this.toastr.success('Migration process has finished.', 'Job Complete');
+            const successCount = data.successData ? data.successData.length : 0;
+            const errorCount = data.errorData ? data.errorData.length : 0;
+            
+            let swalIcon: 'success' | 'warning' | 'error' = 'success';
+            let swalTitle = 'Migration Complete!';
+            
+            if (errorCount > 0 && successCount > 0) {
+                swalIcon = 'warning';
+                swalTitle = 'Migration Finished with Errors';
+            } else if (errorCount > 0 && successCount === 0) {
+                swalIcon = 'error';
+                swalTitle = 'Migration Failed';
+            }
+
+            Swal.fire({
+              title: swalTitle,
+              html: `
+                <div class="text-center mt-3">
+                  <div class="d-flex justify-content-around mb-4 gap-3">
+                    <div class="p-3 border rounded border-success-subtle bg-success-subtle w-100 shadow-sm">
+                      <h2 class="text-success mb-0 fw-bold">${successCount}</h2>
+                      <span class="small fw-bold text-success-emphasis text-uppercase">Successful</span>
+                    </div>
+                    <div class="p-3 border rounded border-danger-subtle bg-danger-subtle w-100 shadow-sm">
+                      <h2 class="text-danger mb-0 fw-bold">${errorCount}</h2>
+                      <span class="small fw-bold text-danger-emphasis text-uppercase">Rejected</span>
+                    </div>
+                  </div>
+                  <p class="text-muted small mb-0">Check the terminal logs or download the error reports to review rejected records.</p>
+                </div>
+              `,
+              icon: swalIcon,
+              confirmButtonText: 'View Logs',
+              confirmButtonColor: '#0d6efd',
+              customClass: { popup: 'rounded-4 shadow-lg border-0' }
+            });
           }
         }
+        
         if (data.successData) this.successData = data.successData;
         if (data.errorData) this.errorData = data.errorData;
 
         this.cdr.detectChanges();
         setTimeout(() => {
-          const logContainer = document.querySelector('.bg-dark.overflow-auto, .shadow-inner');
+          // Auto-scroll the terminal
+          const logContainer = document.querySelector('#terminal-window');
           if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
         }, 10);
       });
@@ -1148,6 +1233,13 @@ export class ApiMappingComponent implements OnInit {
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
         this.toastr.error('WebSocket connection failed.', 'Engine Error');
+        Swal.fire({
+          title: 'Connection Lost',
+          text: 'The server disconnected unexpectedly while streaming data. Please check your network or server logs and try again.',
+          icon: 'error',
+          confirmButtonColor: '#0d6efd',
+          customClass: { popup: 'rounded-4 shadow-lg border-0' }
+        });
         this.cdr.detectChanges();
       });
     };

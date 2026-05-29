@@ -2,7 +2,7 @@ import urllib.parse
 import asyncio
 import httpx
 import traceback
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from app.services.validator_service import process_validation_batch
 import re
 import uuid
@@ -11,6 +11,9 @@ import os
 import tempfile
 import json
 from datetime import datetime
+import io
+import csv
+from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
@@ -879,3 +882,56 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.close()
         except:
             pass
+
+
+# ==========================================
+# ROUTE: DOWNLOAD FULL AUDIT REPORT (CSV)
+# ==========================================
+@router.get("/api/audit/download/{session_id}")
+async def download_validation_audit(session_id: str, type: str = 'valid'):
+    db_path = get_db_path(session_id)
+    
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail="Staging database not found or session expired.")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 1 for Valid records, 0 for Invalid records
+    is_valid = 1 if type == 'valid' else 0
+    cursor.execute("SELECT data, errors FROM records WHERE is_valid = ?", (is_valid,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No {type} records available.")
+
+    # Extract all keys to ensure we get every column for the CSV header
+    all_records = []
+    fieldnames = set()
+    for row in rows:
+        rec = json.loads(row[0])
+        # If it's an error report, inject the error message as the first column!
+        if type == 'invalid':
+            rec['Validation_Errors'] = row[1]
+            
+        fieldnames.update(rec.keys())
+        all_records.append(rec)
+    
+    # Sort fieldnames, forcing 'Validation_Errors' to the very front
+    fieldnames = list(fieldnames)
+    if 'Validation_Errors' in fieldnames:
+        fieldnames.remove('Validation_Errors')
+        fieldnames.insert(0, 'Validation_Errors')
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(all_records)
+    
+    output.seek(0)
+    
+    headers = {
+        'Content-Disposition': f'attachment; filename="Validation_Audit_{type.capitalize()}_{session_id}.csv"'
+    }
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)

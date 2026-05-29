@@ -615,7 +615,13 @@ async def get_filtered_preview(request: Request):
                 
                 res = await client.get(url, headers=headers)
                 if res.status_code != 200:
-                    raise HTTPException(status_code=400, detail=f"SFDC Error: {res.text}")
+                    err_msg = res.text
+                    try:
+                        err_data = res.json()
+                        if isinstance(err_data, list) and len(err_data) > 0:
+                            err_msg = err_data[0].get("message", res.text)
+                    except: pass
+                    raise HTTPException(status_code=400, detail=f"Salesforce rejected query: {err_msg.strip()}")
                     
                 data = res.json()
                 records = data.get("records", [])
@@ -724,7 +730,15 @@ async def get_filtered_preview(request: Request):
                     )
 
                 if res.status_code != 200:
-                    raise HTTPException(status_code=400, detail=f"Zoho Query Error: {res.text}")
+                    err_msg = res.text
+                    try:
+                        err_data = res.json()
+                        if "message" in err_data:
+                            err_msg = err_data["message"]
+                        elif "details" in err_data:
+                            err_msg = str(err_data["details"])
+                    except: pass
+                    raise HTTPException(status_code=400, detail=f"Zoho rejected query: {err_msg.strip()}")
                     
                 raw_records = res.json().get("data") or []
                 sample_records = []

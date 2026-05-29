@@ -30,6 +30,14 @@
   .action-card-btn.run-btn:hover {
     box-shadow: 0 0.5rem 1rem rgba(13, 110, 253, 0.45) !important;
   }
+  @keyframes gentlePulse {
+    0% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(13, 110, 253, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0); }
+  }
+  .pulse-primary {
+    animation: gentlePulse 2s infinite;
+  }
 </style>
 
 <div class="card border-primary-subtle shadow-sm mb-3">
@@ -464,6 +472,18 @@
           <p class="text-muted mb-0">Securely downloading and testing records against Salesforce schema rules. <br>Please do not close this page.</p>
         </div>
         } 
+        @if (aggregateStats.invalid === 0 && aggregateStats.total > 0) {
+          <div class="mt-4 p-4 text-center bg-success-subtle border border-success rounded shadow-sm animate__animated animate__zoomIn">
+            <i class="feather icon-check-circle text-success" style="font-size: 3rem;"></i>
+            <h4 class="text-success-emphasis fw-bold mt-2">Preview Validation 100% Successful!</h4>
+            <p class="text-muted mb-3">Your mapping rules are perfect. You are safe to click <strong>Run Job</strong> to migrate the live data.</p>
+            
+            <button class="btn btn-success shadow-sm d-inline-flex align-items-center gap-2 btn-hover-lift px-4" 
+                    (click)="downloadAudit('valid')">
+              <i class="feather icon-download"></i> Download Clean Dataset ({{ aggregateStats.valid }} records)
+            </button>
+          </div>
+          }
         
         @else {
           
@@ -473,9 +493,17 @@
               <h5 class="fw-bold text-danger mb-0 d-flex align-items-center gap-2">
                 <i class="feather icon-edit-2"></i> Fix Preview Errors
               </h5>
-              <button class="btn btn-sm btn-danger shadow-sm fw-bold btn-hover-lift px-3" (click)="revalidatePreview()">
-                <i class="feather icon-refresh-cw"></i> Re-Validate Fixes
-              </button>
+              
+              <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-danger shadow-sm d-flex align-items-center gap-2 btn-hover-lift px-3" 
+                        (click)="downloadAudit('invalid')" title="Download all errors as CSV">
+                  <i class="feather icon-download-cloud"></i> Download Full Error Report
+                </button>
+                <button class="btn btn-sm btn-danger shadow-sm fw-bold btn-hover-lift px-3" 
+                        (click)="revalidatePreview()">
+                  <i class="feather icon-refresh-cw"></i> Re-Validate Fixes
+                </button>
+              </div>
             </div>
             
             <div class="table-responsive border border-danger-subtle rounded-top" style="max-height: 450px; overflow-y: auto;">
@@ -610,6 +638,7 @@
           </button>
 
           <button class="btn btn-primary shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
+                  [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0}"
                   (click)="runMigration()">
             <div class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center mb-1" style="width: 38px; height: 38px;">
               <i class="feather icon-play fs-5 text-white"></i>
