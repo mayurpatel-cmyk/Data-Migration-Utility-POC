@@ -54,7 +54,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
         valid_mask &= ~is_duplicate
 
     # ==========================================
-    # NEW: Detect Multi-Currency Org
+    # Detect Multi-Currency Org
     # ==========================================
     is_multi_currency_org = 'CurrencyIsoCode' in sf_rules
     iso_code_mapped = any(m.get('sfField') == 'CurrencyIsoCode' for m in mappings)
@@ -158,7 +158,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
                 valid_mask &= ~is_invalid_picklist
 
             # ==========================================
-            # NEW: Dependent Picklist Validation
+            # Dependent Picklist Validation
             # ==========================================
             if field_rules.get('controllerName') and field_rules.get('dependentValues'):
                 controller_sf_name = field_rules.get('controllerName')
@@ -271,7 +271,7 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, sf_
             valid_mask &= ~is_invalid_precision
 
             # ==========================================
-            # NEW: Multi-Currency Validation Enforcement
+            # Multi-Currency Validation Enforcement
             # ==========================================
             if sf_type == 'currency' and is_multi_currency_org and not iso_code_mapped:
                 df.loc[~is_empty, '_errors'] += f"[{csv_col}: Multi-Currency Org Detected. You mapped a currency amount, but forgot to map the 'CurrencyIsoCode' field. Salesforce may reject this row.] "

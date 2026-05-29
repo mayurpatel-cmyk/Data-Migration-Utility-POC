@@ -8,6 +8,7 @@ const authRoutes = require('./src/routes/auth.routes');
 const sfRoutes = require('./src/routes/sfRoutes');
 const migrateRoutes = require('./src/routes/migration.routes');
 const validationRoutes = require('./src/routes/validation.routes');
+const zohoRoutes = require('./src/routes/ZohoRoutes.routes');
 
 
 const app = express();
@@ -26,6 +27,15 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 
+app.get('/', (req, res) => {
+  res.status(200).send('Node API is healthy and running!');
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'Healthy', timestamp: new Date() });
+});
+
+
 // --- ROUTES ---
 
 // 2. Attach your auth routes to the /api/auth path
@@ -34,7 +44,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/sf',sfRoutes );
 app.use('/api/migrate-data',migrateRoutes );
 app.use('/api/validation', validationRoutes);
-
+app.use('/api/zoho', zohoRoutes);
 
 // Export the app
 module.exports = app;

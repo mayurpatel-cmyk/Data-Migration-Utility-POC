@@ -9,6 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Copy the requirements file and install dependencies
+RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -20,4 +21,5 @@ EXPOSE 8000
 
 # Command to run your Python application
 # Replace 'main.py' with the actual starting script inside your 'app' folder
-CMD ["python", "app/main.py"]
+# Change the last line to this:
+CMD ["python", "-m", "gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "300"]

@@ -34,6 +34,10 @@ const login = async (req, res) => {
   }
 };
 
+// --- NEW GLOBAL ZOHO CONTROLLER ROUTINGS ---
+
+
+
 // 2. Handle the Callback from Salesforce
 // Add this to your routes: router.get('/callback', authController.callback);
 const callback = async (req, res) => {
@@ -55,4 +59,42 @@ const callback = async (req, res) => {
   }
 };
 
-module.exports = { login, callback };
+
+const zohoLogin = async (req, res) => {
+  try {
+    const authUrl = authService.getZohoAuthUrl();
+    logger.info('Generated Global Zoho OAuth link context successfully');
+    return res.status(200).json({ success: true, url: authUrl });
+  } catch (error) {
+    logger.error('Failed to construct Zoho initial entry parameter mapping', { error: error.message });
+    return res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+const zohoCallback = async (req, res) => {
+  // Capture dynamic variables issued directly by Zoho's regional directory engine
+  const { code, 'accounts-server': accountsServer } = req.query;
+
+  try {
+    if (!code) throw new Error("Authorization code not provided by Zoho identity provider.");
+
+    const zohoAuthContext = await authService.authorizeZoho(code, accountsServer);
+    logger.info('Global multi-tenant Zoho session context generated successfully');
+
+    // Compile variables to a standard query string to rehydrate your Angular state manager
+    const redirectParams = new URLSearchParams({
+      source: 'zoho',
+      status: 'success',
+      token: zohoAuthContext.accessToken,
+      domain: zohoAuthContext.apiDomain,
+      server: zohoAuthContext.accountsServer
+    }).toString();
+
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:4200'}/#/dashboard/connection?${redirectParams}`);
+  } catch (error) {
+    logger.error('Zoho OAuth callback handler collapsed mid-execution', { error: error.message });
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:4200'}/#/dashboard/connection?status=error`);
+  }
+};
+
+module.exports = { login, callback, zohoLogin, zohoCallback };
