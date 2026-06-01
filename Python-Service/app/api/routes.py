@@ -9,7 +9,7 @@ from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Q
 from fastapi.responses import RedirectResponse
 import httpx 
 from pathlib import Path
-from dotenv import load_dotenv # <--- ADDED: To load environment variables
+from dotenv import load_dotenv
 
 from app.services.validator_service import process_validation_batch
 from app.services.crm_metadata_service import CrmMetadataService

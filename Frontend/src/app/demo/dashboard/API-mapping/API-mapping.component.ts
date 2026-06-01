@@ -200,22 +200,21 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     if (srcType === tgtType) return false;
     
-    // Forgiving logic: Strings can usually map to picklists or text areas
+    //  Strings can usually map to picklists or text areas
     if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
     // Numbers can map to other numbers
     if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType)) return false;
 
-    return true; // If it reaches here, it's a dangerous mismatch!
+    return true;
   }
 
  onEditorInit(editor: any) {
     this.monacoEditorInstance = editor;
 
-    // Ensure we only register these providers once
     if (!this.completionProvider) {
       
       // ==========================================
-      // FEATURE 1: DYNAMIC AUTOCOMPLETE
+      //  DYNAMIC AUTOCOMPLETE
       // ==========================================
       this.completionProvider = monaco.languages.registerCompletionItemProvider('sql', {
         provideCompletionItems: (model: any, position: any) => {
@@ -229,7 +228,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
           const crm = this.sourceCrmId.toLowerCase();
 
           // ------------------------------------
-          // A. ZENDESK MODE
+          //  ZENDESK MODE
           // ------------------------------------
           if (crm === 'zendesk') {
             
@@ -285,7 +284,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
               suggestions.push({
                 label: kw,
                 kind: monaco.languages.CompletionItemKind.Keyword,
-                insertText: kw, // No space after so they can type the value immediately
+                insertText: kw,
                 range: range
               });
             });
@@ -304,7 +303,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
             }
           }
           // ------------------------------------
-          // B. SALESFORCE & ZOHO (SQL) MODE
+          //  SALESFORCE & ZOHO (SQL) MODE
           // ------------------------------------
           else {
             suggestions.push({
@@ -344,7 +343,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       });
 
       // ==========================================
-      // FEATURE 2: SMART HOVER TOOLTIPS
+      //  SMART HOVER TOOLTIPS
       // ==========================================
       monaco.languages.registerHoverProvider('sql', {
         provideHover: (model: any, position: any) => {
@@ -719,7 +718,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     const payload = {
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
-      query: safeQuery, // Sent as safeQuery
+      query: safeQuery, 
       headers: this.previewHeaders,
       limit: this.previewLimit,
       sfToken: localStorage.getItem('sf_token') || '',
@@ -751,7 +750,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       console.error('Filter Error:', error);
       this.previewRecords = [];
       
-      // --- THE FIX: Bind the CRM API error directly to the query editor! ---
+      // --- Bind the CRM API error directly to the query editor! ---
       const errorMessage = error.message || "Invalid Query Syntax rejected by CRM.";
       this.queryError = `API Error: ${errorMessage}`; 
       
@@ -776,7 +775,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   validateQuery(): boolean {
     this.queryError = null; 
 
-    // --- NEW: Clear existing red squiggles every time they type ---
+    //  Clear existing red squiggles every time they type
     if (this.monacoEditorInstance) {
       monaco.editor.setModelMarkers(this.monacoEditorInstance.getModel(), 'sql-validation', []);
     }
@@ -786,7 +785,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    // --- NEW: Helper Function to Draw Red Squiggles ---
+    //  Helper Function to Draw Red Squiggles 
     const applySquiggle = (errorMsg: string, offendingText: string): boolean => {
       this.queryError = errorMsg;
       
@@ -816,7 +815,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     };
 
     // ==========================================
-    // 1. ZENDESK STRICT TOKEN VALIDATION
+    // ZENDESK STRICT TOKEN VALIDATION
     // ==========================================
     if (crm === 'zendesk') {
       if (queryLower.startsWith('select ') || queryLower.includes(' from ')) {
@@ -847,7 +846,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     } 
     
     // ==========================================
-    // 2. SALESFORCE & ZOHO SQL VALIDATION
+    //  SALESFORCE & ZOHO SQL VALIDATION
     // ==========================================
     else if (crm === 'salesforce' || crm === 'zoho') {
       if (queryLower.includes('limit ')) {
@@ -1070,7 +1069,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
         const tgtType = (t.type || 'string').toLowerCase();
 
-        // 1. DATA TYPE COMPATIBILITY CHECK
+        // DATA TYPE COMPATIBILITY CHECK
         const isExactTypeMatch = srcType === tgtType;
         const isForgivingTypeMatch = 
           (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
@@ -1078,12 +1077,12 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         
         const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
 
-        // 2. STRICT MODE ENFORCEMENT
+        //  STRICT MODE ENFORCEMENT
         if (this.isStrictMapping && !isCompatible) {
           return; // Instantly disqualify if strict mode is on and types clash
         }
 
-        // 3. THE SCORING ALGORITHM
+        // THE SCORING ALGORITHM
         if (tgtApiExact === srcApiExact) {
           score += 100; // Perfect API Name Match
         } else if (tgtLabelExact === srcLabelExact) {
@@ -1096,7 +1095,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
           score += 40;  // Fuzzy Substring Match (e.g., 'Desc' matches 'Description')
         }
 
-        // 4. DATA TYPE BONUS
+        //  DATA TYPE BONUS
         // Only award the type bonus if there is at least some name resemblance
         if (score >= 40 && isExactTypeMatch) {
            score += 25; 
@@ -1104,7 +1103,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
            score += 10;
         }
 
-        // 5. TRACK THE WINNER
+        //  TRACK THE WINNER
         if (score > highestScore && score >= 50) { // Require a minimum confidence score of 50 to auto-map
           highestScore = score;
           bestMatch = t;
@@ -1202,9 +1201,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     // Inject the Revalidation flags into the payload
     const payload = {
-      isRevalidation: isRevalidation,        // <--- NEW
-      sessionId: this.currentSessionId,      // <--- NEW
-      fixedRecords: fixedRecords,            // <--- NEW
+      isRevalidation: isRevalidation,        
+      sessionId: this.currentSessionId,      
+      fixedRecords: fixedRecords,            
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
       query: safeQuery,
@@ -1437,7 +1436,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
         icon: 'info',
         showCancelButton: true,
-        confirmButtonColor: '#198754', // Green button for go
+        confirmButtonColor: '#198754',
         cancelButtonColor: '#6c757d',
         confirmButtonText: 'Yes, Run Job!'
       }).then((result) => {
@@ -1494,7 +1493,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     }
 
     const fixedRecords = this.validationResults?.invalidRecords
-      ?.filter((rec: any) => rec._editedFields) // Only grab rows the user actually touched
+      ?.filter((rec: any) => rec._editedFields)
       ?.map((rec: any) => rec.originalRow) || [];
 
     const job = {
