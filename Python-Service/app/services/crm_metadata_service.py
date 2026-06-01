@@ -1,5 +1,6 @@
 import httpx
 from fastapi import HTTPException
+import os
 
 class CrmMetadataService:
     
@@ -379,3 +380,110 @@ class CrmMetadataService:
             raise HTTPException(status_code=e.response.status_code, detail=f"Zoho schema error: {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Network error connecting to Zoho: {str(e)}")
+    
+    # =========================================================
+    # HUBSPOT METADATA ENGINE WITH AUTOMATED RETRY/REFRESH
+    # =========================================================
+    @staticmethod
+    async def refresh_hubspot_token(refresh_token: str) -> str:
+        """Exchanges a long-lived refresh token for a fresh access token seamlessly."""
+        client_id = os.getenv("HS_CLIENT_ID", "").strip()
+        client_secret = os.getenv("HS_CLIENT_SECRET", "").strip()
+        
+        async with httpx.AsyncClient(verify=False) as client:
+            res = await client.post(
+                "https://api.hubapi.com/oauth/v1/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": refresh_token
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            if res.status_code != 200:
+                raise HTTPException(status_code=401, detail="HubSpot session expired. Please reconnect your account.")
+            
+            return res.json().get("access_token")
+
+    @staticmethod
+    async def fetch_hubspot_objects(access_token: str, refresh_token: str = None):
+        """Queries the schema catalog to load target entities dynamically."""
+        objects = [
+            {"name": "contacts", "label": "Contacts"},
+            {"name": "companies", "label": "Companies"},
+            {"name": "deals", "label": "Deals"},
+            {"name": "tickets", "label": "Tickets"}
+        ]
+        
+        headers = {"Authorization": f"Bearer {access_token}"}
+        new_token = None
+        
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                res = await client.get("https://api.hubapi.com/crm/v3/schemas", headers=headers)
+                
+                # 🔄 Access token expired? Catch 401 and auto-refresh!
+                if res.status_code == 401 and refresh_token:
+                    new_token = await CrmMetadataService.refresh_hubspot_token(refresh_token)
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    res = await client.get("https://api.hubapi.com/crm/v3/schemas", headers=headers)
+
+                if res.status_code == 200:
+                    for schema in res.json().get("results", []):
+                        if schema.get("name") not in ["contacts", "companies", "deals", "tickets"]:
+                            objects.append({
+                                "name": schema["name"],
+                                "label": f"{schema['labels']['plural']} (Custom)"
+                            })
+                return sorted(objects, key=lambda x: x["label"]), new_token
+        except Exception:
+            return sorted(objects, key=lambda x: x["label"]), None
+
+    @staticmethod
+    async def fetch_hubspot_fields(access_token: str, refresh_token: str, object_name: str):
+        """Dynamically pulls fields from the v3 properties directory mapping."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"https://api.hubapi.com/crm/v3/properties/{object_name.lower()}"
+        new_token = None
+        
+        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            res = await client.get(url, headers=headers)
+            
+            if res.status_code == 401 and refresh_token:
+                new_token = await CrmMetadataService.refresh_hubspot_token(refresh_token)
+                headers["Authorization"] = f"Bearer {new_token}"
+                res = await client.get(url, headers=headers)
+                
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail=f"HubSpot properties query failed: {res.text}")
+                
+            fields_raw = res.json().get("results", [])
+            parsed_fields = []
+            select_fields_list = []
+            
+            type_map = {
+                "string": "string", "number": "number", "date": "date", "datetime": "date",
+                "booleancheckbox": "boolean", "enumeration": "picklist"
+            }
+            
+            for f in fields_raw:
+                if f.get("hidden") or not f.get("name"): continue
+                
+                api_name = f["name"]
+                select_fields_list.append(api_name)
+                
+                is_req = api_name in ["email", "lastname", "name", "hs_object_id", "dealname"]
+                
+                parsed_fields.append({
+                    "name": api_name,
+                    "label": f.get("label") or api_name,
+                    "type": type_map.get(f.get("type"), "string"),
+                    "required": is_req
+                })
+                
+            return {
+                "headers": select_fields_list[:12],
+                "sampleRecords": [], 
+                "fields": sorted(parsed_fields, key=lambda x: x["required"], reverse=True)
+            }, new_token

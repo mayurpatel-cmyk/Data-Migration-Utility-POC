@@ -23,7 +23,7 @@ interface MappingRow {
   sourceField: string;
   sourceLabel: string;
   targetField: string;
-  isDropdownOpen?: boolean; 
+  isDropdownOpen?: boolean;
   searchQuery?: string;
   relationalExtIdField?: string;
   parentObjectName?: string;
@@ -87,16 +87,16 @@ export class ApiMappingComponent implements OnInit {
   isValidating = false;
   errorCurrentPage: number = 1;
   errorPageSize: number = 10;
-  
+
   isSourceDropdownOpen = false;
   sourceSearchQuery = '';
   isTargetDropdownOpen = false;
   targetSearchQuery = '';
   isHistoryDropdownOpen = false;
-  
+
   operationMode: string = 'insert';
   batchSize: number = 5000;
-  
+
   recentQueries: string[] = [];
 
   ngOnInit(): void {
@@ -132,18 +132,21 @@ export class ApiMappingComponent implements OnInit {
 
   buildDefaultQuery(entityName: string) {
     const crm = this.sourceCrmId.toLowerCase();
-    
+
     if (crm === 'zendesk') {
       let singularName = entityName.toLowerCase();
       if (singularName.endsWith('s') && singularName !== 'macros') {
         singularName = singularName.slice(0, -1);
       }
-      this.customQuery = `type:${singularName} `; 
-      
+      this.customQuery = `type:${singularName} `;
+
     } else if (crm === 'salesforce' || crm === 'zoho') {
-      this.customQuery = `SELECT * FROM ${entityName}`; 
-      
-    } else {
+      this.customQuery = `SELECT * FROM ${entityName}`;
+
+    } else if (crm === 'hubspot') {
+      this.customQuery = `firstname=John`;
+    }
+    else {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
   }
@@ -208,13 +211,13 @@ export class ApiMappingComponent implements OnInit {
   selectField(mapping: any, fieldName: string) {
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
-    
+
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
     } else {
-      mapping.relationalExtIdField = undefined; 
+      mapping.relationalExtIdField = undefined;
     }
-    
+
     this.updateMappedCount();
   }
 
@@ -223,7 +226,7 @@ export class ApiMappingComponent implements OnInit {
 
     if (this.isStrictMapping) {
       const sourceMeta = this.sourceFields.find(f => f.name === sourceFieldName);
-      
+
       if (sourceMeta && sourceMeta.type) {
         filtered = filtered.filter(t => {
           if (sourceMeta.type === 'string' && ['string', 'picklist', 'reference'].includes(t.type || '')) {
@@ -236,8 +239,8 @@ export class ApiMappingComponent implements OnInit {
 
     if (query) {
       const lowerQuery = query.toLowerCase();
-      filtered = filtered.filter((f) => 
-        f.label.toLowerCase().includes(lowerQuery) || 
+      filtered = filtered.filter((f) =>
+        f.label.toLowerCase().includes(lowerQuery) ||
         f.name.toLowerCase().includes(lowerQuery)
       );
     }
@@ -261,8 +264,8 @@ export class ApiMappingComponent implements OnInit {
 
   toggleTargetDropdown(event: Event) {
     event.stopPropagation();
-    if (!this.selectedSourceObject) return; 
-    
+    if (!this.selectedSourceObject) return;
+
     const wasOpen = this.isTargetDropdownOpen;
     this.closeAllDropdowns();
     this.isTargetDropdownOpen = !wasOpen;
@@ -274,17 +277,17 @@ export class ApiMappingComponent implements OnInit {
     this.isSourceDropdownOpen = false;
 
     const crm = this.sourceCrmId.toLowerCase();
-    
+
     if (crm === 'zendesk') {
       let singularName = entityName.toLowerCase();
       if (singularName.endsWith('s') && singularName !== 'macros') {
         singularName = singularName.slice(0, -1);
       }
-      this.customQuery = `type:${singularName} `; 
-      
+      this.customQuery = `type:${singularName} `;
+
     } else if (crm === 'salesforce') {
-      this.customQuery = `SELECT * FROM ${entityName}`; 
-      
+      this.customQuery = `SELECT * FROM ${entityName}`;
+
     } else {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
@@ -303,8 +306,8 @@ export class ApiMappingComponent implements OnInit {
   getFilteredSourceEntities(): any[] {
     if (!this.sourceSearchQuery) return this.sourceEntities;
     const lowerQuery = this.sourceSearchQuery.toLowerCase();
-    return this.sourceEntities.filter(e => 
-      e.label.toLowerCase().includes(lowerQuery) || 
+    return this.sourceEntities.filter(e =>
+      e.label.toLowerCase().includes(lowerQuery) ||
       e.name.toLowerCase().includes(lowerQuery)
     );
   }
@@ -312,8 +315,8 @@ export class ApiMappingComponent implements OnInit {
   getFilteredTargetEntities(): any[] {
     if (!this.targetSearchQuery) return this.targetEntities;
     const lowerQuery = this.targetSearchQuery.toLowerCase();
-    return this.targetEntities.filter(e => 
-      e.label.toLowerCase().includes(lowerQuery) || 
+    return this.targetEntities.filter(e =>
+      e.label.toLowerCase().includes(lowerQuery) ||
       e.name.toLowerCase().includes(lowerQuery)
     );
   }
@@ -359,7 +362,7 @@ export class ApiMappingComponent implements OnInit {
 
   get queryContext() {
     const crm = this.sourceCrmId.toLowerCase();
-    
+
     if (crm === 'zendesk') {
       return {
         title: 'Zendesk Search Filter',
@@ -387,6 +390,15 @@ export class ApiMappingComponent implements OnInit {
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
+    } else if (crm === 'hubspot') {
+      return {
+        title: 'HubSpot Filter & Search API',
+        placeholder: "e.g., Suresh (Global Text Search) OR firstname=John (Property Match)",
+        helpText: "Enter keywords or property definitions using key=value syntax to filter.",
+        icon: 'icon-search',
+        buttonText: 'Search Data',
+        loadingText: 'Searching...'
+      };
     } else {
       return {
         title: `${this.sourceSystem} Query Editor`,
@@ -404,7 +416,7 @@ export class ApiMappingComponent implements OnInit {
     if (logContainer) {
       logContainer.scrollTop = logContainer.scrollHeight;
     }
-    
+
     const terminalCard = document.getElementById('execution-terminal');
     if (terminalCard) {
       terminalCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -415,12 +427,12 @@ export class ApiMappingComponent implements OnInit {
     if (!this.customQuery || !this.selectedSourceObject) return;
 
     if (!this.validateQuery()) {
-      return; 
+      return;
     }
 
     this.isPreviewLoading = true;
     this.previewRecords = [];
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
     this.saveQueryToHistory(this.customQuery);
 
     let safeQuery = this.customQuery.trim();
@@ -439,7 +451,9 @@ export class ApiMappingComponent implements OnInit {
       zdToken: localStorage.getItem('zd_token') || '',
       zdSubdomain: localStorage.getItem('zd_subdomain') || '',
       zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      zohoDomain: localStorage.getItem('zoho_api_domain') || '',
+      hsToken: localStorage.getItem('hubspot_token') || '',
+      hsRefresh: localStorage.getItem('hubspot_refresh_token') || ''
     };
 
     try {
@@ -454,7 +468,7 @@ export class ApiMappingComponent implements OnInit {
         const errorData = await response.json().catch(() => ({ detail: "Unknown Server Error" }));
         throw new Error(errorData.detail || "Failed to fetch filtered data.");
       }
-      
+
       const data = await response.json();
       this.previewRecords = data.records || [];
       this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
@@ -466,7 +480,7 @@ export class ApiMappingComponent implements OnInit {
       this.logMessages = [...this.logMessages, ` API Error: ${error.message}`];
     } finally {
       this.isPreviewLoading = false;
-      this.cdr.detectChanges(); 
+      this.cdr.detectChanges();
     }
   }
 
@@ -479,7 +493,7 @@ export class ApiMappingComponent implements OnInit {
   }
 
   validateQuery(): boolean {
-    this.queryError = null; 
+    this.queryError = null;
     if (!this.customQuery) return true;
 
     const queryLower = this.customQuery.trim().toLowerCase();
@@ -513,6 +527,12 @@ export class ApiMappingComponent implements OnInit {
           return false;
         }
       }
+    } else if (crm === 'hubspot') {
+      if (queryLower.startsWith('select ') || queryLower.includes(' from ')) {
+        this.queryError = "HubSpot rejects standard SQL strings. Use keywords or 'property=value' filters.";
+        return false;
+      }
+      return true;
     }
 
     // 2. Field Schema Verification
@@ -522,8 +542,8 @@ export class ApiMappingComponent implements OnInit {
       if (crm === 'zendesk') {
         const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
         let match;
-        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated']; 
-        
+        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated'];
+
         while ((match = zendeskRegex.exec(this.customQuery)) !== null) {
           if (!ignoreList.includes(match[2].toLowerCase())) {
             extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
@@ -534,13 +554,13 @@ export class ApiMappingComponent implements OnInit {
         const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
         let match;
         const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
-        
+
         while ((match = sqlRegex.exec(this.customQuery)) !== null) {
           const fieldName = match[1].toLowerCase();
           if (reservedWords.includes(fieldName)) continue;
 
-          extractedConditions.push({ 
-            field: fieldName, 
+          extractedConditions.push({
+            field: fieldName,
             value: match[2].replace(/'/g, '').trim()
           });
         }
@@ -548,10 +568,10 @@ export class ApiMappingComponent implements OnInit {
 
       for (const condition of extractedConditions) {
         const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
-        
+
         if (!schemaField) {
           this.queryError = `Invalid Field: '${condition.field}' does not exist on ${this.selectedSourceObject}.`;
-          break; 
+          break;
         }
 
         const val = condition.value || '';
@@ -572,14 +592,14 @@ export class ApiMappingComponent implements OnInit {
         if (['date', 'datetime'].includes(type) && isNaN(Date.parse(val))) {
           const sfDateLiterals = ['today', 'yesterday', 'tomorrow', 'this_week', 'last_week', 'this_month'];
           if (crm === 'salesforce' && sfDateLiterals.includes(val.toLowerCase())) continue;
-          
+
           this.queryError = `Type Mismatch: '${condition.field}' requires a valid date format. You entered '${val}'.`;
           break;
         }
       }
     }
 
-    return this.queryError === null; 
+    return this.queryError === null;
   }
 
   loadHistoricalQuery(query: string) {
@@ -593,13 +613,13 @@ export class ApiMappingComponent implements OnInit {
     this.recentQueries = this.recentQueries.filter(q => q !== query);
     this.recentQueries.unshift(query);
     if (this.recentQueries.length > 5) this.recentQueries.pop();
-    
+
     localStorage.setItem('crm_query_history', JSON.stringify(this.recentQueries));
   }
 
   preloadEntirePage() {
     this.isLoading = true;
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
 
     forkJoin({
       sourceObjs: this.mappingApi.getObjects(this.sourceCrmId),
@@ -614,7 +634,7 @@ export class ApiMappingComponent implements OnInit {
             (e) => e.name.toLowerCase().includes('account') || e.name.toLowerCase().includes('ticket') || e.name.toLowerCase().includes('contacts')
           );
           this.selectedSourceObject = defaultSrc ? defaultSrc.name : this.sourceEntities[0].name;
-          
+
           this.buildDefaultQuery(this.selectedSourceObject);
         }
 
@@ -640,7 +660,7 @@ export class ApiMappingComponent implements OnInit {
   insertFieldIntoQuery(event: Event) {
     const selectElement = event.target as HTMLSelectElement;
     const fieldName = selectElement.value;
-    
+
     if (!fieldName) return;
 
     if (!this.customQuery) {
@@ -659,7 +679,7 @@ export class ApiMappingComponent implements OnInit {
     }
 
     this.isLoading = true;
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
 
     forkJoin({
       sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject),
@@ -674,7 +694,7 @@ export class ApiMappingComponent implements OnInit {
 
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
-          sourceLabel: `${field.label} (${field.name})`, 
+          sourceLabel: `${field.label} (${field.name})`,
           targetField: ''
         }));
 
@@ -716,7 +736,7 @@ export class ApiMappingComponent implements OnInit {
 
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
-      
+
       const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
 
@@ -737,9 +757,9 @@ export class ApiMappingComponent implements OnInit {
         const sType = sourceMeta.type;
         const tType = match.type;
         const isCompatible = sType === tType || (sType === 'string' && ['string', 'picklist', 'reference'].includes(tType || ''));
-        
+
         if (!isCompatible) {
-          match = null; 
+          match = null;
         }
       }
 
@@ -753,7 +773,7 @@ export class ApiMappingComponent implements OnInit {
     });
 
     this.updateMappedCount();
-    
+
     if (matchCount > 0) {
       this.logMessages.unshift(`System: Auto-mapping applied. ${matchCount} fields mapped.`);
     } else {
@@ -787,7 +807,7 @@ export class ApiMappingComponent implements OnInit {
     this.jobStatus = 'Connecting...';
     this.logMessages = [];
     this.isValidating = true;
-    
+
     // Reset stats so UI zeroes out before the counter starts spinning
     this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
     this.validationResults = { invalidRecords: [] };
@@ -828,7 +848,7 @@ export class ApiMappingComponent implements OnInit {
       zohoToken: localStorage.getItem('zoho_token') || '',
       zohoDomain: localStorage.getItem('zoho_api_domain') || ''
     };
-    
+
     // Connect to the new streaming websocket
     const ws = new WebSocket('ws://localhost:8000/ws/validate-stream');
 
@@ -839,7 +859,7 @@ export class ApiMappingComponent implements OnInit {
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
-        
+
         if (data.log) {
           // Keep only the last 50 logs to prevent UI lag on massive streams
           this.logMessages.push(data.log);
@@ -858,7 +878,7 @@ export class ApiMappingComponent implements OnInit {
         // --- FINAL RESULTS INJECTION ---
         if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
            this.validationResults.invalidRecords = data.invalidRecords;
-           
+
            if (data.invalidRecords.length >= 500) {
              this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
            }
@@ -910,8 +930,8 @@ export class ApiMappingComponent implements OnInit {
   async revalidatePreview() {
     if (!this.validationResults?.invalidRecords?.length) return;
     const recordsToTest = this.validationResults.invalidRecords.map((ir: any) => ir.originalRow);
-    this.previewRecords = recordsToTest; 
-    await this.validateData(); 
+    this.previewRecords = recordsToTest;
+    await this.validateData();
   }
 
   downloadCSV(data: any[], filename: string) {
@@ -919,7 +939,7 @@ export class ApiMappingComponent implements OnInit {
 
     const headers = Object.keys(data[0]);
     const csvRows = [];
-    
+
     csvRows.push(headers.join(','));
 
     for (const row of data) {
@@ -934,7 +954,7 @@ export class ApiMappingComponent implements OnInit {
     const csvString = csvRows.join('\n');
     const blob = new Blob([csvString], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
-    
+
     const a = document.createElement('a');
     a.setAttribute('hidden', '');
     a.setAttribute('href', url);
@@ -970,12 +990,12 @@ export class ApiMappingComponent implements OnInit {
 
     if (missingFields.length > 0 || incompleteRefs.length > 0) {
       let warningHtml = '<div class="text-start mt-2">';
-      
+
       if (missingFields.length > 0) {
         warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
                         <ul class="small mb-3 text-muted"><li>${missingFields.join('</li><li>')}</li></ul>`;
       }
-      
+
       if (incompleteRefs.length > 0) {
         warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
                         <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (It will default to 'Id'):</p>
@@ -1037,7 +1057,7 @@ export class ApiMappingComponent implements OnInit {
         type: isRef ? 'reference' : fieldMeta?.type,
         referenceTo: fieldMeta?.referenceTo,
         relationshipName: fieldMeta?.relationshipName,
-        relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined), 
+        relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined),
         parentObjectName: m.parentObjectName || (fieldMeta?.referenceTo ? fieldMeta.referenceTo[0] : undefined)
       };
     });
@@ -1056,7 +1076,7 @@ export class ApiMappingComponent implements OnInit {
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
-      
+
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',

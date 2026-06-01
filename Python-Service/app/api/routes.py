@@ -5,7 +5,7 @@ import shutil
 import urllib.parse 
 import pandas as pd
 from openpyxl import load_workbook
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Query, Header 
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Query, Header, Response 
 from fastapi.responses import RedirectResponse
 import httpx 
 from pathlib import Path
@@ -60,6 +60,10 @@ ZOHO_REGIONS = {
 FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
 ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200")
 ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zoho/callback"
+
+HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
+HS_CLIENT_SECRET = os.getenv("HS_CLIENT_SECRET", "").strip()
+HS_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/hubspot/callback"
 
 
 # =========================================================
@@ -127,6 +131,24 @@ async def crm_oauth_login(
         
         query_string = urllib.parse.urlencode(params)
         auth_url = f"{base_accounts_url}/oauth/v2/auth?{query_string}"
+        return RedirectResponse(auth_url)
+    elif crm_id_lower == "hubspot":
+        if not HS_CLIENT_ID:
+            raise HTTPException(status_code=500, detail="HS_CLIENT_ID is missing from the environment variables.")
+        scopes = ["oauth",
+        "crm.objects.contacts.read",
+        "crm.objects.contacts.write",
+        "crm.objects.companies.read",
+        "crm.objects.deals.read",
+        "tickets"]
+        params = {
+            "client_id": HS_CLIENT_ID,
+            "redirect_uri": HS_REDIRECT_URI,
+            "scope": " ".join(scopes),
+            "state": side
+        }
+        query_string = urllib.parse.urlencode(params)
+        auth_url = f"https://app.hubspot.com/oauth/authorize?{query_string}"
         return RedirectResponse(auth_url)
     raise HTTPException(status_code=400, detail=f"CRM engine '{crm_id}' is not yet supported via OAuth.")
 
@@ -223,6 +245,31 @@ async def zoho_callback(code: str, state: str, request: Request):
     return RedirectResponse(
         f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zoho&access_token={access_token}&api_domain={safe_api_domain}&accounts_server={safe_accounts_server}"
     )
+
+# =========================================================
+# ROUTE: HUBSPOT OAUTH CALLBACK
+@router.get("/api/auth/hubspot/callback")
+async def hubspot_callback(code: str, state: str):
+    async with httpx.AsyncClient(verify=False) as client:
+        response = await client.post("https://api.hubapi.com/oauth/v1/token", data={
+            "grant_type": "authorization_code",
+            "client_id": HS_CLIENT_ID,
+            "client_secret": HS_CLIENT_SECRET,
+            "redirect_uri": HS_REDIRECT_URI,
+            "code": code
+        })
+        
+        if response.status_code != 200:
+            return RedirectResponse(f"{ANGULAR_FRONTEND_URL}/connection?error=hubspot_token_failed")
+            
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token")
+        
+        return RedirectResponse(
+            f"{ANGULAR_FRONTEND_URL}?connected_side={state}&crm=hubspot&access_token={access_token}&refresh_token={refresh_token}"
+        )
+
 
 # ==========================================
 # ROUTE 1: FAST HEADER EXTRACTION
@@ -433,6 +480,8 @@ async def revalidate_batch_json(request: Request):
 @router.get("/api/metadata/{crm_id}/objects")
 async def get_crm_objects(
     crm_id: str,
+    request: Request,
+    response: Response,
     sf_token: str = Header(None, alias="sf-token"),
     sf_instance_url: str = Header(None, alias="sf-instance-url"),
     zd_token: str = Header(None, alias="zd-token"),
@@ -471,6 +520,15 @@ async def get_crm_objects(
                     })
             
             return sorted(zoho_objects, key=lambda x: x["label"])
+    
+    if crm_lower == "hubspot":
+        hs_token = request.headers.get("hs-token", "")
+        hs_ref = request.headers.get("hs-refresh", "")
+        objs, new_token = await CrmMetadataService.fetch_hubspot_objects(hs_token, hs_ref)
+        if new_token:
+            response.headers["X-New-Access-Token"] = new_token
+        return objs
+    
     else:
         return [
             {"name": "account", "label": "Account (Mock)"},
@@ -484,6 +542,8 @@ async def get_crm_objects(
 @router.get("/api/metadata/{crm_id}/fields/{object_name}")
 async def get_crm_fields(
     crm_id: str,
+    request: Request,
+    response: Response,
     object_name: str,
     sf_token: str = Header(None, alias="sf-token"),
     sf_instance_url: str = Header(None, alias="sf-instance-url"),
@@ -552,7 +612,14 @@ async def get_crm_fields(
                     } for f in fields_data
                 ]
             }
-       
+    elif crm_lower == "hubspot":
+        hs_token = request.headers.get("hs-token", "")
+        hs_ref = request.headers.get("hs-refresh", "")
+        fields_data, new_token = await CrmMetadataService.fetch_hubspot_fields(hs_token, hs_ref, object_name)
+        if new_token:
+            response.headers["X-New-Access-Token"] = new_token
+        return fields_data 
+    
     else:
         return {
             "headers": ["id", "name", "status"],
@@ -571,18 +638,18 @@ async def get_crm_fields(
 async def get_filtered_preview(request: Request):
     try:
         payload = await request.json()
-        
         crm_id = payload.get("crmId", "").lower()
         obj_name = payload.get("objectName", "")
         query = payload.get("query", "").strip()
         headers_list = payload.get("headers", [])
-        
         sf_token = payload.get("sfToken", "")
         sf_instance = payload.get("sfInstance", "")
         zd_token = payload.get("zdToken", "")
         zd_subdomain = payload.get("zdSubdomain", "")
         zoho_token = payload.get("zohoToken", "")
         zoho_api_domain = payload.get("zohoDomain", "")
+        hs_token = payload.get("hsToken") or ""
+        hs_refresh = payload.get("hsRefresh") or ""
         
         if not obj_name:
             raise HTTPException(status_code=400, detail="Object name is required.")
@@ -739,6 +806,55 @@ async def get_filtered_preview(request: Request):
                     sample_records.append(flat_rec)
                     
                 return {"records": sample_records}
+           
+            # ==========================================
+            # 4. ZOHO LIVE DYNAMIC QUERY
+            # ==========================================
+            elif crm_id == "hubspot":
+                   
+                if not hs_token:
+                    raise HTTPException(status_code=400, detail="HubSpot authentication token missing.")
+                
+                search_body = {
+                    "properties": headers_list[:25] if headers_list else ["hs_object_id", "firstname", "lastname", "email", "name"],
+                    "limit": 5
+                }
+                
+                if query:
+                    if "=" in query or ":" in query:
+                        delimiter = "=" if "=" in query else ":"
+                        filters_array = []
+                        pairs = query.replace("&&", " ").replace("&", " ").split()
+                        for pair in pairs:
+                            if delimiter in pair:
+                                k, v = pair.split(delimiter, 1)
+                                filters_array.append({"propertyName": k.strip(), "operator": "EQ", "value": v.strip()})
+                        if filters_array:
+                            search_body["filterGroups"] = [{"filters": filters_array}]
+                    else:
+                        search_body["query"] = query
+
+                headers = {"Authorization": f"Bearer {hs_token}", "Content-Type": "application/json"}
+                url = f"https://api.hubapi.com/crm/v3/objects/{obj_name.lower()}/search"
+                
+                res = await client.post(url, headers=headers, json=search_body)
+                if res.status_code == 401 and hs_refresh:
+                    hs_token = await CrmMetadataService.refresh_hubspot_token(hs_refresh)
+                    headers["Authorization"] = f"Bearer {hs_token}"
+                    response.headers["X-New-Access-Token"] = hs_token
+                    res = await client.post(url, headers=headers, json=search_body)
+
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"HubSpot Search Error: {res.text}")
+                
+                flattened_records = []
+                for rec in res.json().get("results", []):
+                    flat_rec = {"id": rec.get("id"), "hs_object_id": rec.get("id")}
+                    for pk, pv in rec.get("properties", {}).items():
+                        flat_rec[pk] = pv
+                    flattened_records.append(flat_rec)
+                    
+                return {"records": flattened_records}
                 
     except HTTPException:
         raise

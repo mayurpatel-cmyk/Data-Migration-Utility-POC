@@ -20,7 +20,9 @@ export class MappingApiService {
       'zd-token': localStorage.getItem('zd_token') || '',
       'zd-subdomain': localStorage.getItem('zd_subdomain') || '',
       'zoho-token': localStorage.getItem('zoho_token') || '',
-      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
+      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || '',
+      'hs-token': localStorage.getItem('hubspot_token') || '',
+      'hs-refresh': localStorage.getItem('hubspot_refresh_token') || ''
     });
   }
 
