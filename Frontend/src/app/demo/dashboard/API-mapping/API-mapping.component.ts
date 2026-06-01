@@ -1042,9 +1042,28 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
   autoMap() {
     let matchCount = 0;
+    let skippedEmptyCount = 0; // Track how many fields were ignored because they were empty
 
     this.mappings.forEach((m) => {
       if (m.targetField) return; // Skip if already mapped
+
+      // ==========================================
+      // EMPTY DATA CHECK
+      // ==========================================
+      // If we have preview data, ensure this source field actually contains at least one non-null value
+      if (this.previewRecords && this.previewRecords.length > 0) {
+        const hasData = this.previewRecords.some(record => {
+          const val = record[m.sourceField];
+          // Check if it's not null, not undefined, and not an empty string
+          return val !== null && val !== undefined && String(val).trim() !== '';
+        });
+
+        // If the column is entirely empty across all preview records, skip mapping it entirely
+        if (!hasData) {
+          skippedEmptyCount++;
+          return; 
+        }
+      }
 
       const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -1077,7 +1096,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         
         const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
 
-        //  STRICT MODE ENFORCEMENT
+        // STRICT MODE ENFORCEMENT
         if (this.isStrictMapping && !isCompatible) {
           return; // Instantly disqualify if strict mode is on and types clash
         }
@@ -1088,23 +1107,22 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         } else if (tgtLabelExact === srcLabelExact) {
           score += 90;  // Perfect Label Match
         } else if (tgtApiClean === srcApiClean) {
-          score += 80;  // Cleaned API Name Match (e.g., Account_Id__c matches AccountId)
+          score += 80;  // Cleaned API Name Match
         } else if (tgtLabelClean === srcLabelClean) {
           score += 70;  // Cleaned Label Match
         } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
-          score += 40;  // Fuzzy Substring Match (e.g., 'Desc' matches 'Description')
+          score += 40;  // Fuzzy Substring Match
         }
 
-        //  DATA TYPE BONUS
-        // Only award the type bonus if there is at least some name resemblance
+        // DATA TYPE BONUS
         if (score >= 40 && isExactTypeMatch) {
            score += 25; 
         } else if (score >= 40 && isForgivingTypeMatch) {
            score += 10;
         }
 
-        //  TRACK THE WINNER
-        if (score > highestScore && score >= 50) { // Require a minimum confidence score of 50 to auto-map
+        // TRACK THE WINNER
+        if (score > highestScore && score >= 50) { 
           highestScore = score;
           bestMatch = t;
         }
@@ -1122,13 +1140,13 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     this.updateMappedCount();
     
-    // UI Feedback Upgrade
+    // UI Feedback Upgrade (Now includes the skipped count!)
     if (matchCount > 0) {
-      this.toastr.success(`Intelligently matched ${matchCount} fields!`, 'Auto-Map Complete');
-      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} fields mapped using Heuristic Scoring.`);
+      this.toastr.success(`Intelligently matched ${matchCount} fields! (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Complete');
+      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} mapped, ${skippedEmptyCount} ignored due to empty data.`);
     } else {
-      this.toastr.info(`No high-confidence matches found.`, 'Auto-Map Finished');
-      this.logMessages.unshift(`System: Auto-mapping ran, but no high-confidence data-type matches were found.`);
+      this.toastr.info(`No high-confidence matches found. (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Finished');
+      this.logMessages.unshift(`System: Auto-mapping ran, but no high-confidence data-type matches were found. ${skippedEmptyCount} columns were ignored.`);
     }
   }
 
