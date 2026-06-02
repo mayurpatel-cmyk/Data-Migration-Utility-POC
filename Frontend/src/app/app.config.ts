@@ -1,13 +1,17 @@
 import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
 import { provideRouter } from '@angular/router';
-import { provideHttpClient } from '@angular/common/http'; // CRITICAL: This enables API calls
+import { provideHttpClient } from '@angular/common/http';
 import { routes } from './app-routing.module';
 import { provideToastr } from 'ngx-toastr';
+import { provideMonacoEditor } from 'ngx-monaco-editor-v2';
 
 export const appConfig: ApplicationConfig = {
    providers: [
     provideZoneChangeDetection({ eventCoalescing: true }),
     provideRouter(routes),
+    provideMonacoEditor({
+      baseUrl: '/assets/monaco/vs' // Explicitly tell it where to look!
+    }),
     provideHttpClient(),
     provideToastr({   
       timeOut: 3000,

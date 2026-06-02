@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { forkJoin } from 'rxjs';
@@ -8,7 +8,10 @@ import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
+import { EditorComponent } from 'ngx-monaco-editor-v2';
+import { environment } from 'src/environments/environment';
 
+declare const monaco: any;
 interface FieldMeta {
   name: string;
   label: string;
@@ -27,6 +30,7 @@ interface MappingRow {
   searchQuery?: string;
   relationalExtIdField?: string;
   parentObjectName?: string;
+  massUpdateValue?: string;
 }
 
 interface CrmEntity {
@@ -34,25 +38,36 @@ interface CrmEntity {
   label: string;
 }
 
+
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent],
+  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent,EditorComponent],
   templateUrl: './API-mapping.component.html',
   styleUrls: ['./API-mapping.component.scss']
 })
-export class ApiMappingComponent implements OnInit {
+export class ApiMappingComponent implements OnInit,OnDestroy {
   private router = inject(Router);
   private mappingApi = inject(MappingApiService);
   private cdr = inject(ChangeDetectorRef);
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
+  private validationSocket: WebSocket | null = null;
+  private migrationSocket: WebSocket | null = null;
+  private isStandardZendeskObject(name: string): boolean {
+    if (!name) return false;
+    const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
+    const safeName = name.toLowerCase();
+    return std.includes(safeName) || std.includes(safeName + 's');
+  }
 
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
   targetCrmId: string = '';
   sourceSystem = 'Unknown';
   targetSystem = 'Unknown';
+  currentSessionId: string = '';
+  previewLimit: number = 5;
 
   // Dynamic Entity Lists for Dropdowns
   sourceEntities: CrmEntity[] = [];
@@ -72,6 +87,7 @@ export class ApiMappingComponent implements OnInit {
   externalIdField = '';
   mappedCount = 0;
   isStrictMapping = false;
+  hideMappedFields = false;
 
   // Execution Variables
   jobStatus = 'Idle';
@@ -94,10 +110,30 @@ export class ApiMappingComponent implements OnInit {
   targetSearchQuery = '';
   isHistoryDropdownOpen = false;
 
+  expandedRowIndex: number | null = null;
+
   operationMode: string = 'insert';
   batchSize: number = 5000;
 
   recentQueries: string[] = [];
+  // --- MONACO EDITOR CONFIGURATION ---
+  editorOptions = {
+    theme: 'vs', // Use 'vs-dark' if you want a dark code editor!
+    language: 'sql', // Highlights SELECT, WHERE, AND, OR automatically
+    minimap: { enabled: false }, // Hides the code minimap on the right
+    scrollBeyondLastLine: false,
+    wordWrap: 'on',
+    lineNumbers: 'off',
+    renderLineHighlight: 'none',
+    fontSize: 13,
+    padding: { top: 10, bottom: 10 },
+    suggestOnTriggerCharacters: true
+  };
+
+  monacoEditorInstance: any;
+  completionProvider: any;
+
+
 
   ngOnInit(): void {
     this.sourceSystem = localStorage.getItem('source_crm_slot') || 'Zendesk';
@@ -110,6 +146,271 @@ export class ApiMappingComponent implements OnInit {
     this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
     this.preloadEntirePage();
+  }
+
+  ngOnDestroy() {
+    // 1. Kill active websockets
+    if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
+      this.validationSocket.close();
+    }
+    if (this.migrationSocket && this.migrationSocket.readyState === WebSocket.OPEN) {
+      this.migrationSocket.close();
+    }
+
+    // 2. Kill the VS Code engine to free up RAM
+    if (this.monacoEditorInstance) {
+      this.monacoEditorInstance.dispose();
+    }
+  }
+
+
+  get visibleMappings() {
+    return this.hideMappedFields ? this.mappings.filter(m => !m.targetField) : this.mappings;
+  }
+
+  changePreviewLimit(newLimit: number) {
+    // Force JavaScript to treat the dropdown value as a number
+    this.previewLimit = Number(newLimit);
+
+    // If they already selected an object, instantly fetch the new rows!
+    if (this.selectedSourceObject) {
+      this.applyFilter();
+    }
+  }
+
+  getFieldMeta(fieldName: string, side: 'source' | 'target'): FieldMeta | undefined {
+    return side === 'source'
+      ? this.sourceFields.find(f => f.name === fieldName)
+      : this.targetFields.find(f => f.name === fieldName);
+  }
+  toggleRowExpand(index: number) {
+    this.expandedRowIndex = this.expandedRowIndex === index ? null : index;
+  }
+
+  getFieldTypeBadge(type: string | undefined): string {
+    if (!type) return 'bg-secondary';
+    const t = type.toLowerCase();
+    if (t.includes('string') || t.includes('text') || t.includes('email')) return 'bg-info text-dark';
+    if (t.includes('number') || t.includes('int') || t.includes('double') || t.includes('currency')) return 'bg-success';
+    if (t.includes('boolean')) return 'bg-warning text-dark';
+    if (t.includes('reference') || t.includes('lookup')) return 'bg-primary';
+    if (t.includes('date') || t.includes('time')) return 'bg-danger';
+    if (t.includes('picklist')) return 'bg-secondary';
+    return 'bg-secondary';
+  }
+
+  get hasPendingEdits(): boolean {
+    if (!this.validationResults?.invalidRecords) return false;
+
+    // Check if ANY record has the _editedFields object with at least one true value
+    return this.validationResults.invalidRecords.some((rec: any) =>
+      rec._editedFields && Object.keys(rec._editedFields).length > 0
+    );
+  }
+
+  isTypeMismatch(mapping: MappingRow): boolean {
+    if (!mapping.targetField) return false;
+    const srcType = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase() || 'string';
+    const tgtType = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase() || 'string';
+
+    if (srcType === tgtType) return false;
+
+    //  Strings can usually map to picklists or text areas
+    if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
+    // Numbers can map to other numbers
+    if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType)) return false;
+
+    return true;
+  }
+
+ onEditorInit(editor: any) {
+    this.monacoEditorInstance = editor;
+
+    if (!this.completionProvider) {
+
+      // ==========================================
+      //  DYNAMIC AUTOCOMPLETE
+      // ==========================================
+      this.completionProvider = monaco.languages.registerCompletionItemProvider('sql', {
+        provideCompletionItems: (model: any, position: any) => {
+          const word = model.getWordUntilPosition(position);
+          const range = {
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: word.startColumn, endColumn: word.endColumn
+          };
+
+          const suggestions: any[] = [];
+          const crm = this.sourceCrmId.toLowerCase();
+
+          // ------------------------------------
+          //  ZENDESK MODE
+          // ------------------------------------
+          if (crm === 'zendesk') {
+
+            // --- NEW: Context-Aware Value Suggestions ---
+            const lineContent = model.getLineContent(position.lineNumber);
+            const textBeforeCursor = lineContent.substring(0, position.column - 1);
+
+            // 1. If typing a Status
+            if (textBeforeCursor.match(/\bstatus:[a-zA-Z]*$/)) {
+              const statuses = ['new', 'open', 'pending', 'hold', 'solved', 'closed'];
+              statuses.forEach(s => suggestions.push({
+                label: s, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: s + ' ', range: range,
+                detail: 'Zendesk Ticket Status'
+              }));
+              return { suggestions: suggestions }; // Return early so ONLY statuses show up
+            }
+
+            // 2. If typing a Priority
+            if (textBeforeCursor.match(/\bpriority:[a-zA-Z]*$/)) {
+              const priorities = ['low', 'normal', 'high', 'urgent'];
+              priorities.forEach(p => suggestions.push({
+                label: p, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: p + ' ', range: range,
+                detail: 'Zendesk Ticket Priority'
+              }));
+              return { suggestions: suggestions };
+            }
+
+            // 3. If typing a Type
+            if (textBeforeCursor.match(/\btype:[a-zA-Z]*$/)) {
+              const types = ['ticket', 'user', 'organization', 'group'];
+              types.forEach(t => suggestions.push({
+                label: t, kind: monaco.languages.CompletionItemKind.EnumMember, insertText: t + ' ', range: range,
+                detail: 'Zendesk Record Type'
+              }));
+              return { suggestions: suggestions };
+            }
+
+            // --- STANDARD ZENDESK SUGGESTIONS ---
+
+            // 4. Zendesk Smart Snippet
+            suggestions.push({
+              label: 'Active Tickets (Snippet)',
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: `type:ticket status<solved `,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Auto-generates a search for all unresolved tickets.',
+              range: range
+            });
+
+            // 5. Zendesk Keywords
+            const zdKeywords = ['type:', 'status:', 'priority:', 'tags:', 'assignee:', 'requester:', 'group:', 'created>', 'updated>', 'order_by:', 'sort:'];
+            zdKeywords.forEach(kw => {
+              suggestions.push({
+                label: kw,
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: kw,
+                range: range
+              });
+            });
+
+            // 6. Zendesk CRM Fields
+            if (this.sourceFields && this.sourceFields.length > 0) {
+              this.sourceFields.forEach(field => {
+                suggestions.push({
+                  label: field.name,
+                  detail: `${field.label} (${field.type})`,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: field.name + ':',
+                  range: range
+                });
+              });
+            }
+          }
+          // ------------------------------------
+          //  SALESFORCE & ZOHO (SQL) MODE
+          // ------------------------------------
+          else {
+            suggestions.push({
+              label: 'SELECT (Basic)',
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: `SELECT * FROM ${this.selectedSourceObject || 'Object'} WHERE `,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Auto-generates a basic SELECT query for the current object.',
+              range: range
+            });
+
+            const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'LIKE', 'LIMIT', 'ORDER BY', 'ASC', 'DESC', 'NULL', 'IS', 'NOT', 'IN'];
+            sqlKeywords.forEach(kw => {
+              suggestions.push({
+                label: kw,
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: kw + ' ',
+                range: range
+              });
+            });
+
+            if (this.sourceFields && this.sourceFields.length > 0) {
+              this.sourceFields.forEach(field => {
+                suggestions.push({
+                  label: field.name,
+                  detail: `${field.label} (${field.type})`,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: field.name,
+                  range: range
+                });
+              });
+            }
+          }
+
+          return { suggestions: suggestions };
+        }
+      });
+
+      // ==========================================
+      //  SMART HOVER TOOLTIPS
+      // ==========================================
+      monaco.languages.registerHoverProvider('sql', {
+        provideHover: (model: any, position: any) => {
+          const wordInfo = model.getWordAtPosition(position);
+          if (!wordInfo) return null;
+
+          // CLEANUP: Strip out Zendesk operators (:, <, >) so we can match the pure field name
+          const cleanWord = wordInfo.word.replace(/[:<>]/g, '').toLowerCase();
+
+          const field = this.sourceFields.find(f => f.name.toLowerCase() === cleanWord);
+
+          if (field) {
+            return {
+              range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
+              contents: [
+                { value: `**${field.label}**` },
+                { value: `API Name: \`${field.name}\`` },
+                { value: `Type: **${field.type || 'String'}** | Required: **${field.isRequired || field.required ? 'Yes' : 'No'}**` }
+              ]
+            };
+          }
+          return null;
+        }
+      });
+    }
+  }
+
+  // Overwrite the old inject function to use Monaco's cursor placement
+  injectFieldAtCursor(fieldName: string) {
+    if (this.monacoEditorInstance) {
+      // Get the user's current cursor position inside the editor
+      const position = this.monacoEditorInstance.getPosition();
+
+      // Inject the text exactly where they clicked
+      this.monacoEditorInstance.executeEdits('custom-inject', [{
+        range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+        text: fieldName + ' ',
+        forceMoveMarkers: true
+      }]);
+
+      // Keep the editor focused so they can keep typing
+      this.monacoEditorInstance.focus();
+      this.customQuery = this.monacoEditorInstance.getValue();
+    } else {
+      // Fallback just in case Monaco hasn't fully loaded
+      if (!this.customQuery) {
+        this.customQuery = fieldName;
+      } else {
+        this.customQuery += ` ${fieldName}`;
+      }
+    }
+    this.validateQuery();
   }
 
   @HostListener('document:click', ['$event'])
@@ -134,19 +435,21 @@ export class ApiMappingComponent implements OnInit {
     const crm = this.sourceCrmId.toLowerCase();
 
     if (crm === 'zendesk') {
-      let singularName = entityName.toLowerCase();
-      if (singularName.endsWith('s') && singularName !== 'macros') {
-        singularName = singularName.slice(0, -1);
+      if (this.isStandardZendeskObject(entityName)) {
+        let singularName = entityName.toLowerCase();
+        if (singularName.endsWith('s') && singularName !== 'macros') {
+          singularName = singularName.slice(0, -1);
+        }
+        this.customQuery = `type:${singularName} `;
+      } else {
+        // It's a Custom Object! Leave the query blank so it fetches all records by default.
+        this.customQuery = '';
       }
-      this.customQuery = `type:${singularName} `;
-
     } else if (crm === 'salesforce' || crm === 'zoho') {
       this.customQuery = `SELECT * FROM ${entityName}`;
-
     } else if (crm === 'hubspot') {
       this.customQuery = `firstname=John`;
-    }
-    else {
+    } else {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
   }
@@ -276,21 +579,21 @@ export class ApiMappingComponent implements OnInit {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
-    const crm = this.sourceCrmId.toLowerCase();
+    // const crm = this.sourceCrmId.toLowerCase();
 
-    if (crm === 'zendesk') {
-      let singularName = entityName.toLowerCase();
-      if (singularName.endsWith('s') && singularName !== 'macros') {
-        singularName = singularName.slice(0, -1);
-      }
-      this.customQuery = `type:${singularName} `;
+    // if (crm === 'zendesk') {
+    //   let singularName = entityName.toLowerCase();
+    //   if (singularName.endsWith('s') && singularName !== 'macros') {
+    //     singularName = singularName.slice(0, -1);
+    //   }
+    //   this.customQuery = `type:${singularName} `;
 
-    } else if (crm === 'salesforce') {
-      this.customQuery = `SELECT * FROM ${entityName}`;
+    // } else if (crm === 'salesforce') {
+    //   this.customQuery = `SELECT * FROM ${entityName}`;
 
-    } else {
-      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
-    }
+    // } else {
+    //   this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+    // }
 
     this.buildDefaultQuery(entityName);
 
@@ -364,10 +667,12 @@ export class ApiMappingComponent implements OnInit {
     const crm = this.sourceCrmId.toLowerCase();
 
     if (crm === 'zendesk') {
+      const isCustom = this.selectedSourceObject && !this.isStandardZendeskObject(this.selectedSourceObject);
+
       return {
-        title: 'Zendesk Search Filter',
-        placeholder: "e.g., type:ticket status<solved created>2023-01-01",
-        helpText: "Use Zendesk native search syntax to filter by tags, status, or dates.",
+        title: isCustom ? 'Zendesk Custom Object Filter' : 'Zendesk Search Filter',
+        placeholder: isCustom ? '{\n  "filter": {\n    "$and": [\n      { "custom_object_fields.your_field": { "$eq": "value" } }\n    ]\n  }\n}' : "e.g., type:ticket status<solved created>2023-01-01",
+        helpText: isCustom ? "Use JSON. Prefix custom fields with 'custom_object_fields.'. Leave blank for all records." : "Use Zendesk native search syntax to filter by tags, status, or dates.",
         icon: 'icon-search',
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
@@ -444,8 +749,9 @@ export class ApiMappingComponent implements OnInit {
     const payload = {
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
-      query: safeQuery, // Sent as safeQuery
+      query: safeQuery,
       headers: this.previewHeaders,
+      limit: this.previewLimit,
       sfToken: localStorage.getItem('sf_token') || '',
       sfInstance: localStorage.getItem('sf_instance_url') || '',
       zdToken: localStorage.getItem('zd_token') || '',
@@ -457,7 +763,7 @@ export class ApiMappingComponent implements OnInit {
     };
 
     try {
-      const response = await fetch('http://localhost:8000/api/metadata/preview-filter', {
+      const response = await fetch(`${environment.apiUrl}/api/metadata/preview-filter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -476,8 +782,15 @@ export class ApiMappingComponent implements OnInit {
     } catch (error: any) {
       console.error('Filter Error:', error);
       this.previewRecords = [];
-      // --- LOGS EXACT ERROR FROM PYTHON STRAIGHT TO TERMINAL ---
-      this.logMessages = [...this.logMessages, ` API Error: ${error.message}`];
+
+      // --- Bind the CRM API error directly to the query editor! ---
+      const errorMessage = error.message || "Invalid Query Syntax rejected by CRM.";
+      this.queryError = `API Error: ${errorMessage}`;
+
+      // Show popup and log it
+      this.toastr.error('Your query was rejected by the source CRM.', 'Query Error');
+      this.logMessages = [...this.logMessages, ` API Error: ${errorMessage}`];
+
     } finally {
       this.isPreviewLoading = false;
       this.cdr.detectChanges();
@@ -494,37 +807,95 @@ export class ApiMappingComponent implements OnInit {
 
   validateQuery(): boolean {
     this.queryError = null;
+
+    //  Clear existing red squiggles every time they type
+    if (this.monacoEditorInstance) {
+      monaco.editor.setModelMarkers(this.monacoEditorInstance.getModel(), 'sql-validation', []);
+    }
+
     if (!this.customQuery) return true;
 
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    // 1. CRM-Specific Syntax Rules
-    if (crm === 'zendesk') {
-      if (queryLower.startsWith('select ') || queryLower.includes(' from ') || queryLower.includes(' where ')) {
-        this.queryError = "Zendesk doesn't support SQL. Format: type:ticket status<solved";
-      } else if (queryLower.includes(',')) {
-        this.queryError = "Do not use commas. Format: status:open tags:urgent";
-      } else if (queryLower.includes(' = ')) {
-        this.queryError = "Use colons for exact matches. Format: status:open";
-      } else if (queryLower.includes('%')) {
-        this.queryError = "Use '*' for wildcards. Format: name:tech*";
-      } else if (queryLower.includes('!=') || queryLower.includes('<>')) {
-        this.queryError = "Use '-' to exclude a value. Format: -status:closed";
+    //  Helper Function to Draw Red Squiggles
+    const applySquiggle = (errorMsg: string, offendingText: string): boolean => {
+      this.queryError = errorMsg;
+
+      if (this.monacoEditorInstance && offendingText) {
+        const model = this.monacoEditorInstance.getModel();
+        const fullText = model.getValue().toLowerCase();
+
+        // Find exactly where the bad text starts in the query
+        const startIndex = fullText.indexOf(offendingText.toLowerCase());
+
+        if (startIndex !== -1) {
+          const startPos = model.getPositionAt(startIndex);
+          const endPos = model.getPositionAt(startIndex + offendingText.length);
+
+          // Command Monaco to draw the red squiggly line!
+          monaco.editor.setModelMarkers(model, 'sql-validation', [{
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column,
+            message: errorMsg,
+            severity: monaco.MarkerSeverity.Error
+          }]);
+        }
       }
-    } else if (crm === 'salesforce' || crm === 'zoho') {
-      if (queryLower.includes('limit ') || queryLower.includes('order by ')) {
-        this.queryError = "Do not use LIMIT or ORDER BY. The engine handles pagination automatically.";
-      } else if (queryLower.endsWith(';')) {
-        this.queryError = "Do not end your query with a semicolon (;).";
+      return false;
+    };
+
+   // ==========================================
+    // ZENDESK STRICT TOKEN VALIDATION
+    // ==========================================
+    if (crm === 'zendesk') {
+      const isStandard = this.isStandardZendeskObject(this.selectedSourceObject);
+
+      if (!isStandard) {
+        // --- CUSTOM OBJECT VALIDATION ---
+        // 1. Empty is perfectly fine (Fetches all recent)
+        if (this.customQuery.trim() === '') return true;
+
+        // 2. Must be JSON
+        if (!this.customQuery.trim().startsWith('{')) {
+          return applySquiggle("Zendesk Custom Objects require a JSON filter (e.g., {\"filter\": ...}). Leave blank to fetch all records.", this.customQuery.trim().split(' ')[0] || " ");
+        }
+
+        // 3. Must be VALID JSON syntax
+        try {
+          JSON.parse(this.customQuery);
+        } catch (e) {
+          return applySquiggle("Invalid JSON Syntax. Please check your brackets and quotes.", "{");
+        }
+        return true;
       }
 
-      if (queryLower.startsWith('select ') && queryLower.includes(' from ')) {
-        const fromParts = queryLower.split(' from ');
-        const objPart = fromParts[1].split(' ')[0].trim();
-        if (objPart && objPart.toLowerCase() !== this.selectedSourceObject.toLowerCase()) {
-          this.queryError = `Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`;
-          return false;
+      // --- STANDARD OBJECT VALIDATION (Text Search) ---
+      if (queryLower.startsWith('select ') || queryLower.includes(' from ')) {
+        return applySquiggle("Zendesk doesn't support SQL. Format: type:ticket status<solved", "select");
+      } else if (queryLower.includes(',')) {
+        return applySquiggle("Do not use commas. Format: status:open tags:urgent", ",");
+      } else if (queryLower.includes(' = ')) {
+        return applySquiggle("Use colons for exact matches. Format: status:open", "=");
+      }
+
+      const tokens = queryLower.split(/\s+/);
+      const zendeskSystemFields = ['type', 'tags', 'status', 'priority', 'group_id', 'assignee_id', 'requester_id', 'submitter_id', 'organization_id', 'created', 'updated', 'order_by', 'sort'];
+
+      for (const token of tokens) {
+        const match = token.match(/^(-)?([a-zA-Z0-9_]+)[:<>](.*)$/);
+        if (match) {
+          const fieldName = match[2];
+          if (!zendeskSystemFields.includes(fieldName)) {
+            const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
+            if (!schemaField) {
+              return applySquiggle(`Invalid Zendesk Field: '${fieldName}' does not exist.`, fieldName);
+            }
+          }
+        } else if (token.length > 0 && !token.includes('*') && !token.includes('-')) {
+          return applySquiggle(`Invalid Syntax: '${token}' is not formatted correctly.`, token);
         }
       }
     } else if (crm === 'hubspot') {
@@ -535,66 +906,71 @@ export class ApiMappingComponent implements OnInit {
       return true;
     }
 
-    // 2. Field Schema Verification
-    if (!this.queryError && this.sourceFields.length > 0) {
-      let extractedConditions: { field: string, value: string }[] = [];
+    // ==========================================
+    //  SALESFORCE & ZOHO SQL VALIDATION
+    // ==========================================
+    else if (crm === 'salesforce' || crm === 'zoho') {
+      if (queryLower.includes('limit ')) {
+        return applySquiggle("Do not use LIMIT. The engine handles pagination automatically.", "limit");
+      } else if (queryLower.includes('order by ')) {
+        return applySquiggle("Do not use ORDER BY.", "order by");
+      } else if (queryLower.endsWith(';')) {
+        return applySquiggle("Do not end your query with a semicolon (;).", ";");
+      }
 
-      if (crm === 'zendesk') {
-        const zendeskRegex = /(-)?([a-zA-Z0-9_]+)[:<>]([a-zA-Z0-9_*-]+)/g;
-        let match;
-        const ignoreList = ['type', 'tags', 'order_by', 'sort', 'created', 'updated'];
+      const hasSelect = queryLower.startsWith('select ');
+      const hasWhere = queryLower.includes(' where ');
+      let conditionPart = '';
 
-        while ((match = zendeskRegex.exec(this.customQuery)) !== null) {
-          if (!ignoreList.includes(match[2].toLowerCase())) {
-            extractedConditions.push({ field: match[2].toLowerCase(), value: match[3] });
-          }
+      if (hasSelect) {
+        if (hasWhere) {
+          conditionPart = queryLower.split(' where ')[1];
         }
-      } else if (crm === 'salesforce' || crm === 'zoho') {
-        // Shared Regex for SOQL and COQL
-        const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
-        let match;
-        const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
+      } else {
+        conditionPart = queryLower;
+      }
 
-        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
-          const fieldName = match[1].toLowerCase();
-          if (reservedWords.includes(fieldName)) continue;
-
-          extractedConditions.push({
-            field: fieldName,
-            value: match[2].replace(/'/g, '').trim()
-          });
+      if (conditionPart.trim() !== '') {
+        if (!conditionPart.includes('=') && !conditionPart.includes('<') && !conditionPart.includes('>') &&
+            !conditionPart.includes('like') && !conditionPart.includes(' is ')) {
+          return applySquiggle("Invalid Syntax: Missing SQL operators (e.g., =, <, >, LIKE).", conditionPart.trim().split(' ')[0]);
         }
       }
 
-      for (const condition of extractedConditions) {
-        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === condition.field);
+      if (hasSelect && queryLower.includes(' from ')) {
+        const fromParts = queryLower.split(' from ');
+        const objPart = fromParts[1].trim().split(' ')[0];
+        if (objPart && objPart.toLowerCase() !== this.selectedSourceObject.toLowerCase()) {
+          return applySquiggle(`Object Mismatch: You selected '${this.selectedSourceObject}', but your query says FROM '${objPart}'.`, objPart);
+        }
+      }
+
+      // Deep Field & Type Validation
+      const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
+      let match;
+      const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
+
+      while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+        const fieldName = match[1].toLowerCase();
+        if (reservedWords.includes(fieldName)) continue;
+
+        const schemaField = this.sourceFields.find(f => f.name.toLowerCase() === fieldName);
 
         if (!schemaField) {
-          this.queryError = `Invalid Field: '${condition.field}' does not exist on ${this.selectedSourceObject}.`;
-          break;
+          return applySquiggle(`Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`, match[1]);
         }
 
-        const val = condition.value || '';
+        const val = match[2].replace(/'/g, '').trim();
         const type = schemaField.type?.toLowerCase() || 'string';
 
         if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
 
         if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          this.queryError = `Type Mismatch: '${condition.field}' is a Number, but you entered text ('${val}').`;
-          break;
+          return applySquiggle(`Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`, match[2]);
         }
 
         if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          this.queryError = `Type Mismatch: '${condition.field}' is a Boolean (True/False). You entered '${val}'.`;
-          break;
-        }
-
-        if (['date', 'datetime'].includes(type) && isNaN(Date.parse(val))) {
-          const sfDateLiterals = ['today', 'yesterday', 'tomorrow', 'this_week', 'last_week', 'this_month'];
-          if (crm === 'salesforce' && sfDateLiterals.includes(val.toLowerCase())) continue;
-
-          this.queryError = `Type Mismatch: '${condition.field}' requires a valid date format. You entered '${val}'.`;
-          break;
+          return applySquiggle(`Type Mismatch: '${match[1]}' is a Boolean. You entered '${val}'.`, match[2]);
         }
       }
     }
@@ -727,9 +1103,28 @@ export class ApiMappingComponent implements OnInit {
 
   autoMap() {
     let matchCount = 0;
+    let skippedEmptyCount = 0; // Track how many fields were ignored because they were empty
 
     this.mappings.forEach((m) => {
-      if (m.targetField) return;
+      if (m.targetField) return; // Skip if already mapped
+
+      // ==========================================
+      // EMPTY DATA CHECK
+      // ==========================================
+      // If we have preview data, ensure this source field actually contains at least one non-null value
+      if (this.previewRecords && this.previewRecords.length > 0) {
+        const hasData = this.previewRecords.some(record => {
+          const val = record[m.sourceField];
+          // Check if it's not null, not undefined, and not an empty string
+          return val !== null && val !== undefined && String(val).trim() !== '';
+        });
+
+        // If the column is entirely empty across all preview records, skip mapping it entirely
+        if (!hasData) {
+          skippedEmptyCount++;
+          return;
+        }
+      }
 
       const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -737,35 +1132,67 @@ export class ApiMappingComponent implements OnInit {
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
 
-      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '');
+      // Clean names (remove underscores, spaces, __c, etc. for fuzzy matching)
+      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+      const srcType = (sourceMeta.type || 'string').toLowerCase();
 
-      let match = null;
+      let bestMatch: FieldMeta | null = null;
+      let highestScore = 0;
 
-      match = this.targetFields.find(t => t.name.toLowerCase() === srcApiExact);
-      if (!match) match = this.targetFields.find(t => t.label.toLowerCase() === srcLabelExact);
-      if (!match) match = this.targetFields.find(t => t.name.toLowerCase().replace(/[^a-z0-9]/g, '') === srcApiClean);
-      if (!match) match = this.targetFields.find(t => t.label.toLowerCase().replace(/[^a-z0-9]/g, '') === srcLabelClean);
-      if (!match && srcApiClean.length > 3) {
-         match = this.targetFields.find(t => {
-           const tgtApiClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-           return tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean);
-         });
-      }
+      // Grade this source field against EVERY target field
+      this.targetFields.forEach(t => {
+        let score = 0;
+        const tgtApiExact = t.name.toLowerCase();
+        const tgtLabelExact = t.label.toLowerCase();
+        const tgtApiClean = tgtApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
+        const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
+        const tgtType = (t.type || 'string').toLowerCase();
 
-      if (this.isStrictMapping && match) {
-        const sType = sourceMeta.type;
-        const tType = match.type;
-        const isCompatible = sType === tType || (sType === 'string' && ['string', 'picklist', 'reference'].includes(tType || ''));
+        // DATA TYPE COMPATIBILITY CHECK
+        const isExactTypeMatch = srcType === tgtType;
+        const isForgivingTypeMatch =
+          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
+          (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType));
 
-        if (!isCompatible) {
-          match = null;
+        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
+
+        // STRICT MODE ENFORCEMENT
+        if (this.isStrictMapping && !isCompatible) {
+          return; // Instantly disqualify if strict mode is on and types clash
         }
-      }
 
-      if (match) {
-        m.targetField = match.name;
-        if (this.isReferenceField(match.name)) {
+        // THE SCORING ALGORITHM
+        if (tgtApiExact === srcApiExact) {
+          score += 100; // Perfect API Name Match
+        } else if (tgtLabelExact === srcLabelExact) {
+          score += 90;  // Perfect Label Match
+        } else if (tgtApiClean === srcApiClean) {
+          score += 80;  // Cleaned API Name Match
+        } else if (tgtLabelClean === srcLabelClean) {
+          score += 70;  // Cleaned Label Match
+        } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
+          score += 40;  // Fuzzy Substring Match
+        }
+
+        // DATA TYPE BONUS
+        if (score >= 40 && isExactTypeMatch) {
+           score += 25;
+        } else if (score >= 40 && isForgivingTypeMatch) {
+           score += 10;
+        }
+
+        // TRACK THE WINNER
+        if (score > highestScore && score >= 50) {
+          highestScore = score;
+          bestMatch = t;
+        }
+      });
+
+      // Apply the best match found for this specific source field
+      if (bestMatch) {
+        m.targetField = bestMatch['name'];
+        if (this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
         matchCount++;
@@ -774,10 +1201,13 @@ export class ApiMappingComponent implements OnInit {
 
     this.updateMappedCount();
 
+    // UI Feedback Upgrade (Now includes the skipped count!)
     if (matchCount > 0) {
-      this.logMessages.unshift(`System: Auto-mapping applied. ${matchCount} fields mapped.`);
+      this.toastr.success(`Intelligently matched ${matchCount} fields! (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Complete');
+      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} mapped, ${skippedEmptyCount} ignored due to empty data.`);
     } else {
-      this.logMessages.unshift(`System: Auto-mapping ran, but no new matching fields were found.`);
+      this.toastr.info(`No high-confidence matches found. (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Finished');
+      this.logMessages.unshift(`System: Auto-mapping ran, but no high-confidence data-type matches were found. ${skippedEmptyCount} columns were ignored.`);
     }
   }
 
@@ -786,31 +1216,45 @@ export class ApiMappingComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
-  async validateData() {
+  async validateData(isRevalidation: boolean = false, fixedRecords: any[] = []) {
     if (this.mappedCount === 0) {
       this.toastr.error('Validation Aborted: You must map at least one field to validate data.');
       return;
     }
 
-    const confirmResult = await Swal.fire({
-      title: 'Validate Entire Database?',
-      text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
-      icon: 'info',
-      showCancelButton: true,
-      confirmButtonColor: '#0d6efd',
-      cancelButtonColor: '#6c757d',
-      confirmButtonText: 'Yes, Start Validation Stream'
-    });
+    if (!isRevalidation && this.customQuery && !this.validateQuery()) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error('Please fix your query criteria before validating.', 'Query Error');
+      // Scroll to the top so the user sees the red query box
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
 
-    if (!confirmResult.isConfirmed) return;
+    // Only show the big popup and wipe stats if it is a FRESH run
+    if (!isRevalidation) {
+      const confirmResult = await Swal.fire({
+        title: 'Validate Entire Database?',
+        text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonColor: '#0d6efd',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Yes, Start Validation Stream'
+      });
 
-    this.jobStatus = 'Connecting...';
-    this.logMessages = [];
+      if (!confirmResult.isConfirmed) return;
+
+      this.jobStatus = 'Connecting...';
+      this.logMessages = [];
+      this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+      this.validationResults = { invalidRecords: [] };
+      this.currentSessionId = '';
+    } else {
+      this.jobStatus = 'Re-validating...';
+      this.toastr.info('Checking fixed records against Salesforce rules...', 'Re-validating');
+    }
+
     this.isValidating = true;
-
-    // Reset stats so UI zeroes out before the counter starts spinning
-    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
-    this.validationResults = { invalidRecords: [] };
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
@@ -834,7 +1278,11 @@ export class ApiMappingComponent implements OnInit {
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }
 
+    // Inject the Revalidation flags into the payload
     const payload = {
+      isRevalidation: isRevalidation,
+      sessionId: this.currentSessionId,
+      fixedRecords: fixedRecords,
       crmId: this.sourceCrmId,
       objectName: this.selectedSourceObject,
       query: safeQuery,
@@ -852,7 +1300,7 @@ export class ApiMappingComponent implements OnInit {
     };
 
     // Connect to the new streaming websocket
-    const ws = new WebSocket('ws://localhost:8000/ws/validate-stream');
+    const ws = new WebSocket(`${environment.wsUrl}/ws/validate-stream`);
 
     ws.onopen = () => {
       ws.send(JSON.stringify(payload));
@@ -880,6 +1328,9 @@ export class ApiMappingComponent implements OnInit {
         // --- FINAL RESULTS INJECTION ---
         if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
            this.validationResults.invalidRecords = data.invalidRecords;
+           if (data.sessionId) {
+             this.currentSessionId = data.sessionId; // Save the session!
+           }
 
            if (data.invalidRecords.length >= 500) {
              this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
@@ -897,6 +1348,13 @@ export class ApiMappingComponent implements OnInit {
         this.logError(' WebSocket Error: Validation stream disconnected.');
         this.jobStatus = 'Validation Failed';
         this.isValidating = false;
+        Swal.fire({
+          title: 'Connection Lost',
+          text: 'The server disconnected unexpectedly while streaming data. Please check your network or server logs and try again.',
+          icon: 'error',
+          confirmButtonColor: '#0d6efd',
+          customClass: { popup: 'rounded-4 shadow-lg border-0' }
+        });
         this.cdr.detectChanges();
       });
     };
@@ -910,6 +1368,34 @@ export class ApiMappingComponent implements OnInit {
         this.cdr.detectChanges();
       });
     };
+  }
+
+  applyMassUpdate(sourceField: string, value: string | undefined) {
+    if (value === undefined) value = '';
+
+    // Check if there are actually records to update
+    if (!this.validationResults || !this.validationResults.invalidRecords || this.validationResults.invalidRecords.length === 0) {
+      return;
+    }
+
+    let updatedCount = 0;
+
+    // Loop through ALL error records, but ONLY apply the fix if that specific cell failed!
+    this.validationResults.invalidRecords.forEach((record: any) => {
+      if (this.hasCellError(record, sourceField)) {
+        record.originalRow[sourceField] = value;
+        this.markAsEdited(record, sourceField);
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
+      this.toastr.success(`Updated '${sourceField}' across ${updatedCount} records. Correct data was left untouched!`, 'Mass Update Applied');
+    } else {
+      this.toastr.info(`No records had an error in '${sourceField}', so nothing was changed.`, 'No Updates Needed');
+    }
+
+    this.cdr.detectChanges();
   }
 
   hasErrorsInColumn(sourceField: string): boolean {
@@ -929,11 +1415,14 @@ export class ApiMappingComponent implements OnInit {
     record._editedFields[fieldName] = true;
   }
 
-  async revalidatePreview() {
+ async revalidatePreview() {
     if (!this.validationResults?.invalidRecords?.length) return;
+
+    // Grab all the rows currently in the error grid (including the user's edits)
     const recordsToTest = this.validationResults.invalidRecords.map((ir: any) => ir.originalRow);
-    this.previewRecords = recordsToTest;
-    await this.validateData();
+
+    // Pass True to trigger the shortcut in Python
+    await this.validateData(true, recordsToTest);
   }
 
   downloadCSV(data: any[], filename: string) {
@@ -967,6 +1456,17 @@ export class ApiMappingComponent implements OnInit {
   }
 
   runMigration() {
+    if (this.hasPendingEdits) {
+      this.toastr.warning('You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.', 'Action Required');
+
+      // Flash the Re-Validate button to draw the user's attention
+      const revalBtn = document.querySelector('.btn-danger.fw-bold') as HTMLElement;
+      if (revalBtn) {
+        revalBtn.classList.add('animate__animated', 'animate__headShake');
+        setTimeout(() => revalBtn.classList.remove('animate__headShake'), 1000);
+      }
+      return;
+    }
     if (this.customQuery && !this.validateQuery()) {
       this.jobStatus = 'Validation Failed';
       this.toastr.error('Please fix your query criteria before running.', 'Query Error');
@@ -1028,7 +1528,7 @@ export class ApiMappingComponent implements OnInit {
         text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
         icon: 'info',
         showCancelButton: true,
-        confirmButtonColor: '#198754', // Green button for go
+        confirmButtonColor: '#198754',
         cancelButtonColor: '#6c757d',
         confirmButtonText: 'Yes, Run Job!'
       }).then((result) => {
@@ -1039,6 +1539,20 @@ export class ApiMappingComponent implements OnInit {
         }
       });
     }
+  }
+
+
+  downloadAudit(type: 'valid' | 'invalid') {
+    if (!this.currentSessionId) {
+      this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
+      return;
+    }
+
+    this.toastr.info(`Generating ${type} audit report...`, 'Downloading');
+
+    // Trigger the browser's native download behavior via the FastAPI route
+    const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
+    window.open(url, '_blank');
   }
 
   // --- Separated execution logic for clean popup handling ---
@@ -1070,7 +1584,13 @@ export class ApiMappingComponent implements OnInit {
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }
 
+    const fixedRecords = this.validationResults?.invalidRecords
+      ?.filter((rec: any) => rec._editedFields)
+      ?.map((rec: any) => rec.originalRow) || [];
+
     const job = {
+      sessionId: this.currentSessionId,
+      fixedRecords: fixedRecords,
       sourceObject: this.selectedSourceObject,
       targetObject: this.selectedTargetObject,
       extractionQuery: safeQuery,
@@ -1090,26 +1610,69 @@ export class ApiMappingComponent implements OnInit {
     };
 
     const payload = { queue: [job] };
-    const ws = new WebSocket('ws://localhost:8000/ws/migrate');
+    const ws = new WebSocket(`${environment.wsUrl}/ws/migrate`);
 
     ws.onopen = () => { ws.send(JSON.stringify(payload)); };
 
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
-        if (data.log) this.logMessages = [...this.logMessages, data.log];
+
+        if (data.log) {
+          this.logMessages = [...this.logMessages, data.log];
+        }
+
         if (data.status) {
           this.jobStatus = data.status;
+
+          // --- THE NEW POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
-             this.toastr.success('Migration process has finished.', 'Job Complete');
+            const successCount = data.successData ? data.successData.length : 0;
+            const errorCount = data.errorData ? data.errorData.length : 0;
+
+            let swalIcon: 'success' | 'warning' | 'error' = 'success';
+            let swalTitle = 'Migration Complete!';
+
+            if (errorCount > 0 && successCount > 0) {
+                swalIcon = 'warning';
+                swalTitle = 'Migration Finished with Errors';
+            } else if (errorCount > 0 && successCount === 0) {
+                swalIcon = 'error';
+                swalTitle = 'Migration Failed';
+            }
+
+            Swal.fire({
+              title: swalTitle,
+              html: `
+                <div class="text-center mt-3">
+                  <div class="d-flex justify-content-around mb-4 gap-3">
+                    <div class="p-3 border rounded border-success-subtle bg-success-subtle w-100 shadow-sm">
+                      <h2 class="text-success mb-0 fw-bold">${successCount}</h2>
+                      <span class="small fw-bold text-success-emphasis text-uppercase">Successful</span>
+                    </div>
+                    <div class="p-3 border rounded border-danger-subtle bg-danger-subtle w-100 shadow-sm">
+                      <h2 class="text-danger mb-0 fw-bold">${errorCount}</h2>
+                      <span class="small fw-bold text-danger-emphasis text-uppercase">Rejected</span>
+                    </div>
+                  </div>
+                  <p class="text-muted small mb-0">Check the terminal logs or download the error reports to review rejected records.</p>
+                </div>
+              `,
+              icon: swalIcon,
+              confirmButtonText: 'View Logs',
+              confirmButtonColor: '#0d6efd',
+              customClass: { popup: 'rounded-4 shadow-lg border-0' }
+            });
           }
         }
+
         if (data.successData) this.successData = data.successData;
         if (data.errorData) this.errorData = data.errorData;
 
         this.cdr.detectChanges();
         setTimeout(() => {
-          const logContainer = document.querySelector('.bg-dark.overflow-auto, .shadow-inner');
+          // Auto-scroll the terminal
+          const logContainer = document.querySelector('#terminal-window');
           if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
         }, 10);
       });
@@ -1120,6 +1683,13 @@ export class ApiMappingComponent implements OnInit {
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
         this.toastr.error('WebSocket connection failed.', 'Engine Error');
+        Swal.fire({
+          title: 'Connection Lost',
+          text: 'The server disconnected unexpectedly while streaming data. Please check your network or server logs and try again.',
+          icon: 'error',
+          confirmButtonColor: '#0d6efd',
+          customClass: { popup: 'rounded-4 shadow-lg border-0' }
+        });
         this.cdr.detectChanges();
       });
     };

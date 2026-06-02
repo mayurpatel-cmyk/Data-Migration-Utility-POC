@@ -2,11 +2,41 @@ import urllib.parse
 import asyncio
 import httpx
 import traceback
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from app.services.validator_service import process_validation_batch
 import re
+import uuid
+import sqlite3
+import os
+import tempfile
+import json
+from datetime import datetime
+import io
+import json
+import csv
+from fastapi.responses import StreamingResponse
 
 router = APIRouter()
+
+BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
+
+def get_db_path(session_id: str):
+    """
+    Reads the Smart Session ID and routes the database into a CRM/Object folder structure.
+    Example session_id: 'zoho_leads_20260528_153000_a1b2c3d4'
+    """
+    parts = session_id.split('_')
+    
+    # Extract the CRM (part 1) and Object Name (part 2)
+    crm_folder = parts[0] if len(parts) > 0 else "uncategorized"
+    obj_folder = parts[1] if len(parts) > 1 else "unknown_object"
+    
+    # Create the deeply nested folder (e.g., /staging_databases/zoho/leads/)
+    target_dir = os.path.join(BASE_STAGING_DIR, crm_folder, obj_folder)
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Return the exact path for the database file
+    return os.path.join(target_dir, f"{session_id}.db")
 
 # ==========================================
 #  CHUNK DATASET
@@ -208,8 +238,48 @@ async def websocket_migration(websocket: WebSocket):
                 # EXTRACT (With Massive Pagination)
                 # ------------------------------------------
                 source_records = job.get("rawRecords")
+
+                session_id = job.get("sessionId")
+                fixed_records = job.get("fixedRecords", [])
+                source_records = []
                 
-                if not source_records:
+                # 1. If we are running from the UI, we MUST have a Session ID
+                if session_id:
+                    db_path = get_db_path(session_id)
+                    
+                    if os.path.exists(db_path):
+                        await send_log(f"[{target_object}] Reading strictly validated payload from staging database...")
+                        import sqlite3
+                        import json
+                        
+                        try:
+                            conn = sqlite3.connect(db_path)
+                            cursor = conn.cursor()
+                            
+                            # ONLY load records that perfectly passed validation
+                            cursor.execute("SELECT data FROM records WHERE is_valid = 1")
+                            source_records = [json.loads(row[0]) for row in cursor.fetchall()]
+                            conn.close()
+                            
+                            if not source_records:
+                                await send_log(f"[{target_object}] FATAL: No valid records found in database. Fix errors and Re-Validate first.", "Failed")
+                                continue # Skip this job entirely
+                                
+                            job["rawRecords"] = source_records
+                            await send_log(f"[{target_object}] Loaded {len(source_records)} perfectly valid records ready for migration.")
+                            
+                        except Exception as e:
+                            await send_log(f"[{target_object}] FATAL: Database read error: {str(e)}", "Failed")
+                            continue
+                            
+                    else:
+                        # THE FIX: If the file is missing, ABORT! Do not fall back to the API.
+                        await send_log(f"[{target_object}] FATAL: Staging payload expired or missing. Please click 'Validate' to generate a fresh payload.", "Failed")
+                        continue # Skip this job entirely
+                
+                # 2. Only allow live API fetching if there is NO session ID at all (e.g., Scheduled Background Jobs)
+                else:
+                    await send_log(f"[{target_object}] No UI session detected. Initiating direct API extraction...")
                     source_records = []
                     
                     # ======================================
@@ -268,8 +338,16 @@ async def websocket_migration(websocket: WebSocket):
                                 for r in raw_records:
                                     flat_rec = {}
                                     for k, v in r.items():
-                                        if isinstance(v, dict) and "id" in v:
-                                            flat_rec[k] = v.get("name", v["id"])
+                                        if isinstance(v, dict):
+                                            # If it's a Lookup/Owner dict, extract the Name or ID
+                                            flat_rec[k] = v.get("name", v.get("id", str(v)))
+                                        elif isinstance(v, list):
+                                            # If it's a list (like Tags or Multi-Select), flatten it
+                                            parsed_list = [
+                                                str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
+                                                for i in v
+                                            ]
+                                            flat_rec[k] = ";".join(parsed_list)
                                         else:
                                             flat_rec[k] = v
                                     source_records.append(flat_rec)
@@ -540,6 +618,93 @@ async def websocket_validate_stream(websocket: WebSocket):
     try:
         payload = await websocket.receive_json()
         
+        # --- RE-VALIDATION SHORTCUT ---
+        is_revalidation = payload.get("isRevalidation", False)
+        session_id = payload.get("sessionId", "")
+
+        if is_revalidation and session_id:
+            db_path = get_db_path(session_id) 
+            
+            if not os.path.exists(db_path):
+                await websocket.send_json({"log": "Error: Staging session expired. Please run a fresh validation.", "status": "Validation Failed"})
+                await websocket.close()
+                return
+
+            fixed_records = payload.get("fixedRecords", [])
+            mappings = payload.get("mappings", [])
+            dedupe_key = payload.get("dedupeKey", "")
+            sf_rules = payload.get("sfRules", {})
+
+            await websocket.send_json({"log": "System: Re-validating manual UI fixes...", "status": "Validating"})
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # 1. EXTRACT DB IDs & CLEAN PAYLOAD
+            db_ids_to_delete = []
+            for rec in fixed_records:
+                if "_db_id" in rec:
+                    db_ids_to_delete.append(rec.pop("_db_id")) # Remove ID so it doesn't break Salesforce schema
+
+            # 2. Process the fixed records through the validation engine
+            chunk_result = process_validation_batch(fixed_records, mappings, dedupe_key, sf_rules, "")
+
+            # 3. DELETE ONLY THE SPECIFIC 500 ROWS THE USER JUST FIXED
+            if db_ids_to_delete:
+                placeholders = ','.join(['?'] * len(db_ids_to_delete))
+                cursor.execute(f"DELETE FROM records WHERE id IN ({placeholders})", db_ids_to_delete)
+
+            # 4. Insert the newly tested records (If they failed again, they go back to errors)
+            valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+            invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+
+            conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+            conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+            conn.commit()
+
+            # 5. Recalculate totals directly from the database
+            cursor.execute("SELECT COUNT(*) FROM records")
+            total_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 1")
+            valid_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 0")
+            invalid_count = cursor.fetchone()[0]
+
+            # 6. GRAB THE NEXT 500 ERRORS FOR THE CONTINUOUS INBOX
+            cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
+            db_errors = cursor.fetchall()
+            
+            all_invalid_records = []
+            for row in db_errors:
+                rec_data = json.loads(row[1])
+                rec_data["_db_id"] = row[0] # Inject DB ID for the next round
+                all_invalid_records.append({
+                    "originalRow": rec_data,
+                    "errors": row[2]
+                })
+
+            conn.close()
+
+            aggregate_stats = {
+                "total": total_count,
+                "valid": valid_count,
+                "invalid": invalid_count,
+                "duplicates": chunk_result["stats"].get("duplicates", 0)
+            }
+
+            await websocket.send_json({
+                "log": f"Re-validation Complete: Fixed {len(valid_inserts)} records. {invalid_count} errors remaining.",
+                "status": "Validation Passed" if invalid_count == 0 else "Validation Warning",
+                "stats": aggregate_stats,
+                "invalidRecords": all_invalid_records,
+                "sessionId": session_id
+            })
+            
+            await websocket.close()
+            return
+        # --- END OF RE-VALIDATION LOGIC ---
+
+        # --- ORIGINAL LOGIC FOR FRESH RUNS ---
         crm_id = payload.get("crmId", "").lower()
         obj_name = payload.get("objectName", "")
         query = payload.get("query", "").strip()
@@ -551,12 +716,24 @@ async def websocket_validate_stream(websocket: WebSocket):
         sf_instance = payload.get("sfInstance", "")
         zd_token = payload.get("zdToken", "")
         zd_subdomain = payload.get("zdSubdomain", "")
+        zoho_token = payload.get("zohoToken", "")
+        zoho_api_domain = payload.get("zohoDomain", "")
 
-        # Track running totals for the Angular UI
+        # Generate Smart Session ID
+        safe_obj = ''.join(e for e in obj_name if e.isalnum()).lower()
+        if not safe_obj: safe_obj = "unknown"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        short_uuid = str(uuid.uuid4())[:8]
+        session_id = f"{crm_id}_{safe_obj}_{timestamp}_{short_uuid}"
+        
+        db_path = get_db_path(session_id)
+        
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
+        
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
-        all_invalid_records = [] # Capped at 500 to protect browser memory
 
-        await websocket.send_json({"log": f"System: Initializing Streaming Validation for {obj_name}...", "status": "Connecting"})
+        await websocket.send_json({"log": f"System: Initializing Streaming Validation...", "status": "Connecting"})
 
         async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
             
@@ -565,73 +742,152 @@ async def websocket_validate_stream(websocket: WebSocket):
             # ------------------------------------------
             if crm_id == "zendesk":
                 safe_obj = obj_name.lower()
-                safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
-                
-                import re
-                
-                # --- FIX: Zendesk Export API strictly requires a 'query' parameter ---
-                # 1. Clean out duplicate 'type:' modifiers from the user's input
-                clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip()
-                
-                # 2. Always ensure we have a base query so Zendesk doesn't throw a 422
-                final_query = f"{clean_query} type:{safe_obj_singular}".strip()
-                safe_query = urllib.parse.quote(final_query)
-                
-                # 3. Use BOTH filter[type] and the query string for maximum stability
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
                 zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
                 
-                while url:
-                    res = await client.get(url, headers=zd_headers)
-                    if res.status_code == 429:
-                        retry = int(res.headers.get("Retry-After", 60))
-                        await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
-                        await asyncio.sleep(retry)
-                        continue
+                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+                is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+
+                if is_standard:
+                    # --- STANDARD OBJECTS ---
+                    safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
+                    import re
+                    clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
+                    final_query = f"{clean_query} type:{safe_obj_singular}".strip()
+                    import urllib.parse
+                    safe_query = urllib.parse.quote(final_query)
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
+                    
+                    while url:
+                        res = await client.get(url, headers=zd_headers)
+                        if res.status_code == 429:
+                            retry = int(res.headers.get("Retry-After", 60))
+                            await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
+                            await asyncio.sleep(retry)
+                            continue
+                            
+                        res.raise_for_status()
+                        data = res.json()
                         
-                    res.raise_for_status()
-                    data = res.json()
-                    
-                    # Flatten the Zendesk chunk
-                    chunk_records = []
-                    for rec in data.get("results", []):
-                        flat_rec = {}
-                        for k, v in rec.items():
-                            if k == "custom_fields" and isinstance(v, list):
-                                for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                            elif not isinstance(v, (dict, list)):
-                                flat_rec[k] = v
-                        chunk_records.append(flat_rec)
+                        chunk_records = []
+                        for rec in data.get("results", []):
+                            flat_rec = {}
+                            for k, v in rec.items():
+                                if k == "custom_fields" and isinstance(v, list):
+                                    for cf in v: 
+                                        val = cf.get("value")
+                                        if isinstance(val, list): val = ";".join([str(i) for i in val])
+                                        flat_rec[f"custom_field_{cf['id']}"] = val
+                                elif not isinstance(v, (dict, list)):
+                                    flat_rec[k] = v
+                                elif isinstance(v, list): 
+                                    flat_rec[k] = ";".join([str(i) for i in v])
+                            chunk_records.append(flat_rec)
 
-                    if not chunk_records: break
-                    
-                    # --- Validate JUST this chunk of 1000 using your service ---
-                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
-                    
-                    # Update running totals
-                    aggregate_stats["total"] += chunk_result["stats"]["total"]
-                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
-                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
-                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
-                    
-                    # Store a max of 500 errors so the UI doesn't crash
-                    if len(all_invalid_records) < 2000:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
+                        if not chunk_records: break
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
 
-                    # Stream live progress to the Angular UI
-                    await websocket.send_json({
-                        "log": f"Validated {aggregate_stats['total']} records so far...",
-                        "status": "Validating",
-                        "stats": aggregate_stats
-                    })
+                        valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                        invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+            
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                        conn.commit()
+                        
+                        aggregate_stats["total"] += chunk_result["stats"]["total"]
+                        aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                        aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                        aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+
+                        await websocket.send_json({
+                            "log": f"Validated {aggregate_stats['total']} records so far...",
+                            "status": "Validating",
+                            "stats": aggregate_stats
+                        })
+                        
+                        url = data.get("links", {}).get("next") if data.get("meta", {}).get("has_more") else None
+
+                else:
+                    # --- NATIVE CUSTOM OBJECTS ---
+                    url = None
+                    json_payload = None
                     
-                    # Grab next page URL
-                    meta = data.get("meta")
-                    if meta and meta.get("has_more"):
-                        url = data.get("links", {}).get("next")
+                    if query.strip():
+                        try:
+                            json_payload = json.loads(query)
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]=100"
+                        except Exception:
+                            await websocket.send_json({"log": "Error: Invalid JSON query for Custom Object", "status": "Failed"})
+                            await websocket.close()
+                            return
                     else:
-                        url = None
+                        url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]=100"
+                        
+                    # FIX: Add a while loop to paginate through all records 100 at a time
+                    while url:
+                        if json_payload:
+                            res = await client.post(url, headers=zd_headers, json=json_payload)
+                        else:
+                            res = await client.get(url, headers=zd_headers)
+                            
+                        if res.status_code == 429:
+                            retry = int(res.headers.get("Retry-After", 60))
+                            await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
+                            await asyncio.sleep(retry)
+                            continue
+                            
+                        if res.status_code != 200:
+                            err_msg = res.text
+                            try: 
+                                err_msg = res.json().get("error", {}).get("message", res.text)
+                            except: pass
+                            await websocket.send_json({"log": f"Zendesk API Error: {err_msg}", "status": "Validation Failed"})
+                            await websocket.close()
+                            return
+                            
+                        data = res.json()
+                        
+                        chunk_records = []
+                        for rec in data.get("custom_object_records", []):
+                            flat_rec = {}
+                            for k, v in rec.items():
+                                if k == "custom_object_fields" and isinstance(v, dict):
+                                    for cf_key, cf_val in v.items():
+                                        if isinstance(cf_val, list): cf_val = ";".join([str(i) for i in cf_val])
+                                        flat_rec[cf_key] = cf_val
+                                elif not isinstance(v, (dict, list)):
+                                    flat_rec[k] = v
+                                elif isinstance(v, list):
+                                    flat_rec[k] = ";".join([str(i) for i in v])
+                            chunk_records.append(flat_rec)
+                            
+                        if not chunk_records: break
+                        
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                        
+                        valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                        invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+            
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                        conn.commit()
+                        
+                        aggregate_stats["total"] += chunk_result["stats"]["total"]
+                        aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                        aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                        aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+
+                        await websocket.send_json({
+                            "log": f"Validated {aggregate_stats['total']} records so far...",
+                            "status": "Validating",
+                            "stats": aggregate_stats
+                        })
+                        
+                        # Get the next page of 100 records
+                        meta = data.get("meta", {})
+                        if meta.get("has_more"):
+                            url = data.get("links", {}).get("next")
+                        else:
+                            url = None
 
             # ------------------------------------------
             # 2. SALESFORCE STREAMING VALIDATION
@@ -641,7 +897,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                 fields_str = ", ".join(headers_list) if headers_list else "Id"
                 where_clause = f" WHERE {query}" if query else ""
                 soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
-                
                 headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
                 safe_soql = urllib.parse.quote(soql)
                 base_url = sf_instance.rstrip('/')
@@ -658,18 +913,18 @@ async def websocket_validate_stream(websocket: WebSocket):
                         chunk_records.append(r)
                         
                     if not chunk_records: break
-                    
-                    # ---  Validate chunk ---
                     chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
                     
+                    valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                    invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                    conn.commit()
+
                     aggregate_stats["total"] += chunk_result["stats"]["total"]
                     aggregate_stats["valid"] += chunk_result["stats"]["valid"]
                     aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
-                    
-                    if len(all_invalid_records) < 500:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
 
                     await websocket.send_json({
                         "log": f"Validated {aggregate_stats['total']} records so far...",
@@ -686,9 +941,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             # 3. ZOHO STREAMING VALIDATION
             # ------------------------------------------
             elif crm_id == "zoho":
-                zoho_token = payload.get("zohoToken", "")
-                zoho_api_domain = payload.get("zohoDomain", "")
-                
                 if not zoho_token:
                     await websocket.send_json({"log": "❌ Zoho Token Missing", "status": "Failed"})
                     await websocket.close()
@@ -699,7 +951,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                 base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
                 headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
                 
-                # Setup fields to extract
                 headers_list = [m["csvField"] for m in mappings if m.get("csvField")]
                 safe_fields = headers_list[:40] if headers_list else ["id"]
                 fields_str = ",".join(safe_fields)
@@ -708,36 +959,27 @@ async def websocket_validate_stream(websocket: WebSocket):
                 more_records = True
 
                 while more_records:
-                    # Sanitize and prepare the query
                     if query:
                         coql_query = query.strip()
                         if coql_query.lower().startswith("select "):
                             import re
                             if "*" in coql_query:
                                 coql_query = coql_query.replace("*", fields_str, 1)
-                            
                             match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
                             if match:
                                 clean_select = match.group(1).replace(" ", "")
                                 coql_query = coql_query.replace(match.group(1), clean_select, 1)
-
                             if " where " not in coql_query.lower():
                                 coql_query += " where id is not null"
-                                
-                            # Strip out any custom limits so we can apply pagination
                             coql_query = re.sub(r'(?i)\s+limit\s+\d+', '', coql_query)
                         else:
                             coql_query = f"select {fields_str} from {obj_name} where {coql_query}"
 
-                        # Inject Zoho Pagination (Limit 200 is Zoho's Max)
                         paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
-                        
                         res = await client.post(f"{base_url}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
                     else:
-                        # Standard GET Pagination
                         res = await client.get(f"{base_url}/crm/v6/{obj_name}?page={page}&per_page=200&fields={fields_str}", headers=headers)
 
-                    # Handle Strict Zoho API Limits
                     if res.status_code == 429:
                         await websocket.send_json({"log": "⚠️ Zoho Rate Limit. Pausing for 30s...", "status": "Paused"})
                         await asyncio.sleep(30)
@@ -749,32 +991,38 @@ async def websocket_validate_stream(websocket: WebSocket):
 
                     data = res.json()
                     raw_records = data.get("data") or []
-                    
-                    if not raw_records:
-                        break
+                    if not raw_records: break
                         
-                    # Flatten Zoho's nested dictionary outputs
                     chunk_records = []
                     for r in raw_records:
                         flat_rec = {}
                         for k, v in r.items():
-                            if isinstance(v, dict) and "id" in v:
-                                flat_rec[k] = v.get("name", v["id"]) 
+                            if isinstance(v, dict):
+                                # If it's a Lookup/Owner dict, extract the Name or ID
+                                flat_rec[k] = v.get("name", v.get("id", str(v)))
+                            elif isinstance(v, list):
+                                # If it's a list (like Tags or Multi-Select), flatten it
+                                parsed_list = [
+                                    str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
+                                    for i in v
+                                ]
+                                flat_rec[k] = ";".join(parsed_list)
                             else:
                                 flat_rec[k] = v
                         chunk_records.append(flat_rec)
 
-                    # --- MAGIC: Validate this specific chunk ---
                     chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    
+                    valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                    invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                    conn.commit()
                     
                     aggregate_stats["total"] += chunk_result["stats"]["total"]
                     aggregate_stats["valid"] += chunk_result["stats"]["valid"]
                     aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
                     aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
-                    
-                    if len(all_invalid_records) < 500:
-                        space_left = 500 - len(all_invalid_records)
-                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
 
                     await websocket.send_json({
                         "log": f"Validated {aggregate_stats['total']} records so far...",
@@ -782,7 +1030,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                         "stats": aggregate_stats
                     })
                     
-                    # Check if Zoho has another page of data waiting
                     info = data.get("info", {})
                     more_records = info.get("more_records", False)
                     page += 1
@@ -891,12 +1138,31 @@ async def websocket_validate_stream(websocket: WebSocket):
                 await websocket.close()
                 return
 
+        # ----------------------------------------------------
+        # GRAB THE TOP 500 ERRORS FOR INITIAL UI LOAD
+        # ----------------------------------------------------
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
+        db_errors = cursor.fetchall()
+        
+        all_invalid_records = []
+        for row in db_errors:
+            rec_data = json.loads(row[1])
+            rec_data["_db_id"] = row[0] # Inject DB ID
+            all_invalid_records.append({
+                "originalRow": rec_data,
+                "errors": row[2]
+            })
+
+        conn.close()
+
         # --- FINAL DELIVERY ---
         await websocket.send_json({
             "log": f" Stream Validation Complete: {aggregate_stats['total']} total records.",
             "status": "Validation Passed" if aggregate_stats["invalid"] == 0 else "Validation Warning",
             "stats": aggregate_stats,
-            "invalidRecords": all_invalid_records
+            "invalidRecords": all_invalid_records,
+            "sessionId": session_id
         })
         
         await websocket.close()
@@ -911,3 +1177,56 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.close()
         except:
             pass
+
+
+# ==========================================
+# ROUTE: DOWNLOAD FULL AUDIT REPORT (CSV)
+# ==========================================
+@router.get("/api/audit/download/{session_id}")
+async def download_validation_audit(session_id: str, type: str = 'valid'):
+    db_path = get_db_path(session_id)
+    
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail="Staging database not found or session expired.")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 1 for Valid records, 0 for Invalid records
+    is_valid = 1 if type == 'valid' else 0
+    cursor.execute("SELECT data, errors FROM records WHERE is_valid = ?", (is_valid,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No {type} records available.")
+
+    # Extract all keys to ensure we get every column for the CSV header
+    all_records = []
+    fieldnames = set()
+    for row in rows:
+        rec = json.loads(row[0])
+        # If it's an error report, inject the error message as the first column!
+        if type == 'invalid':
+            rec['Validation_Errors'] = row[1]
+            
+        fieldnames.update(rec.keys())
+        all_records.append(rec)
+    
+    # Sort fieldnames, forcing 'Validation_Errors' to the very front
+    fieldnames = list(fieldnames)
+    if 'Validation_Errors' in fieldnames:
+        fieldnames.remove('Validation_Errors')
+        fieldnames.insert(0, 'Validation_Errors')
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(all_records)
+    
+    output.seek(0)
+    
+    headers = {
+        'Content-Disposition': f'attachment; filename="Validation_Audit_{type.capitalize()}_{session_id}.csv"'
+    }
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
