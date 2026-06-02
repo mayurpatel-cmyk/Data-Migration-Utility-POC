@@ -12,6 +12,7 @@ import tempfile
 import json
 from datetime import datetime
 import io
+import json
 import csv
 from fastapi.responses import StreamingResponse
 
@@ -653,61 +654,152 @@ async def websocket_validate_stream(websocket: WebSocket):
             # ------------------------------------------
             if crm_id == "zendesk":
                 safe_obj = obj_name.lower()
-                safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
-                import re
-                clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip()
-                final_query = f"{clean_query} type:{safe_obj_singular}".strip()
-                safe_query = urllib.parse.quote(final_query)
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
                 zd_headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
                 
-                while url:
-                    res = await client.get(url, headers=zd_headers)
-                    if res.status_code == 429:
-                        retry = int(res.headers.get("Retry-After", 60))
-                        await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
-                        await asyncio.sleep(retry)
-                        continue
+                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+                is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+
+                if is_standard:
+                    # --- STANDARD OBJECTS ---
+                    safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
+                    import re
+                    clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
+                    final_query = f"{clean_query} type:{safe_obj_singular}".strip()
+                    import urllib.parse
+                    safe_query = urllib.parse.quote(final_query)
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
+                    
+                    while url:
+                        res = await client.get(url, headers=zd_headers)
+                        if res.status_code == 429:
+                            retry = int(res.headers.get("Retry-After", 60))
+                            await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
+                            await asyncio.sleep(retry)
+                            continue
+                            
+                        res.raise_for_status()
+                        data = res.json()
                         
-                    res.raise_for_status()
-                    data = res.json()
-                    
-                    chunk_records = []
-                    for rec in data.get("results", []):
-                        flat_rec = {}
-                        for k, v in rec.items():
-                            if k == "custom_fields" and isinstance(v, list):
-                                for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                            elif not isinstance(v, (dict, list)):
-                                flat_rec[k] = v
-                        chunk_records.append(flat_rec)
+                        chunk_records = []
+                        for rec in data.get("results", []):
+                            flat_rec = {}
+                            for k, v in rec.items():
+                                if k == "custom_fields" and isinstance(v, list):
+                                    for cf in v: 
+                                        val = cf.get("value")
+                                        if isinstance(val, list): val = ";".join([str(i) for i in val])
+                                        flat_rec[f"custom_field_{cf['id']}"] = val
+                                elif not isinstance(v, (dict, list)):
+                                    flat_rec[k] = v
+                                elif isinstance(v, list): 
+                                    flat_rec[k] = ";".join([str(i) for i in v])
+                            chunk_records.append(flat_rec)
 
-                    if not chunk_records: break
-                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                        if not chunk_records: break
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
 
-                    valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
-                    invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+                        valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                        invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
             
-                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
-                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
-                    conn.commit()
-                    
-                    aggregate_stats["total"] += chunk_result["stats"]["total"]
-                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
-                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
-                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                        conn.commit()
+                        
+                        aggregate_stats["total"] += chunk_result["stats"]["total"]
+                        aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                        aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                        aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
 
-                    await websocket.send_json({
-                        "log": f"Validated {aggregate_stats['total']} records so far...",
-                        "status": "Validating",
-                        "stats": aggregate_stats
-                    })
+                        await websocket.send_json({
+                            "log": f"Validated {aggregate_stats['total']} records so far...",
+                            "status": "Validating",
+                            "stats": aggregate_stats
+                        })
+                        
+                        url = data.get("links", {}).get("next") if data.get("meta", {}).get("has_more") else None
+
+                else:
+                    # --- NATIVE CUSTOM OBJECTS ---
+                    url = None
+                    json_payload = None
                     
-                    meta = data.get("meta")
-                    if meta and meta.get("has_more"):
-                        url = data.get("links", {}).get("next")
+                    if query.strip():
+                        try:
+                            json_payload = json.loads(query)
+                            url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]=100"
+                        except Exception:
+                            await websocket.send_json({"log": "Error: Invalid JSON query for Custom Object", "status": "Failed"})
+                            await websocket.close()
+                            return
                     else:
-                        url = None
+                        url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]=100"
+                        
+                    # FIX: Add a while loop to paginate through all records 100 at a time
+                    while url:
+                        if json_payload:
+                            res = await client.post(url, headers=zd_headers, json=json_payload)
+                        else:
+                            res = await client.get(url, headers=zd_headers)
+                            
+                        if res.status_code == 429:
+                            retry = int(res.headers.get("Retry-After", 60))
+                            await websocket.send_json({"log": f"⚠️ Zendesk Rate Limit. Pausing for {retry}s...", "status": "Paused"})
+                            await asyncio.sleep(retry)
+                            continue
+                            
+                        if res.status_code != 200:
+                            err_msg = res.text
+                            try: 
+                                err_msg = res.json().get("error", {}).get("message", res.text)
+                            except: pass
+                            await websocket.send_json({"log": f"Zendesk API Error: {err_msg}", "status": "Validation Failed"})
+                            await websocket.close()
+                            return
+                            
+                        data = res.json()
+                        
+                        chunk_records = []
+                        for rec in data.get("custom_object_records", []):
+                            flat_rec = {}
+                            for k, v in rec.items():
+                                if k == "custom_object_fields" and isinstance(v, dict):
+                                    for cf_key, cf_val in v.items():
+                                        if isinstance(cf_val, list): cf_val = ";".join([str(i) for i in cf_val])
+                                        flat_rec[cf_key] = cf_val
+                                elif not isinstance(v, (dict, list)):
+                                    flat_rec[k] = v
+                                elif isinstance(v, list):
+                                    flat_rec[k] = ";".join([str(i) for i in v])
+                            chunk_records.append(flat_rec)
+                            
+                        if not chunk_records: break
+                        
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                        
+                        valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                        invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+            
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                        conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                        conn.commit()
+                        
+                        aggregate_stats["total"] += chunk_result["stats"]["total"]
+                        aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                        aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                        aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+
+                        await websocket.send_json({
+                            "log": f"Validated {aggregate_stats['total']} records so far...",
+                            "status": "Validating",
+                            "stats": aggregate_stats
+                        })
+                        
+                        # Get the next page of 100 records
+                        meta = data.get("meta", {})
+                        if meta.get("has_more"):
+                            url = data.get("links", {}).get("next")
+                        else:
+                            url = None
 
             # ------------------------------------------
             # 2. SALESFORCE STREAMING VALIDATION

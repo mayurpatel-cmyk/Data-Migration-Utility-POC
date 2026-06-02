@@ -442,19 +442,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         }
         this.customQuery = `type:${singularName} `; 
       } else {
-        // Pre-fill with a helpful template for Custom Objects
-        this.customQuery = `/* 
-  Zendesk Custom Object Query Template 
-  - Leave blank to fetch all records.
-  - Prefix custom fields with 'custom_object_fields.' 
-*/
-{
-  "filter": {
-    "$and": [
-      { "custom_object_fields.your_field_key": { "$eq": "Your Value" } }
-    ]
-  }
-}`; 
+        // It's a Custom Object! Leave the query blank so it fetches all records by default.
+        this.customQuery = ''; 
       }
     } else if (crm === 'salesforce' || crm === 'zoho') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
