@@ -431,6 +431,19 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.isHistoryDropdownOpen = false;
   }
 
+  // --- ADD THIS TEMPLATE CONSTANT ---
+  readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
+ - Leave blank to fetch all records.
+ - Prefix custom fields with 'custom_object_fields.' 
+*/
+{
+  "filter": {
+    "$and": [
+      { "custom_object_fields.your_field_key": { "$eq": "Your Value" } }
+    ]
+  }
+}`;
+
   buildDefaultQuery(entityName: string) {
     const crm = this.sourceCrmId.toLowerCase();
     
@@ -442,8 +455,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         }
         this.customQuery = `type:${singularName} `; 
       } else {
-        // It's a Custom Object! Leave the query blank so it fetches all records by default.
-        this.customQuery = ''; 
+        // --- UPGRADED: Auto-inject the custom layout instructions ---
+        this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE; 
       }
     } else if (crm === 'salesforce' || crm === 'zoho') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
@@ -730,6 +743,18 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.saveQueryToHistory(this.customQuery);
 
     let safeQuery = this.customQuery.trim();
+    
+    // --- ADD THIS CLEANING BLOCK FOR CUSTOM OBJECTS ---
+    if (this.sourceCrmId.toLowerCase() === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      
+      const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = ''; // Treat placeholder structure as clear/all records fetch
+      }
+    }
+
+
     if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
@@ -843,18 +868,19 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       if (!isStandard) {
         // --- CUSTOM OBJECT VALIDATION ---
         // 1. Empty is perfectly fine (Fetches all recent)
-        if (this.customQuery.trim() === '') return true;
+        const cleanJsonText = this.customQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+
+        if (cleanJsonText === '') return true;
 
         // 2. Must be JSON
-        if (!this.customQuery.trim().startsWith('{')) {
-          return applySquiggle("Zendesk Custom Objects require a JSON filter (e.g., {\"filter\": ...}). Leave blank to fetch all records.", this.customQuery.trim().split(' ')[0] || " ");
+        if (!cleanJsonText.startsWith('{')) {
+          return applySquiggle("Zendesk Custom Objects require a valid JSON filter block.", this.customQuery.trim().split(' ')[0] || " ");
         }
-
         // 3. Must be VALID JSON syntax
         try {
-          JSON.parse(this.customQuery);
+          JSON.parse(cleanJsonText);
         } catch (e) {
-          return applySquiggle("Invalid JSON Syntax. Please check your brackets and quotes.", "{");
+          return applySquiggle("Invalid JSON Syntax. Please check your brackets, keys, and trailing commas.", "{");
         }
         return true; 
       }
@@ -1254,6 +1280,17 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     let safeQuery = this.customQuery.trim();
     const crmContext = this.sourceCrmId.toLowerCase();
+    // --- ADD THIS CLEANING BLOCK FOR VALIDATION STREAM ---
+    if (crmContext === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      
+      const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = ''; // Default to pulling all records if template unmodified
+      }
+    }
+    // ----------------------------------------------------
+
     if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
@@ -1558,6 +1595,17 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     });
 
     let safeQuery = this.customQuery.trim();
+
+    // --- ADD THIS SAME CLEANING BLOCK HERE ---
+    if (this.sourceCrmId.toLowerCase() === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      
+      const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = '';
+      }
+    }
+
     if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
