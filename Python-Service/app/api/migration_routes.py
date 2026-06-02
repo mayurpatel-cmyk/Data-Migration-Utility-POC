@@ -324,8 +324,16 @@ async def websocket_migration(websocket: WebSocket):
                                 for r in raw_records:
                                     flat_rec = {}
                                     for k, v in r.items():
-                                        if isinstance(v, dict) and "id" in v:
-                                            flat_rec[k] = v.get("name", v["id"])
+                                        if isinstance(v, dict):
+                                            # If it's a Lookup/Owner dict, extract the Name or ID
+                                            flat_rec[k] = v.get("name", v.get("id", str(v)))
+                                        elif isinstance(v, list):
+                                            # If it's a list (like Tags or Multi-Select), flatten it
+                                            parsed_list = [
+                                                str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
+                                                for i in v
+                                            ]
+                                            flat_rec[k] = ";".join(parsed_list)
                                         else:
                                             flat_rec[k] = v
                                     source_records.append(flat_rec)
@@ -809,8 +817,16 @@ async def websocket_validate_stream(websocket: WebSocket):
                     for r in raw_records:
                         flat_rec = {}
                         for k, v in r.items():
-                            if isinstance(v, dict) and "id" in v:
-                                flat_rec[k] = v.get("name", v["id"]) 
+                            if isinstance(v, dict):
+                                # If it's a Lookup/Owner dict, extract the Name or ID
+                                flat_rec[k] = v.get("name", v.get("id", str(v)))
+                            elif isinstance(v, list):
+                                # If it's a list (like Tags or Multi-Select), flatten it
+                                parsed_list = [
+                                    str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
+                                    for i in v
+                                ]
+                                flat_rec[k] = ";".join(parsed_list)
                             else:
                                 flat_rec[k] = v
                         chunk_records.append(flat_rec)

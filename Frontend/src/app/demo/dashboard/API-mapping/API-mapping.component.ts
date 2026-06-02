@@ -54,6 +54,12 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   private toastr = inject(ToastrService);
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
+  private isStandardZendeskObject(name: string): boolean {
+    if (!name) return false;
+    const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
+    const safeName = name.toLowerCase();
+    return std.includes(safeName) || std.includes(safeName + 's');
+  }
 
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
@@ -191,6 +197,15 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     if (t.includes('date') || t.includes('time')) return 'bg-danger';
     if (t.includes('picklist')) return 'bg-secondary';
     return 'bg-secondary';
+  }
+
+  get hasPendingEdits(): boolean {
+    if (!this.validationResults?.invalidRecords) return false;
+    
+    // Check if ANY record has the _editedFields object with at least one true value
+    return this.validationResults.invalidRecords.some((rec: any) => 
+      rec._editedFields && Object.keys(rec._editedFields).length > 0
+    );
   }
 
   isTypeMismatch(mapping: MappingRow): boolean {
@@ -420,15 +435,29 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     const crm = this.sourceCrmId.toLowerCase();
     
     if (crm === 'zendesk') {
-      let singularName = entityName.toLowerCase();
-      if (singularName.endsWith('s') && singularName !== 'macros') {
-        singularName = singularName.slice(0, -1);
+      if (this.isStandardZendeskObject(entityName)) {
+        let singularName = entityName.toLowerCase();
+        if (singularName.endsWith('s') && singularName !== 'macros') {
+          singularName = singularName.slice(0, -1);
+        }
+        this.customQuery = `type:${singularName} `; 
+      } else {
+        // Pre-fill with a helpful template for Custom Objects
+        this.customQuery = `/* 
+  Zendesk Custom Object Query Template 
+  - Leave blank to fetch all records.
+  - Prefix custom fields with 'custom_object_fields.' 
+*/
+{
+  "filter": {
+    "$and": [
+      { "custom_object_fields.your_field_key": { "$eq": "Your Value" } }
+    ]
+  }
+}`; 
       }
-      this.customQuery = `type:${singularName} `; 
-      
     } else if (crm === 'salesforce' || crm === 'zoho') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
-      
     } else {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
@@ -559,21 +588,21 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
-    const crm = this.sourceCrmId.toLowerCase();
+    // const crm = this.sourceCrmId.toLowerCase();
     
-    if (crm === 'zendesk') {
-      let singularName = entityName.toLowerCase();
-      if (singularName.endsWith('s') && singularName !== 'macros') {
-        singularName = singularName.slice(0, -1);
-      }
-      this.customQuery = `type:${singularName} `; 
+    // if (crm === 'zendesk') {
+    //   let singularName = entityName.toLowerCase();
+    //   if (singularName.endsWith('s') && singularName !== 'macros') {
+    //     singularName = singularName.slice(0, -1);
+    //   }
+    //   this.customQuery = `type:${singularName} `; 
       
-    } else if (crm === 'salesforce') {
-      this.customQuery = `SELECT * FROM ${entityName}`; 
+    // } else if (crm === 'salesforce') {
+    //   this.customQuery = `SELECT * FROM ${entityName}`; 
       
-    } else {
-      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
-    }
+    // } else {
+    //   this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+    // }
 
     this.buildDefaultQuery(entityName);
 
@@ -647,10 +676,12 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     const crm = this.sourceCrmId.toLowerCase();
     
     if (crm === 'zendesk') {
+      const isCustom = this.selectedSourceObject && !this.isStandardZendeskObject(this.selectedSourceObject);
+      
       return {
-        title: 'Zendesk Search Filter',
-        placeholder: "e.g., type:ticket status<solved created>2023-01-01",
-        helpText: "Use Zendesk native search syntax to filter by tags, status, or dates.",
+        title: isCustom ? 'Zendesk Custom Object Filter' : 'Zendesk Search Filter',
+        placeholder: isCustom ? '{\n  "filter": {\n    "$and": [\n      { "custom_object_fields.your_field": { "$eq": "value" } }\n    ]\n  }\n}' : "e.g., type:ticket status<solved created>2023-01-01",
+        helpText: isCustom ? "Use JSON. Prefix custom fields with 'custom_object_fields.'. Leave blank for all records." : "Use Zendesk native search syntax to filter by tags, status, or dates.",
         icon: 'icon-search',
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
@@ -814,10 +845,32 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       return false;
     };
 
-    // ==========================================
+   // ==========================================
     // ZENDESK STRICT TOKEN VALIDATION
     // ==========================================
     if (crm === 'zendesk') {
+      const isStandard = this.isStandardZendeskObject(this.selectedSourceObject);
+
+      if (!isStandard) {
+        // --- CUSTOM OBJECT VALIDATION ---
+        // 1. Empty is perfectly fine (Fetches all recent)
+        if (this.customQuery.trim() === '') return true;
+
+        // 2. Must be JSON
+        if (!this.customQuery.trim().startsWith('{')) {
+          return applySquiggle("Zendesk Custom Objects require a JSON filter (e.g., {\"filter\": ...}). Leave blank to fetch all records.", this.customQuery.trim().split(' ')[0] || " ");
+        }
+
+        // 3. Must be VALID JSON syntax
+        try {
+          JSON.parse(this.customQuery);
+        } catch (e) {
+          return applySquiggle("Invalid JSON Syntax. Please check your brackets and quotes.", "{");
+        }
+        return true; 
+      }
+
+      // --- STANDARD OBJECT VALIDATION (Text Search) ---
       if (queryLower.startsWith('select ') || queryLower.includes(' from ')) {
         return applySquiggle("Zendesk doesn't support SQL. Format: type:ticket status<solved", "select");
       } else if (queryLower.includes(',')) {
@@ -843,7 +896,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
           return applySquiggle(`Invalid Syntax: '${token}' is not formatted correctly.`, token);
         }
       }
-    } 
+    }
     
     // ==========================================
     //  SALESFORCE & ZOHO SQL VALIDATION
@@ -1393,6 +1446,17 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   }
 
   runMigration() {
+    if (this.hasPendingEdits) {
+      this.toastr.warning('You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.', 'Action Required');
+      
+      // Flash the Re-Validate button to draw the user's attention
+      const revalBtn = document.querySelector('.btn-danger.fw-bold') as HTMLElement;
+      if (revalBtn) {
+        revalBtn.classList.add('animate__animated', 'animate__headShake');
+        setTimeout(() => revalBtn.classList.remove('animate__headShake'), 1000);
+      }
+      return;
+    }
     if (this.customQuery && !this.validateQuery()) {
       this.jobStatus = 'Validation Failed';
       this.toastr.error('Please fix your query criteria before running.', 'Query Error');

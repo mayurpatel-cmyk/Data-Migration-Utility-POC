@@ -639,37 +639,91 @@ async def get_filtered_preview(request: Request):
                     raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
                 
                 safe_obj = obj_name.lower()
-                if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
-
-                # Strip out SQL junk if the frontend accidentally sent it to Zendesk
-                import re
-                clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
-
-                full_query = f"{clean_query} type:{safe_obj}" if clean_query else f"type:{safe_obj}"
-                import urllib.parse
-                safe_query = urllib.parse.quote(full_query)
-                
                 headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page={limit}"
                 
-                res = await client.get(url, headers=headers)
-                if res.status_code != 200:
-                    raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
+                # Check if it's a standard object
+                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+                is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+
+                if is_standard:
+                    # ==========================================
+                    # STANDARD ZENDESK OBJECTS (Text Search)
+                    # ==========================================
+                    if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
+
+                    # Strip out SQL junk if the frontend accidentally sent it to Zendesk
+                    import re
+                    clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
+
+                    full_query = f"{clean_query} type:{safe_obj}" if clean_query else f"type:{safe_obj}"
+                    import urllib.parse
+                    safe_query = urllib.parse.quote(full_query)
                     
-                raw_records = res.json().get("results", [])
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={safe_query}&per_page={limit}"
+                    
+                    res = await client.get(url, headers=headers)
+                    if res.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
+                        
+                    raw_records = res.json().get("results", [])
+                    
+                else:
+                    # ==========================================
+                    # NATIVE CUSTOM OBJECTS (JSON Filtered Search)
+                    # ==========================================
+                    if query.strip():
+                        # Native Custom Object queries must be JSON filters, not text!
+                        if not query.strip().startswith("{"):
+                            raise HTTPException(
+                                status_code=400, 
+                                detail="Zendesk Custom Objects require a JSON Filter payload for queries (e.g., {\"filter\": {\"$and\": [...]}}). Leave the query blank to fetch recent records."
+                            )
+                        
+                        import json
+                        try:
+                            json_payload = json.loads(query)
+                        except json.JSONDecodeError:
+                            raise HTTPException(status_code=400, detail="Invalid JSON payload in query.")
+                            
+                        # Use the POST search endpoint
+                        url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
+                        res = await client.post(url, headers=headers, json=json_payload)
+                    else:
+                        # If query is empty, just list recent records via GET
+                        url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]={limit}"
+                        res = await client.get(url, headers=headers)
+                        
+                    if res.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Zendesk Custom Object Error: {res.text}")
+                        
+                    raw_records = res.json().get("custom_object_records", [])
+
+                # ==========================================
+                # UNIFIED FLATTENING ENGINE
+                # ==========================================
                 flattened_records = []
                 for rec in raw_records:
                     flat_rec = {}
                     for k, v in rec.items():
+                        
+                        # 1. Flatten Standard Object nested array
                         if k == "custom_fields" and isinstance(v, list):
                             for cf in v:
                                 flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                                
+                        # 2. Flatten Native Custom Object nested dictionary
+                        elif k == "custom_object_fields" and isinstance(v, dict):
+                            for cf_key, cf_val in v.items():
+                                flat_rec[cf_key] = cf_val
+                                
+                        # 3. Apply standard top-level fields (id, name, created_at)
                         elif not isinstance(v, (dict, list)): 
                             flat_rec[k] = v
+                            
                     flattened_records.append(flat_rec)
                 
                 return {"records": flattened_records}
-
+            
             # ==========================================
             # 3. ZOHO LIVE DYNAMIC QUERY
             # ==========================================

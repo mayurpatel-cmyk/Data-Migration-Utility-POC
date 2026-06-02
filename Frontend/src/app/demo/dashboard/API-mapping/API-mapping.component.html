@@ -704,11 +704,20 @@
             <span class="fw-bold text-dark" style="font-size: 0.8rem;">Validate</span>
           </button>
 
-          <button class="btn btn-primary shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
-                  [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0}"
+          <button class="btn btn-primary shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded position-relative"
+                  [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0 && !hasPendingEdits}"
+                  [disabled]="hasPendingEdits"
+                  title="{{ hasPendingEdits ? 'You must click Re-Validate before running' : 'Execute Migration' }}"
                   (click)="runMigration()">
+            
+            @if (hasPendingEdits) {
+              <span class="position-absolute top-0 start-100 translate-middle p-1 bg-warning border border-light rounded-circle" title="Pending Edits">
+                <span class="visually-hidden">Pending Edits</span>
+              </span>
+            }
+
             <div class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center mb-1" style="width: 38px; height: 38px;">
-              <i class="feather icon-play fs-5 text-white"></i>
+              <i class="feather" [ngClass]="hasPendingEdits ? 'icon-lock' : 'icon-play'" class="fs-5 text-white"></i>
             </div>
             <span class="fw-bold text-white" style="font-size: 0.8rem;">Run Job</span>
           </button>
