@@ -68,7 +68,9 @@ export class CrmAuthService {
       'zd-accesstoken': localStorage.getItem('zd_token') || '',
       'zoho-accesstoken': localStorage.getItem('zoho_token') || '',
       'zoho-token': localStorage.getItem('zoho_token') || '',
-      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
+      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || '',
+      'hsToken': localStorage.getItem('hubspot_token') || '',
+      'hsRefresh': localStorage.getItem('hubspot_refresh_token') || ''
     });
   }
 

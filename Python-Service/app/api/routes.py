@@ -135,7 +135,7 @@ async def crm_oauth_login(
     elif crm_id_lower == "hubspot":
         if not HS_CLIENT_ID:
             raise HTTPException(status_code=500, detail="HS_CLIENT_ID is missing from the environment variables.")
-        scopes = ["oauth",
+        scopes = [
         "crm.objects.contacts.read",
         "crm.objects.contacts.write",
         "crm.objects.companies.read",
@@ -635,7 +635,7 @@ async def get_crm_fields(
         }
     
 @router.post("/api/metadata/preview-filter")
-async def get_filtered_preview(request: Request):
+async def get_filtered_preview(request: Request , response:Response):
     try:
         payload = await request.json()
         crm_id = payload.get("crmId", "").lower()

@@ -846,7 +846,9 @@ export class ApiMappingComponent implements OnInit {
       zdToken: localStorage.getItem('zd_token') || '',
       zdSubdomain: localStorage.getItem('zd_subdomain') || '',
       zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      zohoDomain: localStorage.getItem('zoho_api_domain') || '',
+      hsToken: localStorage.getItem('hubspot_token') || '',
+      hsRefresh: localStorage.getItem('hubspot_refresh_token') || ''
     };
 
     // Connect to the new streaming websocket
@@ -1082,7 +1084,9 @@ export class ApiMappingComponent implements OnInit {
       zdToken: localStorage.getItem('zd_token') || '',
       zdSubdomain: localStorage.getItem('zd_subdomain') || '',
       zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      zohoDomain: localStorage.getItem('zoho_api_domain') || '',
+      hsToken: localStorage.getItem('hubspot_token') || '',
+      hsRefresh: localStorage.getItem('hubspot_refresh_token') || ''
     };
 
     const payload = { queue: [job] };
