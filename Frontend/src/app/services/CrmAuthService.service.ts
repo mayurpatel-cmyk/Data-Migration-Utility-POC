@@ -68,7 +68,9 @@ export class CrmAuthService {
       'zd-accesstoken': localStorage.getItem('zd_token') || '',
       'zoho-accesstoken': localStorage.getItem('zoho_token') || '',
       'zoho-token': localStorage.getItem('zoho_token') || '',
-      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
+      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || '',
+      'hsToken': localStorage.getItem('hubspot_token') || '',
+      'hsRefresh': localStorage.getItem('hubspot_refresh_token') || ''
     });
   }
 
@@ -88,7 +90,10 @@ export class CrmAuthService {
       localStorage.setItem('zoho_token', tokens.access_token || '');
       localStorage.setItem('zoho_api_domain', tokens.api_domain || '');
       localStorage.setItem('zoho_accounts_server', tokens.accounts_server || '');
-    }
+    } else if (safeCrmId === 'hubspot') {
+    localStorage.setItem('hubspot_token', tokens.access_token || '');
+    localStorage.setItem('hubspot_refresh_token', tokens.refresh_token || '');
+  }
   }
 
   disconnectCrm(crmId: string): void {
@@ -105,6 +110,9 @@ export class CrmAuthService {
       localStorage.removeItem('zoho_token');
       localStorage.removeItem('zoho_api_domain');
       localStorage.removeItem('zoho_accounts_server');
-    }
+    } else if (safeCrmId === 'hubspot') {
+    localStorage.removeItem('hubspot_token');
+    localStorage.removeItem('hubspot_refresh_token');
+  }
   }
 }

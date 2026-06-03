@@ -73,6 +73,7 @@ export class ConnectionComponent implements OnInit {
       const instanceUrl = params['instance_url'];
       const apiDomain = params['api_domain'];
       const accountsServer = params['accounts_server'];
+      const refreshToken = params['refresh_token'];
 
       if (side && crm) {
         if (side === 'source') {
@@ -89,6 +90,7 @@ export class ConnectionComponent implements OnInit {
           this.crmAuthService.saveConnectionDetails(crm, {
             access_token: token,
             subdomain: this.zendeskSubdomain,
+            refresh_token: refreshToken,
             instance_url: instanceUrl, // <--- Pass it to CrmAuthService
             api_domain: apiDomain,
             accounts_server: accountsServer
@@ -110,6 +112,7 @@ export class ConnectionComponent implements OnInit {
     if (cleanId === 'salesforce') return !!localStorage.getItem('sf_token');
     if (cleanId === 'zendesk') return !!localStorage.getItem('zd_token');
     if (cleanId === 'zoho') return !!localStorage.getItem('zoho_token');
+    if (cleanId === 'hubspot') return !!localStorage.getItem('hubspot_token');
     return false;
   }
 

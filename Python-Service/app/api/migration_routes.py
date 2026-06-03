@@ -171,6 +171,12 @@ async def websocket_migration(websocket: WebSocket):
         await websocket.send_json({"log": "System: Multi-Object 3-Pass Engine Initialized.", "status": "Initializing..."})
         payload = await websocket.receive_json()
         
+        print("\n========================================")
+        print("🚨 DEBUG MIGRATION PAYLOAD INCOMING")
+        print(f"Root Payload Keys: {list(payload.keys())}")
+        if "queue" in payload and isinstance(payload["queue"], list) and len(payload["queue"]) > 0:
+            print(f"First Queue Item Keys: {list(payload['queue'][0].keys())}")
+        print("========================================\n")
         raw_queue = payload.get("queue") 
         if not raw_queue:
             raw_queue = [payload] 
@@ -181,17 +187,24 @@ async def websocket_migration(websocket: WebSocket):
         zd_subdomain = payload.get("zdSubdomain") or raw_queue[0].get("zdSubdomain")
         zoho_token = payload.get("zohoToken", "") or raw_queue[0].get("zohoToken")
         zoho_api_domain = payload.get("zohoDomain", "") or raw_queue[0].get("zohoDomain")
+        hs_token = payload.get("hsToken") or raw_queue[0].get("hsToken") or payload.get("hubspotToken") or raw_queue[0].get("hubspotToken")
+        hs_refresh = payload.get("hsRefresh") or raw_queue[0].get("hsRefresh") or payload.get("hubspotRefreshToken") or raw_queue[0].get("hubspotRefreshToken")
+    
+        print(f"📊 Extraction Status -> SF: {bool(sf_token)}, ZD: {bool(zd_token)}, Zoho: {bool(zoho_token)}, HubSpot: {bool(hs_token)}")
+        print("========================================\n")
 
         if not sf_token or not sf_instance:
             await websocket.send_json({"log": "FATAL: Missing Target Salesforce Credentials.", "status": "Failed"})
             await websocket.close()
             return
-            
-        # 2. Check Source (Must have EITHER Zendesk OR Zoho)
-        if not zd_token and not zoho_token:
-            await websocket.send_json({"log": "FATAL: Missing Source CRM Credentials (Zendesk or Zoho).", "status": "Failed"})
+        
+        # 2. Check Source (Must have Zendesk, Zoho, or HubSpot)
+        if not zd_token and not zoho_token and not hs_token:
+            await websocket.send_json({"log": "FATAL: Missing Source CRM Credentials (Zendesk, Zoho, or HubSpot).", "status": "Failed"})
             await websocket.close()
             return
+        
+        
 
         async def send_log(msg: str, status: str = "Running"):
             await websocket.send_json({"log": msg, "status": status})
@@ -400,7 +413,82 @@ async def websocket_migration(websocket: WebSocket):
                         except Exception as e:
                             await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
                             continue
+                    # ======================================
+                    # HUBSPOT EXTRACTION ENGINE
+                    # ======================================
+                    elif hs_token:
+                        await send_log(f"[{target_object}] Initializing extraction from HubSpot...")
+                        h_headers = {"Authorization": f"Bearer {hs_token}", "Content-Type": "application/json"}
+                        url = f"https://api.hubapi.com/crm/v3/objects/{source_object.lower()}/search"
+                        
+                        # Gather properties to fetch based on database field map configurations
+                        source_fields_list = [m["sourceField"] for m in mappings if m.get("sourceField")]
+                        search_body = {
+                            "properties": source_fields_list[:40] if source_fields_list else ["hs_object_id", "firstname", "lastname", "email"],
+                            "limit": 100
+                        }
 
+                        # Inject custom search filtering if query constraints are active
+                        if extraction_query:
+                            if "=" in extraction_query or ":" in extraction_query:
+                                delimiter = "=" if "=" in extraction_query else ":"
+                                filters_array = []
+                                pairs = extraction_query.replace("&&", " ").replace("&", " ").split()
+                                for pair in pairs:
+                                    if delimiter in pair:
+                                        k, v = pair.split(delimiter, 1)
+                                        filters_array.append({"propertyName": k.strip(), "operator": "EQ", "value": v.strip()})
+                                if filters_array:
+                                    search_body["filterGroups"] = [{"filters": filters_array}]
+                            else:
+                                search_body["query"] = extraction_query
+
+                        has_more = True
+                        try:
+                            while has_more:
+                                res = await client.post(url, headers=h_headers, json=search_body)
+                                
+                                # Automated 401 Session Token Rotation Interception
+                                if res.status_code == 401 and hs_refresh:
+                                    from app.services.crm_metadata_service import CrmMetadataService
+                                    hs_token = await CrmMetadataService.refresh_hubspot_token(hs_refresh)
+                                    h_headers["Authorization"] = f"Bearer {hs_token}"
+                                    res = await client.post(url, headers=h_headers, json=search_body)
+
+                                if res.status_code == 429:
+                                    await send_log("⚠️ HubSpot API Rate Limit Hit. Pausing for 15 seconds...", "Paused")
+                                    await asyncio.sleep(15)
+                                    continue
+
+                                res.raise_for_status()
+                                data = res.json()
+                                results = data.get("results", [])
+                                
+                                if not results:
+                                    break
+
+                                # Flatten HubSpot's dictionary property format into simple structural layout rows
+                                for rec in results:
+                                    flat_rec = {"id": rec.get("id"), "hs_object_id": rec.get("id")}
+                                    for pk, pv in rec.get("properties", {}).items():
+                                        flat_rec[pk] = pv
+                                    source_records.append(flat_rec)
+
+                                if len(source_records) % 100 == 0 or not data.get("paging"):
+                                    await send_log(f"[{target_object}] Extracted {len(source_records)} HubSpot records...")
+
+                                # Handle cursor pagination loops
+                                paging = data.get("paging", {})
+                                if paging and "next" in paging and "after" in paging["next"]:
+                                    search_body["after"] = paging["next"]["after"]
+                                else:
+                                    has_more = False
+
+                            job["rawRecords"] = source_records 
+                            await send_log(f"[{target_object}] HubSpot Extraction Complete! Total Records: {len(source_records)}")
+                        except Exception as e:
+                            await send_log(f"[{target_object}] HubSpot Extract Failed: {str(e)}", "Failed")
+                            continue
                 # ------------------------------------------
                 # Salesforce Upload Function
                 # ------------------------------------------
@@ -523,9 +611,20 @@ async def websocket_migration(websocket: WebSocket):
 # ==========================================
 # MASSIVE STREAMING VALIDATION (WS)
 # ==========================================
+# ==========================================
+# MASSIVE STREAMING VALIDATION (WS)
+# ==========================================
+# ==========================================
+# MASSIVE STREAMING VALIDATION (WS)
+# ==========================================
 @router.websocket("/ws/validate-stream")
 async def websocket_validate_stream(websocket: WebSocket):
     await websocket.accept()
+    
+    # 🟢 SAFE BINDING: Initialize at the absolute top of the function scope.
+    # This guarantees that 'all_invalid_records' is bound from line 1,
+    # completely eliminating compile-time scope ambiguity.
+    all_invalid_records = []
     
     try:
         payload = await websocket.receive_json()
@@ -586,7 +685,8 @@ async def websocket_validate_stream(websocket: WebSocket):
             cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
             db_errors = cursor.fetchall()
             
-            all_invalid_records = []
+            # 🟢 MUTATION SAFE: Clear and mutate instead of using '=' re-assignment
+            all_invalid_records.clear()
             for row in db_errors:
                 rec_data = json.loads(row[1])
                 rec_data["_db_id"] = row[0] # Inject DB ID for the next round
@@ -644,6 +744,9 @@ async def websocket_validate_stream(websocket: WebSocket):
         conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
         
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
+        
+        # 🟢 MUTATION SAFE: Reset the list context cleanly
+        all_invalid_records.clear()
 
         await websocket.send_json({"log": f"System: Initializing Streaming Validation...", "status": "Connecting"})
 
@@ -660,7 +763,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                 is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
 
                 if is_standard:
-                    # --- STANDARD OBJECTS ---
                     safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
                     import re
                     clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
@@ -719,10 +821,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                         url = data.get("links", {}).get("next") if data.get("meta", {}).get("has_more") else None
 
                 else:
-                    # --- NATIVE CUSTOM OBJECTS ---
                     url = None
                     json_payload = None
-                    
                     if query.strip():
                         try:
                             json_payload = json.loads(query)
@@ -734,7 +834,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     else:
                         url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]=100"
                         
-                    # FIX: Add a while loop to paginate through all records 100 at a time
                     while url:
                         if json_payload:
                             res = await client.post(url, headers=zd_headers, json=json_payload)
@@ -794,7 +893,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                             "stats": aggregate_stats
                         })
                         
-                        # Get the next page of 100 records
                         meta = data.get("meta", {})
                         if meta.get("has_more"):
                             url = data.get("links", {}).get("next")
@@ -910,10 +1008,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                         flat_rec = {}
                         for k, v in r.items():
                             if isinstance(v, dict):
-                                # If it's a Lookup/Owner dict, extract the Name or ID
                                 flat_rec[k] = v.get("name", v.get("id", str(v)))
                             elif isinstance(v, list):
-                                # If it's a list (like Tags or Multi-Select), flatten it
                                 parsed_list = [
                                     str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
                                     for i in v
@@ -945,7 +1041,102 @@ async def websocket_validate_stream(websocket: WebSocket):
                     info = data.get("info", {})
                     more_records = info.get("more_records", False)
                     page += 1
+            
+            # ------------------------------------------
+            # 4. HUBSPOT STREAMING VALIDATION
+            # ------------------------------------------
+            elif crm_id == "hubspot":
+                hs_token = payload.get("hsToken") or payload.get("hubspotToken") or ""
+                hs_refresh = payload.get("hsRefresh") or payload.get("hubspotRefreshToken") or ""
+                
+                if not hs_token:
+                    await websocket.send_json({"log": "❌ HubSpot Authentication context missing.", "status": "Failed"})
+                    await websocket.close()
+                    return
 
+                headers_list = [m["csvField"] for m in mappings if m.get("csvField")]
+                search_body = {
+                    "properties": headers_list[:40] if headers_list else ["hs_object_id", "firstname", "lastname", "email"],
+                    "limit": 100  
+                }
+
+                if query:
+                    if "=" in query or ":" in query:
+                        delimiter = "=" if "=" in query else ":"
+                        filters_array = []
+                        pairs = query.replace("&&", " ").replace("&", " ").split()
+                        for pair in pairs:
+                            if delimiter in pair:
+                                k, v = pair.split(delimiter, 1)
+                                filters_array.append({"propertyName": k.strip(), "operator": "EQ", "value": v.strip()})
+                        if filters_array:
+                            search_body["filterGroups"] = [{"filters": filters_array}]
+                    else:
+                        search_body["query"] = query
+
+                headers = {"Authorization": f"Bearer {hs_token}", "Content-Type": "application/json"}
+                url = f"https://api.hubapi.com/crm/v3/objects/{obj_name.lower()}/search"
+                
+                has_more = True
+                while has_more:
+                    res = await client.post(url, headers=headers, json=search_body)
+                    
+                    if res.status_code == 401 and hs_refresh:
+                        from app.services.crm_metadata_service import CrmMetadataService
+                        hs_token = await CrmMetadataService.refresh_hubspot_token(hs_refresh)
+                        headers["Authorization"] = f"Bearer {hs_token}"
+                        res = await client.post(url, headers=headers, json=search_body)
+
+                    if res.status_code == 429:
+                        await websocket.send_json({"log": "⚠️ HubSpot Rate Limit Hit. Throttling for 15s...", "status": "Paused"})
+                        await asyncio.sleep(15)
+                        continue
+
+                    if res.status_code != 200:
+                        await websocket.send_json({"log": f"❌ HubSpot Validation Error: {res.text}", "status": "Validation Failed"})
+                        break
+
+                    data = res.json()
+                    results = data.get("results", [])
+                    if not results: break
+
+                    chunk_records = []
+                    for rec in results:
+                        flat_rec = {"id": rec.get("id"), "hs_object_id": rec.get("id")}
+                        for pk, pv in rec.get("properties", {}).items():
+                            flat_rec[pk] = pv
+                        chunk_records.append(flat_rec)
+
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    
+                    # 🟢 CACHE DATA IN SQLITE DURING RUN:
+                    valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
+                    invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", valid_inserts)
+                    conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
+                    conn.commit()
+
+                    aggregate_stats["total"] += chunk_result["stats"]["total"]
+                    aggregate_stats["valid"] += chunk_result["stats"]["valid"]
+                    aggregate_stats["invalid"] += chunk_result["stats"]["invalid"]
+                    aggregate_stats["duplicates"] += chunk_result["stats"]["duplicates"]
+                    
+                    if len(all_invalid_records) < 500:
+                        space_left = 500 - len(all_invalid_records)
+                        all_invalid_records.extend(chunk_result["invalidRecords"][:space_left])
+
+                    await websocket.send_json({
+                        "log": f"Validated {aggregate_stats['total']} HubSpot records so far...",
+                        "status": "Validating",
+                        "stats": aggregate_stats
+                    })
+
+                    paging = data.get("paging", {})
+                    if paging and "next" in paging and "after" in paging["next"]:
+                        search_body["after"] = paging["next"]["after"]
+                    else:
+                        has_more = False
+            
             else:
                 await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
                 await websocket.close()
@@ -955,17 +1146,20 @@ async def websocket_validate_stream(websocket: WebSocket):
         # GRAB THE TOP 500 ERRORS FOR INITIAL UI LOAD
         # ----------------------------------------------------
         cursor = conn.cursor()
-        cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
-        db_errors = cursor.fetchall()
         
-        all_invalid_records = []
-        for row in db_errors:
-            rec_data = json.loads(row[1])
-            rec_data["_db_id"] = row[0] # Inject DB ID
-            all_invalid_records.append({
-                "originalRow": rec_data,
-                "errors": row[2]
-            })
+        # 🟢 MUTATION SAFE: Clear the scoped variable instead of using '=' assignment
+        if crm_id != "hubspot":
+            cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
+            db_errors = cursor.fetchall()
+            
+            all_invalid_records.clear()
+            for row in db_errors:
+                rec_data = json.loads(row[1])
+                rec_data["_db_id"] = row[0] # Inject DB ID
+                all_invalid_records.append({
+                    "originalRow": rec_data,
+                    "errors": row[2]
+                })
 
         conn.close()
 
@@ -990,8 +1184,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.close()
         except:
             pass
-
-
 # ==========================================
 # ROUTE: DOWNLOAD FULL AUDIT REPORT (CSV)
 # ==========================================
