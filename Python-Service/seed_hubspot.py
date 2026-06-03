@@ -5,7 +5,8 @@ import asyncio
 # CONFIGURATION BLOCK
 # =========================================================
 # 🟢 FIXED: The token is now properly assigned to the variable!
-HUBSPOT_ACCESS_TOKEN = "CJX57ZvoMxITQlNQMl8kQEwrAgYACAkIDhIrARjB47x1IP-23E4oxK3AEzIU63_S3lcL7e_CuDB33nCx5bRJ0aM6JkJTUDJfJEBMKwIZAAgZBigBAQEBRTsBEjABAQE6AQEBAQElAQMBQhSZCTF6QoWmQINEcKMxROBA64vpEkoDbmEyUgBaAGAAaKqQryxwAXgB"
+HUBSPOT_ACCESS_TOKEN = "CKev88ToMxITQlNQMl8kQEwrAgYACAkIDhIrARjB47x1IP-23E4oxK3AEzIUAZ3hYisx-Sh6cBrZMbs-x2oeDrM6JkJTUDJfJEBMKwIZAAgZBigBAQEBRTsBEjABAQE6AQEBAQElAQMBQhSKt2YlH68pwsDHNEnl-UF4OQoT7UoDbmEyUgBaAGAAaKqQryxwAXgA"
+
 
 async def seed_bulk_contacts():
     # Strip any accidental hidden spaces or quotes
