@@ -343,13 +343,22 @@ class CrmMetadataService:
                 parsed_fields = []
                 select_fields_list = []
 
+                dangerous_zoho_types = [
+                    "subform", "multiselectlookup", "imageupload", 
+                    "fileupload", "line_tax", "pricing_details", "userlookup"
+                ]
+
                 for f in fields_raw:
-                    if not f.get("api_name"):
+                    api_name = f.get("api_name")
+                    if not api_name:
                         continue
 
-                    select_fields_list.append(f["api_name"])
+                    # Safe COQL check
+                    if not api_name.startswith("$") and f.get("data_type") not in dangerous_zoho_types:
+                        select_fields_list.append(api_name)
+
                     parsed_fields.append({
-                        "name": f["api_name"],
+                        "name": api_name,
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
                         "required": f.get("system_mandatory", False) or f.get("required", False)

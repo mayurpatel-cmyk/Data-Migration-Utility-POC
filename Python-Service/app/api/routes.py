@@ -745,7 +745,8 @@ async def get_filtered_preview(request: Request):
                         
                         # 1. Replace '*' with actual headers (NO SPACES ALLOWED)
                         if "*" in coql_query:
-                            safe_fields = headers_list[:40] if headers_list else ["id"]
+                            clean_headers = [h for h in headers_list if not str(h).startswith("$")]
+                            safe_fields = clean_headers[:40] if clean_headers else ["id"]
                             coql_query = coql_query.replace("*", ",".join(safe_fields), 1)
                             
                         # 2. ZOHO STRICT RULE: Erase all spaces after commas in the SELECT list
@@ -785,18 +786,24 @@ async def get_filtered_preview(request: Request):
                         headers=headers
                     )
 
-                if res.status_code != 200:
-                    err_msg = res.text
+                # Accept both 200 (Success with data) and 204 (Success but 0 records found)
+                if res.status_code not in [200, 204]:
+                    print(f"\n{'='*50}\nZOHO RAW ERROR PAYLOAD:\n{res.text}\n{'='*50}\n")
+                    
                     try:
                         err_data = res.json()
-                        if "message" in err_data:
-                            err_msg = err_data["message"]
-                        elif "details" in err_data:
-                            err_msg = str(err_data["details"])
-                    except: pass
-                    raise HTTPException(status_code=400, detail=f"Zoho rejected query: {err_msg.strip()}")
+                        err_msg = str(err_data) 
+                    except:
+                        err_msg = res.text
+                        
+                    raise HTTPException(status_code=400, detail=f"Zoho rejected query: {err_msg}")
                     
-                raw_records = res.json().get("data") or []
+                # Handle the 204 Empty Response safely
+                if res.status_code == 204:
+                    raw_records = []
+                else:
+                    raw_records = res.json().get("data") or []
+                    
                 sample_records = []
                 
                 for r in raw_records:
@@ -806,10 +813,11 @@ async def get_filtered_preview(request: Request):
                             flat_rec[k] = v.get("name", v["id"]) 
                         else:
                             flat_rec[k] = v
+                    
+                    # Un-indented to properly append once per record!
                     sample_records.append(flat_rec)
                     
-                return {"records": sample_records}
-                
+                return {"records": sample_records}                
     except HTTPException:
         raise
     except Exception as e:

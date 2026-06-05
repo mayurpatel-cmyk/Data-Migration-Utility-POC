@@ -285,6 +285,7 @@ async def websocket_migration(websocket: WebSocket):
                         fields_str = ",".join(safe_fields)
                         
                         page = 1
+                        page_token = None
                         more_records = True
                         
                         try:
@@ -308,7 +309,11 @@ async def websocket_migration(websocket: WebSocket):
                                     paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
                                     res = await client.post(f"{base_url}/crm/v6/coql", headers=z_headers, json={"select_query": paginated_coql})
                                 else:
-                                    res = await client.get(f"{base_url}/crm/v6/{source_object}?page={page}&per_page=200&fields={fields_str}", headers=z_headers)
+                                    # ZOHO MASS EXTRACTION PAGE TOKEN LOGIC
+                                    if page_token:
+                                        res = await client.get(f"{base_url}/crm/v6/{source_object}?page_token={page_token}&per_page=200&fields={fields_str}", headers=z_headers)
+                                    else:
+                                        res = await client.get(f"{base_url}/crm/v6/{source_object}?page=1&per_page=200&fields={fields_str}", headers=z_headers)
                                     
                                 if res.status_code == 429:
                                     await send_log("⚠️ Zoho Rate Limit. Pausing 30s...", "Paused")
@@ -326,10 +331,8 @@ async def websocket_migration(websocket: WebSocket):
                                     flat_rec = {}
                                     for k, v in r.items():
                                         if isinstance(v, dict):
-                                            # If it's a Lookup/Owner dict, extract the Name or ID
                                             flat_rec[k] = v.get("name", v.get("id", str(v)))
                                         elif isinstance(v, list):
-                                            # If it's a list (like Tags or Multi-Select), flatten it
                                             parsed_list = [
                                                 str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
                                                 for i in v
@@ -343,7 +346,9 @@ async def websocket_migration(websocket: WebSocket):
                                     
                                 info = data.get("info", {})
                                 more_records = info.get("more_records", False)
-                                page += 1
+                                # Extract the token for the next loop
+                                page_token = info.get("next_page_token")
+                                page += 1 # Kept for COQL offset calculation
                                 
                             job["rawRecords"] = source_records 
                             await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
@@ -868,6 +873,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                 fields_str = ",".join(safe_fields)
 
                 page = 1
+                page_token = None
                 more_records = True
 
                 while more_records:
@@ -890,7 +896,11 @@ async def websocket_validate_stream(websocket: WebSocket):
                         paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
                         res = await client.post(f"{base_url}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
                     else:
-                        res = await client.get(f"{base_url}/crm/v6/{obj_name}?page={page}&per_page=200&fields={fields_str}", headers=headers)
+                        # ZOHO MASS EXTRACTION PAGE TOKEN LOGIC
+                        if page_token:
+                            res = await client.get(f"{base_url}/crm/v6/{obj_name}?page_token={page_token}&per_page=200&fields={fields_str}", headers=headers)
+                        else:
+                            res = await client.get(f"{base_url}/crm/v6/{obj_name}?page=1&per_page=200&fields={fields_str}", headers=headers)
 
                     if res.status_code == 429:
                         await websocket.send_json({"log": "⚠️ Zoho Rate Limit. Pausing for 30s...", "status": "Paused"})
@@ -910,10 +920,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                         flat_rec = {}
                         for k, v in r.items():
                             if isinstance(v, dict):
-                                # If it's a Lookup/Owner dict, extract the Name or ID
                                 flat_rec[k] = v.get("name", v.get("id", str(v)))
                             elif isinstance(v, list):
-                                # If it's a list (like Tags or Multi-Select), flatten it
                                 parsed_list = [
                                     str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
                                     for i in v
@@ -944,7 +952,9 @@ async def websocket_validate_stream(websocket: WebSocket):
                     
                     info = data.get("info", {})
                     more_records = info.get("more_records", False)
-                    page += 1
+                    # Extract the token for the next loop
+                    page_token = info.get("next_page_token")
+                    page += 1 # Kept for COQL offset calculation
 
             else:
                 await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
