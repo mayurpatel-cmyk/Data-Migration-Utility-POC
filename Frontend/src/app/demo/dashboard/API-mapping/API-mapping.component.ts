@@ -2442,6 +2442,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           return applySquiggle("Zendesk Custom Objects require a JSON filter. Leave blank to fetch all records.", this.customQuery.trim().split(' ')[0] || " ");
         }
         try {
+          const cleanJsonText = this.customQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
           JSON.parse(cleanJsonText);
         } catch (e) {
           return applySquiggle("Invalid JSON Syntax. Please check your brackets, keys, and trailing commas.", "{");
