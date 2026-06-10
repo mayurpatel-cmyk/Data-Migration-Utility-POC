@@ -7,23 +7,76 @@
             <a href="#" class="d-flex justify-content-center">
               <img src="assets/images/gemini-svg.svg" alt="logo" />
             </a>
+
             <div class="row">
               <div class="d-flex justify-content-center">
                 <div class="auth-header text-center">
-                  <h2 class="text-secondary mt-5"><b>Welcome</b></h2>
-                  <p class="fs-4 mt-2">Connect your Salesforce Org to begin migration</p>
+                  <h2 class="text-secondary mt-5">
+                    <b>
+                      @if (isForgotPasswordMode()) { Reset Password }
+                      @else if (isSignUpMode()) { Create Account }
+                      @else { Welcome Back }
+                    </b>
+                  </h2>
+                  <p class="fs-4 mt-2">
+                    @if (isForgotPasswordMode()) { Enter your email to receive a reset link }
+                    @else if (isSignUpMode()) { Sign up to begin your migration }
+                    @else { Log in to continue }
+                  </p>
                 </div>
               </div>
             </div>
+
+            @if (isSignUpMode() && !isForgotPasswordMode()) {
+              <div class="form-floating mb-3">
+                <input 
+                  type="text" 
+                  class="form-control" 
+                  id="fullName" 
+                  placeholder="John Doe"
+                  [ngModel]="fullName()" 
+                  (ngModelChange)="fullName.set($event)" 
+                  name="fullName" 
+                  required>
+                <label for="fullName">Full Name</label>
+              </div>
+            }
+
             <div class="form-floating mb-3">
-              <select class="form-select" id="salesforceEnvironment" aria-label="Salesforce Environment"
-                [(ngModel)]="selectedEnvironment"
-                name="environment">
-                <option value="production">Production / Developer</option>
-                <option value="sandbox">Sandbox</option>
-              </select>
-              <label for="salesforceEnvironment">Salesforce Environment</label>
+              <input 
+                type="email" 
+                class="form-control" 
+                id="emailAddress" 
+                placeholder="name@example.com"
+                [ngModel]="email()" 
+                (ngModelChange)="email.set($event)" 
+                name="email" 
+                required>
+              <label for="emailAddress">Email address</label>
             </div>
+
+            @if (!isForgotPasswordMode()) {
+              <div class="form-floating mb-3">
+                <input 
+                  type="password" 
+                  class="form-control" 
+                  id="password" 
+                  placeholder="Password"
+                  [ngModel]="password()" 
+                  (ngModelChange)="password.set($event)" 
+                  name="password" 
+                  required>
+                <label for="password">Password</label>
+              </div>
+
+              @if (!isSignUpMode()) {
+                <div class="d-flex justify-content-end mb-3">
+                  <a href="javascript:void(0)" (click)="isForgotPasswordMode.set(true); isSignUpMode.set(false);" class="text-primary fs-6">
+                    Forgot Password?
+                  </a>
+                </div>
+              }
+            }
 
             @if (error()) {
               <div class="alert alert-danger" role="alert">
@@ -34,15 +87,25 @@
             <div class="d-grid mt-4">
               <button type="submit" class="btn btn-primary btn-lg" [disabled]="loading()">
                 @if (loading()) {
-                  Connecting...
+                  Please wait...
                 } @else {
-                  <i class="ti ti-brand-salesforce me-2"></i> Log in with Salesforce
+                  @if (isForgotPasswordMode()) { Send Reset Link }
+                  @else if (isSignUpMode()) { Sign Up }
+                  @else { Log In }
                 }
               </button>
             </div>
 
             <p class="text-muted text-center mt-3 fs-6">
-              You will be redirected to Salesforce to sign in securely.
+              @if (isForgotPasswordMode()) {
+                Remembered your password? 
+                <a href="javascript:void(0)" (click)="toggleMode()" class="text-primary fw-bold">Back to login</a>
+              } @else {
+                {{ isSignUpMode() ? 'Already have an account?' : 'Need an account?' }}
+                <a href="javascript:void(0)" (click)="toggleMode()" class="text-primary fw-bold">
+                  {{ isSignUpMode() ? 'Log in' : 'Sign up here' }}
+                </a>
+              }
             </p>
             <hr />
           </form>

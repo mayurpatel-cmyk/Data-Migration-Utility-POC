@@ -1,110 +1,78 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, timeout } from 'rxjs';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+
+export interface CrmConnection {
+  crm_type: string;
+  connection_role: 'source' | 'target';
+  subdomain?: string;
+  region?: string;
+  instance_url?: string;
+}
 
 @Injectable({
   providedIn: 'root'
 })
 export class CrmAuthService {
   private http = inject(HttpClient);
+  
+  // Point to your FastAPI backend base URL
+  private apiBaseUrl = 'http://localhost:8000/api/crm';
 
-  // Point this to your NODE.JS Gateway auth routes
-  private authBaseUrl = 'http://localhost:8000/api/auth';
-
-  // ==========================================
-  // 1. OAUTH LOGIN (Browser Redirect)
-  // ==========================================
+  // =========================================================
+  // 1. FETCH ACTIVE CONNECTIONS FROM DATABASE
+  // =========================================================
   /**
-   * Redirects the user's browser to the backend OAuth login endpoint.
-   * @param crmId - 'salesforce', 'zendesk', 'zoho', etc.
-   * @param side - 'source' (where data comes from) or 'target' (where data goes)
-   * @param subdomain - Required for CRMs like Zendesk (e.g., 'sureshift')
-   * @param region - UPDATED: Captures 'US', 'IN', 'EU', etc., dynamically for Zoho routing
+   * Retrieves the current user's saved connections from Supabase via Python.
+   * Attached Authorization headers are handled automatically by the Interceptor.
+   */
+  getUserConnections(): Observable<CrmConnection[]> {
+    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`);
+  }
+
+  // =========================================================
+  // 2. OAUTH LOGIN GENERATION & REDIRECT (Secure Handshake)
+  // =========================================================
+  /**
+   * Requests an authorized OAuth redirection path from the Python API layer.
+   * Automatically falls back to localized query parameters depending on CRM requirements.
    */
   connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string): void {
     const safeCrmId = crmId.toLowerCase();
-    let loginUrl = `${this.authBaseUrl}/${safeCrmId}/login?side=${side}`;
+    
+    // Construct the backend endpoint URL to request the login link
+    let requestUrl = `${this.apiBaseUrl}/auth/${safeCrmId}/login?side=${side}`;
 
     if (subdomain) {
-      // encodeURIComponent prevents special characters from breaking the URL
-      loginUrl += `&subdomain=${encodeURIComponent(subdomain)}`;
+      requestUrl += `&subdomain=${encodeURIComponent(subdomain)}`;
     }
-
     if (safeCrmId === 'zoho' && region) {
-      // Forwards selection to python gateway URL parameter
-      loginUrl += `&region=${encodeURIComponent(region)}`;
+      requestUrl += `&region=${encodeURIComponent(region)}`;
     }
 
-    // We do NOT use this.http.get() for this.
-    // OAuth requires a full browser context switch to the CRM's login screen.
-    window.location.href = loginUrl;
-  }
-
-  // ==========================================
-  // 2. CHECK CONNECTION STATUS (API Call)
-  // ==========================================
-  /**
-   * Optional: If you have an endpoint to check if the stored token is still valid.
-   */
-  checkConnectionStatus(crmId: string): Observable<any> {
-    const safeCrmId = crmId.toLowerCase();
-
-    return this.http.get<any>(`${this.authBaseUrl}/${safeCrmId}/status`, {
-      headers: this.getAuthHeaders(),
-      withCredentials: true
-    }).pipe(timeout(15000));
-  }
-
-  // ==========================================
-  // 3. TOKEN MANAGEMENT (Local Storage)
-  // ==========================================
-  /**
-   * Utility to fetch currently saved tokens.
-   */
-  private getAuthHeaders(): HttpHeaders {
-    return new HttpHeaders({
-      'sf-accesstoken': localStorage.getItem('sf_token') || '',
-      'zd-accesstoken': localStorage.getItem('zd_token') || '',
-      'zoho-accesstoken': localStorage.getItem('zoho_token') || '',
-      'zoho-token': localStorage.getItem('zoho_token') || '',
-      'zoho-api-domain': localStorage.getItem('zoho_api_domain') || ''
+    // Securely fetch the generated OAuth URL from the backend
+    this.http.get<{ url: string }>(requestUrl).subscribe({
+      next: (response) => {
+        if (response?.url) {
+          // Perform the browser context switch to the CRM login screen
+          window.location.href = response.url;
+        } else {
+          console.error(`Backend failed to generate a valid OAuth URL for ${crmId}.`);
+        }
+      },
+      error: (err) => {
+        console.error(`Failed to initialize ${crmId} authentication engine path:`, err);
+      }
     });
   }
 
+  // =========================================================
+  // 3. DISCONNECT (Delete from Database)
+  // =========================================================
   /**
-   * Call this from your Component when the URL callback returns successfully.
+   * Drops a specific connection slot profile data out of your Supabase records table.
    */
-  saveConnectionDetails(crmId: string, tokens: any): void {
-    const safeCrmId = crmId.toLowerCase();
-
-    if (safeCrmId === 'salesforce') {
-      localStorage.setItem('sf_token', tokens.access_token || '');
-      localStorage.setItem('sf_instance_url', tokens.instance_url || '');
-    } else if (safeCrmId === 'zendesk') {
-      localStorage.setItem('zd_token', tokens.access_token || '');
-      localStorage.setItem('zd_subdomain', tokens.subdomain || '');
-    } else if (safeCrmId === 'zoho') {
-      localStorage.setItem('zoho_token', tokens.access_token || '');
-      localStorage.setItem('zoho_api_domain', tokens.api_domain || '');
-      localStorage.setItem('zoho_accounts_server', tokens.accounts_server || '');
-    }
-  }
-
-  disconnectCrm(crmId: string): void {
-    const safeCrmId = crmId.toLowerCase();
-
-    if (safeCrmId === 'salesforce') {
-      localStorage.removeItem('sf_token');
-      localStorage.removeItem('sf_instance_url');
-      localStorage.removeItem('sf_user_email');
-    } else if (safeCrmId === 'zendesk') {
-      localStorage.removeItem('zd_token');
-      localStorage.removeItem('zd_subdomain');
-    } else if (safeCrmId === 'zoho') {
-      localStorage.removeItem('zoho_token');
-      localStorage.removeItem('zoho_api_domain');
-      localStorage.removeItem('zoho_accounts_server');
-    }
+  disconnectCrm(side: 'source' | 'target'): Observable<any> {
+    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`);
   }
 }

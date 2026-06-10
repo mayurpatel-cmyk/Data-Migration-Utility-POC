@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse
 import httpx 
 from pathlib import Path
 from dotenv import load_dotenv
+from app.utils.config import supabase
 
 from app.services.validator_service import process_validation_batch
 from app.services.crm_metadata_service import CrmMetadataService
@@ -36,9 +37,10 @@ router = APIRouter()
 ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200/connection")
 FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000")
 
-SF_CLIENT_ID = os.getenv("SF_CLIENT_ID", "").strip()
-SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET", "").strip()
-SF_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/salesforce/callback"
+SF_CLIENT_ID = os.getenv("SF_CONSUMER_KEY")
+SF_CLIENT_SECRET = os.getenv("SF_CONSUMER_SECRET")
+SF_REDIRECT_URI = "http://localhost:8000/api/crm/auth/salesforce/callback"
+ANGULAR_FRONTEND_URL = "http://localhost:4200"
 
 ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
 ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
@@ -131,33 +133,67 @@ async def crm_oauth_login(
     raise HTTPException(status_code=400, detail=f"CRM engine '{crm_id}' is not yet supported via OAuth.")
 
 
-# =========================================================
-# ROUTE: SALESFORCE OAUTH CALLBACK
-# =========================================================
-@router.get("/api/auth/salesforce/callback")
-async def salesforce_callback(code: str, state: str):
-    # 👇 CRITICAL FIX: Added verify=False here
+@router.get("/auth/salesforce/callback")
+async def salesforce_callback(code: str = None, state: str = None, error: str = None):
+    """
+    Step 2: Catches incoming authorization redirects issued by Salesforce.
+    Executes back-channel credential swapping and pushes down into Supabase.
+    """
+    if error or not code:
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+    # 1. Deconstruct the packed state variable layout
+    try:
+        side, user_id, environment = state.split("::")
+    except (ValueError, AttributeError):
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error&message=InvalidState")
+
+    # 2. Match token request execution target domain to user choice context
+    domain = "test.salesforce.com" if environment == "sandbox" else "login.salesforce.com"
+    token_url = f"https://{domain}/services/oauth2/token"
+
+    # 3. Request Token Generation Over Secure Server Protocol Layer
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": SF_CLIENT_ID,
+        "client_secret": SF_CLIENT_SECRET,
+        "redirect_uri": SF_REDIRECT_URI
+    }
+
     async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post("https://login.salesforce.com/services/oauth2/token", data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": SF_CLIENT_ID,
-            "client_secret": SF_CLIENT_SECRET,
-            "redirect_uri": SF_REDIRECT_URI
-        })
+        response = await client.post(token_url, data=payload)
         
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to retrieve token from Salesforce.")
+            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
             
         token_data = response.json()
         access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token", "")
         instance_url = token_data.get("instance_url", "")
+
+    # 4. Atomically commit the configuration data straight into Supabase
+    try:
+        # Prevent row collisions inside target schema context slots
+        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        safe_instance_url = urllib.parse.quote(instance_url)
+        # Save complete record dataset configuration matrix
+        supabase.table("crm_connections").insert({
+            "user_id": user_id,
+            "crm_type": "salesforce",
+            "connection_role": side,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "instance_url": instance_url,
+            "environment": environment
+        }).execute()
+        
+    except Exception as database_error:
+        print(f"Supabase Database storage failure event: {str(database_error)}")
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
-    return RedirectResponse(f"{ANGULAR_FRONTEND_URL}?connected_side={state}&crm=salesforce&access_token={access_token}&instance_url={safe_instance_url}")
-
-
+    # 5. Push user layout interface state back safely to home view dashboard page
+    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=salesforce")
 # =========================================================
 # ROUTE: ZENDESK OAUTH CALLBACK
 # =========================================================

@@ -103,115 +103,84 @@ export class DefaultComponent implements OnInit {
   completedJobsCount: number = 0;
 
 
-  ngOnInit() {
-    const transferred = this.dataTransfer.getValidatedData();
+ ngOnInit() {
+  const transferred = this.dataTransfer.getValidatedData();
 
-    // Check if we have an array of jobs transferred from Validation
-    if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
-      console.log("📥 Received Clean Data from Validation:", transferred.data);
+  // Check if we have an array of jobs transferred from Validation
+  if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
+    console.log("📥 Received Clean Data from Validation:", transferred.data);
 
-      const newWorkbook = utils.book_new();
-      this.availableSheets = [];
+    const newWorkbook = utils.book_new();
+    this.availableSheets = [];
 
-      // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
-      transferred.data.forEach((job: any, index: number) => {
-        const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
-        const worksheet = utils.json_to_sheet(job.results.validRecords);
+    // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
+    transferred.data.forEach((job: any, index: number) => {
+      const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
+      const worksheet = utils.json_to_sheet(job.results.validRecords);
 
-        utils.book_append_sheet(newWorkbook, worksheet, sheetName);
-        this.availableSheets.push(sheetName);
-      });
-
-      // Bind the new workbook and file to the UI
-      this.workbook = newWorkbook;
-      this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-      // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
-
-      this.migrationQueue = []; // Reset just in case
-
-      transferred.data.forEach((job: any, index: number) => {
-        // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
-        const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
-          csvField: m.csvField,
-          sfField: m.sfField,
-          type: m.type,
-          // Note: Relationship lookup fields won't be fully auto-resolved here because 
-          // we don't have the parent object data from Step 1, but standard fields will map perfectly.
-          relationalExtIdField: '',
-          parentObjectName: undefined
-        }));
-
-        // Push directly into the execution queue
-        this.migrationQueue.push({
-          sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
-          targetObject: job.targetObject,
-          csvHeaders: Object.keys(job.results.validRecords[0] || {}),
-          mappings: enhancedMappings,
-          operationMode: 'insert', // Default to insert, user can change later if needed
-          targetExtIdField: job.dedupeKey || ''
-        });
-      });
-
-      // 2. We skip Step 2 and Step 3 completely!
-      // Take them directly to the final review screen
-      this.currentStep = 3;
-      this.selectedObject = '';
-
-      this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
-      this.cdr.detectChanges();
-
-    } else {
-      // Only show pop-up instructions if arriving manually
-      setTimeout(() => {
-        this.showMigrationInstructions();
-      }, 0);
-    }
-
-    // --- OAUTH LOGIC ALWAYS RUNS ---
-    let hasInitialized = false;
-
-    this.route.queryParams.subscribe(params => {
-      if (hasInitialized) return;
-
-      const token = params['token'];
-      const instanceUrl = params['instanceUrl'];
-      const name = params['name'];
-
-      hasInitialized = true;
-
-      setTimeout(() => {
-        if (token && instanceUrl) {
-          console.log('OAuth Callback Detected: Saving session...');
-
-          if (name) {
-            localStorage.setItem('sf_user_name', name);
-            this.displayName.set(name);
-          }
-
-          this.authService.handleOAuthLogin(token, instanceUrl);
-
-          this.router.navigate([], {
-            relativeTo: this.route,
-            queryParams: { token: null, instanceUrl: null, name: null },
-            queryParamsHandling: 'merge',
-            replaceUrl: true
-          }).then(() => {
-            this.toastr.success('Connection Verified!', 'Welcome');
-            this.loadSalesforceObjects();
-          });
-
-        } else if (this.authService.isLoggedIn()) {
-          const savedName = localStorage.getItem('sf_user_name');
-          if (savedName) this.displayName.set(savedName);
-
-          this.loadSalesforceObjects();
-        } else {
-          this.router.navigate(['/login']);
-        }
-      }, 0);
+      utils.book_append_sheet(newWorkbook, worksheet, sheetName);
+      this.availableSheets.push(sheetName);
     });
+
+    // Bind the new workbook and file to the UI
+    this.workbook = newWorkbook;
+    this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+    // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
+
+    this.migrationQueue = []; // Reset just in case
+
+    transferred.data.forEach((job: any, index: number) => {
+      // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
+      const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
+        csvField: m.csvField,
+        sfField: m.sfField,
+        type: m.type,
+        // Note: Relationship lookup fields won't be fully auto-resolved here because 
+        // we don't have the parent object data from Step 1, but standard fields will map perfectly.
+        relationalExtIdField: '',
+        parentObjectName: undefined
+      }));
+
+      // Push directly into the execution queue
+      this.migrationQueue.push({
+        sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
+        targetObject: job.targetObject,
+        csvHeaders: Object.keys(job.results.validRecords[0] || {}),
+        mappings: enhancedMappings,
+        operationMode: 'insert', // Default to insert, user can change later if needed
+        targetExtIdField: job.dedupeKey || ''
+      });
+    });
+
+    // 2. We skip Step 2 and Step 3 completely!
+    // Take them directly to the final review screen
+    this.currentStep = 3;
+    this.selectedObject = '';
+
+    this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
+    this.cdr.detectChanges();
+
+  } else {
+    // Only show pop-up instructions if arriving manually
+    setTimeout(() => {
+      this.showMigrationInstructions();
+    }, 0);
   }
+
+  // --- UPDATED AUTHENTICATION LOGIC ---
+  // We no longer need to intercept Salesforce OAuth tokens from the URL.
+  // Just check if the user has a valid session from Supabase.
+  setTimeout(() => {
+    if (this.authService.isLoggedIn()) {
+      // User is logged in via Supabase, proceed to load necessary data
+      this.loadSalesforceObjects();
+    } else {
+      // User is not logged in, boot them to the login screen
+      this.router.navigate(['/login']);
+    }
+  }, 0);
+}
 
   private loadSalesforceObjects() {
     this.isLoadingObjects = true;

@@ -16,6 +16,14 @@ export interface NavigationItem {
 }
 
 export const NavigationItems: NavigationItem[] = [
+   {
+  id: 'connection',
+  title: 'Connection',
+  type: 'item',
+  url: '/connection', // This must match the path in AppRoutingModule
+  icon: 'ti ti-plug',
+  breadcrumbs: true
+},
  {
   id: 'data-import',
   title: 'CSV/Excel Import',
@@ -32,12 +40,5 @@ export const NavigationItems: NavigationItem[] = [
   icon: 'ti ti-shield-check',
   breadcrumbs: true
 },
- {
-  id: 'connection',
-  title: 'Connection',
-  type: 'item',
-  url: '/connection', // This must match the path in AppRoutingModule
-  icon: 'ti ti-plug',
-  breadcrumbs: true
-},
+
 ];
