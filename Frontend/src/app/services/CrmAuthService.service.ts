@@ -8,6 +8,7 @@ export interface CrmConnection {
   subdomain?: string;
   region?: string;
   instance_url?: string;
+  environment?: string;
 }
 
 @Injectable({
@@ -53,7 +54,7 @@ private getAuthHeaders(): HttpHeaders {
   // =========================================================
   // 2. OAUTH LOGIN GENERATION & REDIRECT 
   // =========================================================
-  connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string): void {
+  connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string, environment: string = 'production'): void {
     const safeCrmId = crmId.toLowerCase();
     
     let requestUrl = `${this.apiBaseUrl}/auth/${safeCrmId}/login?side=${side}`;
@@ -63,6 +64,9 @@ private getAuthHeaders(): HttpHeaders {
     }
     if (safeCrmId === 'zoho' && region) {
       requestUrl += `&region=${encodeURIComponent(region)}`;
+    }
+    if (safeCrmId === 'salesforce') {
+      requestUrl += `&environment=${encodeURIComponent(environment)}`; // <-- ADD THIS
     }
 
     // Securely fetch the URL using the authorization headers

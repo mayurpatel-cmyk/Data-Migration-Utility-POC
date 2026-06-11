@@ -66,22 +66,22 @@
                 <div class="text-success fw-bold d-flex align-items-center justify-content-center gap-2">
                   <i class="feather icon-check-circle fs-4"></i> Connected
                 </div>
+                <p class="text-muted small mt-1 mb-0 text-truncate" style="max-width: 200px; margin: 0 auto;">{{ sourceInstanceUrl }}</p>
                 <button class="btn btn-sm btn-outline-danger mt-3" (click)="disconnectCRM('source')">Disconnect</button>
               } @else {
                 @if (selectedSource === 'zendesk') {
                   <div class="input-group input-group-sm mb-3">
                     <span class="input-group-text bg-light border-secondary">https://</span>
-                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="zendeskSubdomain">
+                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="sourceZendeskSubdomain">
                     <span class="input-group-text bg-light border-secondary">.zendesk.com</span>
                   </div>
                 }
 
                 @if (selectedSource === 'zoho') {
                   <p class="text-muted small mb-2 px-2">Select your server cluster region to prevent double password entries.</p>
-
                   <div class="mb-3 px-2 text-start">
                     <label class="small fw-bold text-muted mb-1"><i class="feather icon-globe"></i> Zoho Data Center Region</label>
-                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="zohoRegion">
+                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="sourceZohoRegion">
                       <option value="US">United States (US / Global)</option>
                       <option value="IN">India (IN)</option>
                       <option value="EU">Europe (EU)</option>
@@ -93,14 +93,26 @@
                       <option value="CN">China (CN)</option>
                     </select>
                   </div>
-
                   <button class="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm py-2"
                           (click)="loginToCRM('source')">
                     <i class="feather icon-unlock"></i> Sign In to Zoho CRM
                   </button>
+                } @else if (selectedSource === 'salesforce') {
+                  <p class="text-muted small mb-2 px-2">Select your Salesforce organization context environment environment.</p>
+                  <div class="mb-3 px-2 text-start">
+                    <label class="small fw-bold text-muted mb-1"><i class="feather icon-server"></i> Salesforce Environment</label>
+                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="sourceSalesforceEnv">
+                      <option value="production">Production / Developer</option>
+                      <option value="sandbox">Sandbox</option>
+                    </select>
+                  </div>
+                  <button class="btn btn-dark w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm py-2"
+                          (click)="loginToCRM('source')">
+                    <i class="feather icon-log-in"></i> Login to Salesforce
+                  </button>
                 } @else {
                   <button class="btn btn-dark w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm"
-                          [disabled]="selectedSource === 'zendesk' && !zendeskSubdomain"
+                          [disabled]="selectedSource === 'zendesk' && !sourceZendeskSubdomain"
                           (click)="loginToCRM('source')">
                     <i class="feather icon-log-in"></i> Login to {{ getCrmConfig(selectedSource)?.name }}
                   </button>
@@ -135,22 +147,22 @@
                 <div class="text-success fw-bold d-flex align-items-center justify-content-center gap-2">
                   <i class="feather icon-check-circle fs-4"></i> Connected
                 </div>
+                <p class="text-muted small mt-1 mb-0 text-truncate" style="max-width: 200px; margin: 0 auto;">{{ targetInstanceUrl }}</p>
                 <button class="btn btn-sm btn-outline-danger mt-3" (click)="disconnectCRM('target')">Disconnect</button>
               } @else {
                 @if (selectedTarget === 'zendesk') {
                   <div class="input-group input-group-sm mb-3">
                     <span class="input-group-text bg-light border-secondary">https://</span>
-                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="zendeskSubdomain">
+                    <input type="text" class="form-control border-secondary" placeholder="subdomain" [(ngModel)]="targetZendeskSubdomain">
                     <span class="input-group-text bg-light border-secondary">.zendesk.com</span>
                   </div>
                 }
 
                 @if (selectedTarget === 'zoho') {
                   <p class="text-muted small mb-2 px-2">Select your server cluster region</p>
-
                   <div class="mb-3 px-2 text-start">
                     <label class="small fw-bold text-muted mb-1"><i class="feather icon-globe"></i> Zoho Data Center Region</label>
-                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="zohoRegion">
+                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="targetZohoRegion">
                       <option value="US">United States (US / Global)</option>
                       <option value="IN">India (IN)</option>
                       <option value="EU">Europe (EU)</option>
@@ -159,14 +171,26 @@
                       <option value="CA">Canada (CA)</option>
                     </select>
                   </div>
-
                   <button class="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm py-2"
                           (click)="loginToCRM('target')">
                     <i class="feather icon-unlock"></i> Sign In to Zoho CRM
                   </button>
+                } @else if (selectedTarget === 'salesforce') {
+                  <p class="text-muted small mb-2 px-2">Select your Salesforce organization context environment environment.</p>
+                  <div class="mb-3 px-2 text-start">
+                    <label class="small fw-bold text-muted mb-1"><i class="feather icon-server"></i> Salesforce Environment</label>
+                    <select class="form-select form-select-sm border-secondary" [(ngModel)]="targetSalesforceEnv">
+                      <option value="production">Production / Developer</option>
+                      <option value="sandbox">Sandbox</option>
+                    </select>
+                  </div>
+                  <button class="btn btn-info text-white w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm py-2"
+                          (click)="loginToCRM('target')">
+                    <i class="feather icon-log-in"></i> Login to Salesforce
+                  </button>
                 } @else {
                   <button class="btn btn-info text-white w-100 d-flex align-items-center justify-content-center gap-2 shadow-sm"
-                          [disabled]="selectedTarget === 'zendesk' && !zendeskSubdomain"
+                          [disabled]="selectedTarget === 'zendesk' && !targetZendeskSubdomain"
                           (click)="loginToCRM('target')">
                     <i class="feather icon-log-in"></i> Login to {{ getCrmConfig(selectedTarget)?.name }}
                   </button>
