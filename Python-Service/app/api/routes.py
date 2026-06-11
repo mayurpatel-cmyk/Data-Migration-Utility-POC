@@ -5,12 +5,10 @@ import shutil
 import urllib.parse 
 import pandas as pd
 from openpyxl import load_workbook
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Query, Header 
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Header 
 import httpx 
 from pathlib import Path
 from dotenv import load_dotenv
-from app.utils.config import supabase
 
 from app.services.validator_service import process_validation_batch
 from app.services.crm_metadata_service import CrmMetadataService
@@ -30,235 +28,6 @@ for path in possible_paths:
         break
 
 router = APIRouter()
-
-# =========================================================
-# OAUTH CONFIGURATION (Loaded safely from .env)
-# =========================================================
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200/connection")
-FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000")
-
-SF_CLIENT_ID = os.getenv("SF_CONSUMER_KEY")
-SF_CLIENT_SECRET = os.getenv("SF_CONSUMER_SECRET")
-SF_REDIRECT_URI = "http://localhost:8000/api/crm/auth/salesforce/callback"
-ANGULAR_FRONTEND_URL = "http://localhost:4200"
-
-ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
-ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
-ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zendesk/callback"
-#Zoho ClientId and secret and URI
-ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "").strip()
-ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "").strip()
-ZOHO_REGIONS = {
-    "us": "https://accounts.zoho.com",
-    "in": "https://accounts.zoho.in",
-    "eu": "https://accounts.zoho.eu",
-    "au": "https://accounts.zoho.com.au",
-    "jp": "https://accounts.zoho.jp",
-    "ca": "https://accounts.zohocloud.ca",
-    "sa": "https://accounts.zoho.sa",
-    "uk": "https://accounts.zoho.uk",
-    "cn": "https://accounts.zoho.com.cn"
-}
-FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200")
-ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/auth/zoho/callback"
-
-
-# =========================================================
-# ROUTE: DYNAMIC OAUTH LOGIN INITIALIZATION
-# =========================================================
-@router.get("/api/auth/{crm_id}/login")
-async def crm_oauth_login(
-    crm_id: str, 
-    side: str = Query(...),  # 'source' or 'target'
-    subdomain: str = Query(None), # Required only for zendesk
-    region: str = Query(None) # Capture region from Angular UI (e.g., 'US', 'IN', 'EU') for zoho
-):
-    crm_id_lower = crm_id.lower()
-    
-    if crm_id_lower == "salesforce":
-        params = {
-            "client_id": SF_CLIENT_ID,
-            "redirect_uri": SF_REDIRECT_URI,
-            "response_type": "code",
-            "state": side
-        }
-        query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-        auth_url = f"https://login.salesforce.com/services/oauth2/authorize?{query_string}"
-        return RedirectResponse(auth_url)
-
-    elif crm_id_lower == "zendesk":
-        if not subdomain:
-            raise HTTPException(status_code=400, detail="Zendesk requires a subdomain parameter.")
-        
-        params = {
-            "client_id": ZD_CLIENT_ID,
-            "redirect_uri": ZD_REDIRECT_URI,
-            "response_type": "code",
-            "state": f"{side}:{subdomain}",
-            "scope": "read write",
-        }
-        query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-        auth_url = f"https://{subdomain.strip()}.zendesk.com/oauth/authorizations/new?{query_string}"
-        return RedirectResponse(auth_url)
-    elif crm_id_lower == "zoho":
-        if not ZOHO_CLIENT_ID:
-            raise HTTPException(status_code=500, detail="ZOHO_CLIENT_ID is missing from environment variables.")
-            
-        reg_key = (region or "US").lower().strip()
-        base_accounts_url = ZOHO_REGIONS.get(reg_key, ZOHO_REGIONS["us"])
-        
-        scopes = [
-            "ZohoCRM.modules.ALL",
-            "ZohoCRM.bulk.READ",
-            "ZohoCRM.settings.FIELDS.READ",
-            "ZohoCRM.settings.modules.READ",
-            "ZohoCRM.coql.READ"
-        ]
-        
-        # CORRECTED FIXED PARAMS BLOCK BELOW:
-        params = {
-            "scope": ",".join(scopes),
-            "client_id": ZOHO_CLIENT_ID,
-            "response_type": "code",
-            "access_type": "offline",
-            "redirect_uri": ZOHO_REDIRECT_URI,
-            "prompt": "consent",
-            "state": f"{side}:{reg_key}"
-        }
-        
-        query_string = urllib.parse.urlencode(params)
-        auth_url = f"{base_accounts_url}/oauth/v2/auth?{query_string}"
-        return RedirectResponse(auth_url)
-    raise HTTPException(status_code=400, detail=f"CRM engine '{crm_id}' is not yet supported via OAuth.")
-
-
-@router.get("/auth/salesforce/callback")
-async def salesforce_callback(code: str = None, state: str = None, error: str = None):
-    """
-    Step 2: Catches incoming authorization redirects issued by Salesforce.
-    Executes back-channel credential swapping and pushes down into Supabase.
-    """
-    if error or not code:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
-
-    # 1. Deconstruct the packed state variable layout
-    try:
-        side, user_id, environment = state.split("::")
-    except (ValueError, AttributeError):
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error&message=InvalidState")
-
-    # 2. Match token request execution target domain to user choice context
-    domain = "test.salesforce.com" if environment == "sandbox" else "login.salesforce.com"
-    token_url = f"https://{domain}/services/oauth2/token"
-
-    # 3. Request Token Generation Over Secure Server Protocol Layer
-    payload = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "client_id": SF_CLIENT_ID,
-        "client_secret": SF_CLIENT_SECRET,
-        "redirect_uri": SF_REDIRECT_URI
-    }
-
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post(token_url, data=payload)
-        
-        if response.status_code != 200:
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
-            
-        token_data = response.json()
-        access_token = token_data.get("access_token")
-        refresh_token = token_data.get("refresh_token", "")
-        instance_url = token_data.get("instance_url", "")
-
-    # 4. Atomically commit the configuration data straight into Supabase
-    try:
-        # Prevent row collisions inside target schema context slots
-        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
-        
-        # Save complete record dataset configuration matrix
-        supabase.table("crm_connections").insert({
-            "user_id": user_id,
-            "crm_type": "salesforce",
-            "connection_role": side,
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "instance_url": instance_url,
-            "environment": environment
-        }).execute()
-        
-    except Exception as database_error:
-        print(f"Supabase Database storage failure event: {str(database_error)}")
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
-
-    # 5. Push user layout interface state back safely to home view dashboard page
-    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=salesforce")
-# =========================================================
-# ROUTE: ZENDESK OAUTH CALLBACK
-# =========================================================
-@router.get("/api/auth/zendesk/callback")
-async def zendesk_callback(code: str, state: str):
-    try:
-        side, subdomain = state.split(":")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="State parameter verification corruption.")
-
-    # 👇 CRITICAL FIX: Added verify=False here
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": ZD_CLIENT_ID,
-            "client_secret": ZD_CLIENT_SECRET,
-            "redirect_uri": ZD_REDIRECT_URI,
-            "scope": "read write"
-        })
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to retrieve token from Zendesk.")
-            
-        token_data = response.json()
-
-    access_token = token_data.get("access_token")
-    return RedirectResponse(f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zendesk&access_token={access_token}")
-
-# =========================================================
-# ROUTE: ZOHO OAUTH CALLBACK
-# =========================================================
-@router.get("/api/auth/zoho/callback")
-async def zoho_callback(code: str, state: str, request: Request):
-    try:
-        side, reg_key = state.split(":") 
-    except ValueError:
-        side = state
-        reg_key = "us"
-    base_accounts_url = ZOHO_REGIONS.get(reg_key.lower(), ZOHO_REGIONS["us"])
-    accounts_server = request.query_params.get("accounts-server", base_accounts_url)
-    
-    # 👇 CRITICAL FIX: Added verify=False here to match your other routes!
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post(f"{accounts_server}/oauth/v2/token", data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": ZOHO_CLIENT_ID,
-            "client_secret": ZOHO_CLIENT_SECRET,
-            "redirect_uri": ZOHO_REDIRECT_URI
-        })
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to retrieve token from Zoho CRM.")
-            
-        token_data = response.json()
-        access_token = token_data.get("access_token")
-        api_domain = token_data.get("api_domain", "https://www.zohoapis.com")
-        
-        safe_api_domain = urllib.parse.quote(api_domain)
-        safe_accounts_server = urllib.parse.quote(accounts_server)
-
-    return RedirectResponse(
-        f"{ANGULAR_FRONTEND_URL}?connected_side={side}&crm=zoho&access_token={access_token}&api_domain={safe_api_domain}&accounts_server={safe_accounts_server}"
-    )
 
 # ==========================================
 # ROUTE 1: FAST HEADER EXTRACTION
@@ -485,12 +254,10 @@ async def get_crm_objects(
         return await CrmMetadataService.fetch_zendesk_objects(zd_token, zd_subdomain)
         
     elif crm_lower == "zoho":
-        # 1. Sanitize the Zoho Domain Protocol
         if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
             zoho_api_domain = f"https://{zoho_api_domain}"
         base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
 
-        # 2. Execute with verify=False for SSL safety
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             res = await client.get(f"{base_url}/crm/v6/settings/modules", headers={
                 "Authorization": f"Zoho-oauthtoken {zoho_token}"
@@ -525,8 +292,8 @@ async def get_crm_fields(
     sf_instance_url: str = Header(None, alias="sf-instance-url"),
     zd_token: str = Header(None, alias="zd-token"),
     zd_subdomain: str = Header(None, alias="zd-subdomain"),
-    zoho_token: str = Header(None, alias="zoho-token"),            # Regional token header context
-    zoho_api_domain: str = Header(None, alias="zoho-api-domain")  # Dynamic data center domain mapping
+    zoho_token: str = Header(None, alias="zoho-token"),
+    zoho_api_domain: str = Header(None, alias="zoho-api-domain")
 ):
     crm_lower = crm_id.lower()
     
@@ -536,7 +303,6 @@ async def get_crm_fields(
     elif crm_lower == "zendesk":
         return await CrmMetadataService.fetch_zendesk_fields(zd_token, zd_subdomain, object_name)
     elif crm_lower == "zoho":
-        # 1. Sanitize the Zoho Domain Protocol
         if zoho_api_domain and not zoho_api_domain.startswith(("http://", "https://")):
             zoho_api_domain = f"https://{zoho_api_domain}"
         base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
@@ -544,7 +310,6 @@ async def get_crm_fields(
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
 
-            # --- CALL 1: Fetch the Field Schema (Columns) ---
             fields_res = await client.get(
                 f"{base_url}/crm/v6/settings/fields?module={object_name}", 
                 headers=headers
@@ -555,7 +320,6 @@ async def get_crm_fields(
                 
             fields_data = fields_res.json().get("fields", [])
             
-            # --- CALL 2: Fetch the Sample Data (Rows) ---
             records_res = await client.get(
                 f"{base_url}/crm/v6/{object_name}?page=1&per_page=5", 
                 headers=headers
@@ -564,8 +328,6 @@ async def get_crm_fields(
             sample_records = []
             if records_res.status_code == 200:
                 raw_records = records_res.json().get("data", [])
-                
-                # Flatten complex Zoho data (like Owner or Lookup objects) into simple strings for the UI table
                 for r in raw_records:
                     flat_rec = {}
                     for k, v in r.items():
@@ -575,9 +337,8 @@ async def get_crm_fields(
                             flat_rec[k] = v
                     sample_records.append(flat_rec)
 
-            # Return both Schema AND Data to Angular
             return {
-                "headers": [f["api_name"] for f in fields_data][:15], # Limit to first 15 headers for UI cleanliness
+                "headers": [f["api_name"] for f in fields_data][:15], 
                 "sampleRecords": sample_records,
                 "fields": [
                     {
@@ -624,17 +385,13 @@ async def get_filtered_preview(request: Request):
         if not obj_name:
             raise HTTPException(status_code=400, detail="Object name is required.")
 
-        # Using verify=False to bypass corporate proxy environment disruptions
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             
-            # ==========================================
             # 1. SALESFORCE LIVE DYNAMIC QUERY
-            # ==========================================
             if crm_id == "salesforce":
                 if not sf_token or not sf_instance:
                     raise HTTPException(status_code=400, detail="Salesforce credentials missing.")
                 
-                # Trust the user's custom SOQL if provided, otherwise build it
                 if query.lower().startswith("select "):
                     soql = query
                     if "limit " not in soql.lower():
@@ -667,9 +424,7 @@ async def get_filtered_preview(request: Request):
                     
                 return {"records": records}
 
-            # ==========================================
             # 2. ZENDESK LIVE DYNAMIC QUERY
-            # ==========================================
             elif crm_id == "zendesk":
                 if not zd_token or not zd_subdomain:
                     raise HTTPException(status_code=400, detail="Zendesk credentials missing.")
@@ -677,17 +432,11 @@ async def get_filtered_preview(request: Request):
                 safe_obj = obj_name.lower()
                 headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
                 
-                # Check if it's a standard object
                 standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
                 is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
 
                 if is_standard:
-                    # ==========================================
-                    # STANDARD ZENDESK OBJECTS (Text Search)
-                    # ==========================================
                     if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
-
-                    # Strip out SQL junk if the frontend accidentally sent it to Zendesk
                     import re
                     clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
 
@@ -704,11 +453,7 @@ async def get_filtered_preview(request: Request):
                     raw_records = res.json().get("results", [])
                     
                 else:
-                    # ==========================================
-                    # NATIVE CUSTOM OBJECTS (JSON Filtered Search)
-                    # ==========================================
                     if query.strip():
-                        # Native Custom Object queries must be JSON filters, not text!
                         if not query.strip().startswith("{"):
                             raise HTTPException(
                                 status_code=400, 
@@ -721,11 +466,9 @@ async def get_filtered_preview(request: Request):
                         except json.JSONDecodeError:
                             raise HTTPException(status_code=400, detail="Invalid JSON payload in query.")
                             
-                        # Use the POST search endpoint
                         url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
                         res = await client.post(url, headers=headers, json=json_payload)
                     else:
-                        # If query is empty, just list recent records via GET
                         url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]={limit}"
                         res = await client.get(url, headers=headers)
                         
@@ -734,25 +477,16 @@ async def get_filtered_preview(request: Request):
                         
                     raw_records = res.json().get("custom_object_records", [])
 
-                # ==========================================
-                # UNIFIED FLATTENING ENGINE
-                # ==========================================
                 flattened_records = []
                 for rec in raw_records:
                     flat_rec = {}
                     for k, v in rec.items():
-                        
-                        # 1. Flatten Standard Object nested array
                         if k == "custom_fields" and isinstance(v, list):
                             for cf in v:
                                 flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                                
-                        # 2. Flatten Native Custom Object nested dictionary
                         elif k == "custom_object_fields" and isinstance(v, dict):
                             for cf_key, cf_val in v.items():
                                 flat_rec[cf_key] = cf_val
-                                
-                        # 3. Apply standard top-level fields (id, name, created_at)
                         elif not isinstance(v, (dict, list)): 
                             flat_rec[k] = v
                             
@@ -760,9 +494,7 @@ async def get_filtered_preview(request: Request):
                 
                 return {"records": flattened_records}
             
-            # ==========================================
             # 3. ZOHO LIVE DYNAMIC QUERY
-            # ==========================================
             elif crm_id == "zoho":
                 if not zoho_token:
                     raise HTTPException(status_code=400, detail="Zoho authentication token context missing.")
@@ -775,25 +507,18 @@ async def get_filtered_preview(request: Request):
                 
                 if query:
                     coql_query = query.strip()
-                    
-                    # If user provides a full SELECT query, trust it but sanitize it
                     if coql_query.lower().startswith("select "):
-                        
-                        # 1. Replace '*' with actual headers (NO SPACES ALLOWED)
                         if "*" in coql_query:
                             clean_headers = [h for h in headers_list if not str(h).startswith("$")]
                             safe_fields = clean_headers[:40] if clean_headers else ["id"]
                             coql_query = coql_query.replace("*", ",".join(safe_fields), 1)
                             
-                        # 2. ZOHO STRICT RULE: Erase all spaces after commas in the SELECT list
                         import re
                         match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
                         if match:
                             clean_select = match.group(1).replace(" ", "")
                             coql_query = coql_query.replace(match.group(1), clean_select, 1)
 
-                        # 3. ZOHO STRICT RULE: A WHERE clause is 100% mandatory
-                        # 3. ZOHO STRICT RULE: A WHERE clause is 100% mandatory
                         if " where " not in coql_query.lower():
                             if " limit " in coql_query.lower():
                                 coql_query = re.sub(r'(?i)\s+limit\s+', ' where id is not null limit ', coql_query)
@@ -804,7 +529,6 @@ async def get_filtered_preview(request: Request):
                             coql_query += f" limit {limit}"
                             
                     else:
-                        # User only provided a WHERE clause
                         safe_fields = headers_list[:40] if headers_list else ["id"]
                         coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query} limit {limit}"
 
@@ -814,7 +538,6 @@ async def get_filtered_preview(request: Request):
                         json={"select_query": coql_query}
                     )
                 else:
-                    # Empty query fallback
                     safe_fields = headers_list[:40] if headers_list else ["id"]
                     fields_str = ",".join(safe_fields)
                     res = await client.get(
@@ -822,26 +545,20 @@ async def get_filtered_preview(request: Request):
                         headers=headers
                     )
 
-                # Accept both 200 (Success with data) and 204 (Success but 0 records found)
                 if res.status_code not in [200, 204]:
-                    print(f"\n{'='*50}\nZOHO RAW ERROR PAYLOAD:\n{res.text}\n{'='*50}\n")
-                    
                     try:
                         err_data = res.json()
                         err_msg = str(err_data) 
                     except:
                         err_msg = res.text
-                        
                     raise HTTPException(status_code=400, detail=f"Zoho rejected query: {err_msg}")
                     
-                # Handle the 204 Empty Response safely
                 if res.status_code == 204:
                     raw_records = []
                 else:
                     raw_records = res.json().get("data") or []
                     
                 sample_records = []
-                
                 for r in raw_records:
                     flat_rec = {}
                     for k, v in r.items():
@@ -849,8 +566,6 @@ async def get_filtered_preview(request: Request):
                             flat_rec[k] = v.get("name", v["id"]) 
                         else:
                             flat_rec[k] = v
-                    
-                    # Un-indented to properly append once per record!
                     sample_records.append(flat_rec)
                     
                 return {"records": sample_records}                

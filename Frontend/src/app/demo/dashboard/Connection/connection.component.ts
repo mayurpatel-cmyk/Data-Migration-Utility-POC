@@ -110,7 +110,7 @@ export class ConnectionComponent implements OnInit {
     }
   }
 
-  loginToCRM(side: 'source' | 'target') {
+ loginToCRM(side: 'source' | 'target') {
     const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
 
     if (selectedCrmId === 'zendesk' && (!this.zendeskSubdomain || this.zendeskSubdomain.trim() === '')) {
@@ -118,7 +118,8 @@ export class ConnectionComponent implements OnInit {
       return;
     }
 
-    // Redirects browser to Python OAuth route
+    // Call the updated service method. 
+    // It will grab the token, get the URL from the backend, and force the redirect automatically!
     this.crmAuthService.connectCrm(selectedCrmId, side, this.zendeskSubdomain, this.zohoRegion);
   }
 

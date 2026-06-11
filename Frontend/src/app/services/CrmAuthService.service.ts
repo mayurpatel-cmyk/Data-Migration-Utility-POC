@@ -1,5 +1,5 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 export interface CrmConnection {
@@ -20,27 +20,42 @@ export class CrmAuthService {
   private apiBaseUrl = 'http://localhost:8000/api/crm';
 
   // =========================================================
-  // 1. FETCH ACTIVE CONNECTIONS FROM DATABASE
+  // HELPER: DYNAMIC TOKEN HUNTER
   // =========================================================
   /**
-   * Retrieves the current user's saved connections from Supabase via Python.
-   * Attached Authorization headers are handled automatically by the Interceptor.
+   * Scans local storage for the Supabase session and builds the Authorization header.
    */
-  getUserConnections(): Observable<CrmConnection[]> {
-    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`);
+private getAuthHeaders(): HttpHeaders {
+    // We now know exactly where your auth.service.ts puts the token!
+    const token = localStorage.getItem('supabase_token') || '';
+
+    // 🚨 DEBUG PRINTS 🚨
+    console.log('--- ANGULAR TOKEN CHECK ---');
+    if (token) {
+      console.log(`✅ Token Found! Length: ${token.length}. First 15 chars: ${token.substring(0, 15)}...`);
+    } else {
+      console.error('❌ NO TOKEN FOUND IN LOCAL STORAGE! You are likely not logged in.');
+    }
+
+    // Attach the exact token FastAPI is waiting for
+    return new HttpHeaders().set('Authorization', `Bearer ${token}`);
   }
 
   // =========================================================
-  // 2. OAUTH LOGIN GENERATION & REDIRECT (Secure Handshake)
+  // 1. FETCH ACTIVE CONNECTIONS FROM DATABASE
   // =========================================================
-  /**
-   * Requests an authorized OAuth redirection path from the Python API layer.
-   * Automatically falls back to localized query parameters depending on CRM requirements.
-   */
+  getUserConnections(): Observable<CrmConnection[]> {
+    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`, { 
+      headers: this.getAuthHeaders() 
+    });
+  }
+
+  // =========================================================
+  // 2. OAUTH LOGIN GENERATION & REDIRECT 
+  // =========================================================
   connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string): void {
     const safeCrmId = crmId.toLowerCase();
     
-    // Construct the backend endpoint URL to request the login link
     let requestUrl = `${this.apiBaseUrl}/auth/${safeCrmId}/login?side=${side}`;
 
     if (subdomain) {
@@ -50,18 +65,18 @@ export class CrmAuthService {
       requestUrl += `&region=${encodeURIComponent(region)}`;
     }
 
-    // Securely fetch the generated OAuth URL from the backend
-    this.http.get<{ url: string }>(requestUrl).subscribe({
+    // Securely fetch the URL using the authorization headers
+    this.http.get<{ url: string }>(requestUrl, { headers: this.getAuthHeaders() }).subscribe({
       next: (response) => {
         if (response?.url) {
-          // Perform the browser context switch to the CRM login screen
+          // Force the browser to leave Angular and hit the CRM login screen
           window.location.href = response.url;
         } else {
           console.error(`Backend failed to generate a valid OAuth URL for ${crmId}.`);
         }
       },
       error: (err) => {
-        console.error(`Failed to initialize ${crmId} authentication engine path:`, err);
+        console.error(`Failed to initialize ${crmId} authentication path:`, err);
       }
     });
   }
@@ -69,10 +84,9 @@ export class CrmAuthService {
   // =========================================================
   // 3. DISCONNECT (Delete from Database)
   // =========================================================
-  /**
-   * Drops a specific connection slot profile data out of your Supabase records table.
-   */
   disconnectCrm(side: 'source' | 'target'): Observable<any> {
-    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`);
+    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`, { 
+      headers: this.getAuthHeaders() 
+    });
   }
 }

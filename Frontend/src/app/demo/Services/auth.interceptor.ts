@@ -9,34 +9,36 @@ let refreshTokenSubject: BehaviorSubject<string | null> = new BehaviorSubject<st
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
-  
-  // 1. CRITICAL: Bypass all auth requests (login, signup, refresh)
-  // We do NOT want to append expired tokens or intercept 401s on auth endpoints
-  if (req.url.includes('/api/auth/')) {
+
+  // 1. STRICT BYPASS: Only ignore actual Supabase login/signup routes
+  const isPublicAuthRoute = req.url.endsWith('/api/auth/login') || 
+                            req.url.endsWith('/api/auth/signup') || 
+                            req.url.endsWith('/api/auth/refresh');
+
+  if (isPublicAuthRoute) {
     return next(req);
   }
 
-  // Get raw token snapshot safely
+  // 2. GET TOKEN safely
   let token = authService.currentUser();
-  
-  // Sanitize sneaky stringified local storage values
   if (token === 'null' || token === 'undefined' || !token) {
     token = null;
   }
 
-  // 2. Attach the token to the outgoing non-auth request
+  // 3. ATTACH TOKEN (With Debug Log!)
   let authReq = req;
   if (token) {
+    console.log(`[Interceptor] Attaching token to: ${req.url}`); // <-- DEBUG LOG
     authReq = req.clone({
       setHeaders: { Authorization: `Bearer ${token}` }
     });
+  } else {
+    console.warn(`[Interceptor] NO TOKEN FOUND for: ${req.url}`); // <-- DEBUG LOG
   }
 
-  // 3. Handle responses and capture 401 errors
+  // 4. HANDLE RESPONSES
   return next(authReq).pipe(
     catchError((error: HttpErrorResponse) => {
-      
-      // If unauthorized, and we have a token that just expired, initiate rotation
       if (error.status === 401 && token) {
         if (!isRefreshing) {
           isRefreshing = true;
@@ -45,29 +47,24 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
           return authService.refreshToken().pipe(
             switchMap((res: any) => {
               isRefreshing = false;
-              
-              // Emit the brand new token to all waiting parallel streams
               const newToken = res.token;
               refreshTokenSubject.next(newToken);
               
-              // Retry the original stalled request with the shiny new token
               return next(req.clone({
                 setHeaders: { Authorization: `Bearer ${newToken}` }
               }));
             }),
             catchError((err) => {
               isRefreshing = false;
-              authService.logout(); // Refresh token also expired; force login kick out
+              authService.logout(); 
               return throwError(() => err);
             })
           );
         } else {
-          // Parallel Requests Queue: If rotation is already active, halt here and wait
           return refreshTokenSubject.pipe(
             filter(newToken => newToken !== null),
             take(1),
             switchMap((newToken) => {
-              // Retry with the new token once the leader process broadcasts it
               return next(req.clone({
                 setHeaders: { Authorization: `Bearer ${newToken}` }
               }));
@@ -75,8 +72,6 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
           );
         }
       }
-      
-      // Return any non-401 errors straight to the application layout handlers
       return throwError(() => error);
     })
   );
