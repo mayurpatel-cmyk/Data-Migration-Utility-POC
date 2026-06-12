@@ -133,6 +133,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   monacoEditorInstance: any;
   completionProvider: any;
 
+  recoverableSessions: any[] = [];
+  isSessionsLoading = false;
+
   
 
   ngOnInit(): void {
@@ -155,6 +158,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     localStorage.setItem('target_crm_slot', this.targetCrmId);
 
     this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
+     
+    this.fetchRecoverableSessions();
 
     this.preloadEntirePage();
   }
@@ -174,6 +179,31 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     }
   }
 
+
+  fetchRecoverableSessions() {
+    this.isSessionsLoading = true;
+    fetch(`${environment.apiUrl}/api/validation/sessions`)
+      .then(res => res.json())
+      .then(data => {
+        this.recoverableSessions = data.sessions || [];
+        this.isSessionsLoading = false;
+        this.cdr.detectChanges();
+      })
+      .catch(() => this.isSessionsLoading = false);
+  }
+
+  resumeSession(sessionId: string, crm: string, object: string) {
+    // 1. Update the UI state to match the old session
+    this.currentSessionId = sessionId;
+    this.sourceCrmId = crm.toLowerCase();
+    this.selectedSourceObject = object.toLowerCase();
+    
+    this.toastr.info(`Restoring previous session...`, 'Resuming');
+    
+    // 2. Trigger the WebSocket with Revalidation = true, passing empty records
+    // Your Python backend will see the ID, skip API extraction, and instantly return the DB errors!
+    this.validateData(true, []);
+  }
 
   get visibleMappings() {
     return this.hideMappedFields ? this.mappings.filter(m => !m.targetField) : this.mappings;

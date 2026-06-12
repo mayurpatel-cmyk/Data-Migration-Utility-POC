@@ -6,6 +6,8 @@ import pandas as pd
 from openpyxl import load_workbook
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
 from app.services.validator_service import process_validation_batch
+import glob
+from datetime import datetime
 
 router = APIRouter()
 
@@ -206,3 +208,43 @@ async def revalidate_batch_json(request: Request):
     )
     
     return result
+
+# ==========================================
+# ROUTE 4: FETCH ACTIVE SESSIONS
+# ==========================================
+@router.get("/api/validation/sessions")
+async def get_active_sessions():
+    """Scans the staging folder and returns a list of recoverable validation sessions."""
+    base_dir = os.path.join(os.getcwd(), "SureShift_staging_databases")
+    sessions = []
+    
+    if not os.path.exists(base_dir):
+        return {"sessions": sessions}
+    
+    # Search for all .db files recursively in the staging directory
+    for filepath in glob.glob(f"{base_dir}/*/*/*.db"):
+        filename = os.path.basename(filepath)
+        session_id = filename.replace('.db', '')
+        parts = session_id.split('_')
+        
+        # Ensure it matches our Smart Session ID format: crm_object_date_time_uuid
+        if len(parts) >= 4:
+            crm = parts[0]
+            obj = parts[1]
+            date_str = f"{parts[2][:4]}-{parts[2][4:6]}-{parts[2][6:]} {parts[3][:2]}:{parts[3][2:4]}"
+            
+            stats = os.stat(filepath)
+            size_mb = round(stats.st_size / (1024 * 1024), 2)
+            
+            sessions.append({
+                "sessionId": session_id,
+                "crm": crm.capitalize(),
+                "object": obj.capitalize(),
+                "date": date_str,
+                "sizeMb": size_mb,
+                "timestamp": stats.st_mtime # Used for sorting
+            })
+            
+    # Sort by newest first and return top 10
+    sessions.sort(key=lambda x: x["timestamp"], reverse=True)
+    return {"sessions": sessions[:10]}

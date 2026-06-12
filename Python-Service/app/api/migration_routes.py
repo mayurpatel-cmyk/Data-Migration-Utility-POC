@@ -442,7 +442,7 @@ async def websocket_migration(websocket: WebSocket):
                 # Salesforce Upload Function
                 # ------------------------------------------
                 async def execute_sf_bulk(sf_payload, sf_op, pass_name="Standard"):
-                    nonlocal total_success, total_error
+                    nonlocal total_success, total_error, sf_token 
                     if not sf_payload: return
 
                     await send_log(f"[{target_object}] {pass_name}: Initializing {sf_op.upper()}...")
@@ -453,6 +453,15 @@ async def websocket_migration(websocket: WebSocket):
                     if sf_op == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
 
                     job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
+                    
+                    
+                    if job_res.status_code == 401:
+                        await send_log(f"[{target_object}] Session Expired. Silently refreshing Token...")
+                        sf_token = await CrmService.refresh_crm_token(user_id, target_crm, "target")
+                        sf_headers["X-SFDC-Session"] = sf_token
+                        job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
+                    
+
                     if job_res.status_code != 201:
                         await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
                         return

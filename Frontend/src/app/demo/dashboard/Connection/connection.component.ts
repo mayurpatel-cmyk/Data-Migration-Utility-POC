@@ -6,7 +6,7 @@ import { CardComponent } from 'src/app/theme/shared/components/card/card.compone
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
 import { CrmAuthService, CrmConnection } from 'src/app/services/CrmAuthService.service';
 import { ToastrService } from 'ngx-toastr';
-import { Subscription, switchMap, delay } from 'rxjs'; // 👈 Imported delay directly from rxjs
+import { Subscription, switchMap, delay } from 'rxjs';
 
 @Component({
   selector: 'app-connection',
@@ -51,7 +51,14 @@ export class ConnectionComponent implements OnInit, OnDestroy {
   targetZohoRegion: string = 'IN';
   targetSalesforceEnv: string = 'production';
 
+  // 🚨 NEW: Loading States
+  isPageLoading: boolean = true;
+  isSourceConnecting: boolean = false;
+  isTargetConnecting: boolean = false;
+
   ngOnInit() {
+    this.isPageLoading = true; // Start loading immediately
+
     this.authSubscription = this.route.queryParams.pipe(
       switchMap(params => {
         const status = params['status'];
@@ -71,28 +78,35 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     ).subscribe({
       next: (connections: CrmConnection[]) => {
         this.parseConnections(connections);
+        this.isPageLoading = false; // Turn off page loader
+        this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('Failed to load CRM connections', err);
         this.toastr.error('Could not load your saved connections.');
+        this.isPageLoading = false; // Turn off page loader even on error
+        this.cdr.detectChanges();
       }
     });
   }
 
-  // Fallback programmatic loader (used on direct UI form field manual resets)
   loadActiveConnections() {
+    this.isPageLoading = true;
     this.crmAuthService.getUserConnections().pipe(
       delay(0)
     ).subscribe({
       next: (connections: CrmConnection[]) => {
         this.parseConnections(connections);
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
       }
     });
   }
 
-  /**
-   * Unified parser logic to assign variables atomically
-   */
   private parseConnections(connections: CrmConnection[]) {
     let nextSourceConnected = false;
     let nextTargetConnected = false;
@@ -134,15 +148,18 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       }
     });
 
-    // Atomic execution assignment pass
     this.selectedSource = nextSelectedSource;
     this.selectedTarget = nextSelectedTarget;
     this.isSourceConnected = nextSourceConnected;
     this.isTargetConnected = nextTargetConnected;
     this.sourceInstanceUrl = nextSourceUrl;
     this.targetInstanceUrl = nextTargetUrl;
-    this.cdr.detectChanges();
 
+    // Turn off connecting spinners if they came back from OAuth
+    this.isSourceConnecting = false;
+    this.isTargetConnecting = false;
+
+    this.cdr.detectChanges();
   }
 
   getCrmConfig(crmId: string) {
@@ -168,10 +185,26 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // 🚨 NEW: Trigger the specific button spinner
+    if (side === 'source') {
+      this.isSourceConnecting = true;
+    } else {
+      this.isTargetConnecting = true;
+    }
+
     this.crmAuthService.connectCrm(selectedCrmId, side, subdomain, region, env);
+    
+    // Safety fallback: if redirect fails or gets blocked, reset loaders after 5s
+    setTimeout(() => {
+      this.isSourceConnecting = false;
+      this.isTargetConnecting = false;
+      this.cdr.detectChanges();
+    }, 5000);
   }
 
   disconnectCRM(side: 'source' | 'target') {
+    this.isPageLoading = true; // Show page loader while disconnecting
+    
     this.crmAuthService.disconnectCrm(side).subscribe({
       next: () => {
         this.toastr.success('Disconnected successfully.');
@@ -185,14 +218,18 @@ export class ConnectionComponent implements OnInit, OnDestroy {
           this.selectedTarget = '';
           this.targetInstanceUrl = '';
         }
-
+        
+        this.isPageLoading = false;
         this.cdr.detectChanges();
       },
       error: () => {
         this.toastr.error('Failed to disconnect. Please try again.');
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
       }
     });
   }
+
   goToMappingPage() {
     if (this.isSourceConnected && this.isTargetConnected) {
       this.router.navigate(['/api-mapping'], {
