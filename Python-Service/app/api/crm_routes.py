@@ -23,6 +23,10 @@ ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "").strip()
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "").strip()
 ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zoho/callback"
 
+ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
+ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
+ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zendesk/callback"
+
 ZOHO_REGIONS = {
     "us": "https://accounts.zoho.com",
     "in": "https://accounts.zoho.in",
@@ -36,18 +40,16 @@ ZOHO_REGIONS = {
 }
 
 # =========================================================
-# 1. SALESFORCE ROUTING (With Account Isolation & PKCE)
+# 1. SALESFORCE ROUTING
 # =========================================================
 @router.get("/auth/salesforce/login")
 def get_salesforce_url(side: str, environment: str = "production", current_user = Depends(get_current_user)):
     domain = "test.salesforce.com" if environment.lower() == "sandbox" else "login.salesforce.com"
     
-    # 1. Generate PKCE values securely
     code_verifier = secrets.token_urlsafe(64)
     sha256_hash = hashlib.sha256(code_verifier.encode('ascii')).digest()
     code_challenge = base64.urlsafe_b64encode(sha256_hash).decode('ascii').rstrip('=')
     
-    # 2. Pack verifier into Base64 state payload to prevent character truncation
     raw_state = f"{side}::{current_user.id}::{environment}::{code_verifier}"
     encoded_state = base64.urlsafe_b64encode(raw_state.encode()).decode()
     
@@ -60,13 +62,10 @@ def get_salesforce_url(side: str, environment: str = "production", current_user 
         "code_challenge": code_challenge,
         "code_challenge_method": "S256"
     }
-    query_string = urllib.parse.urlencode(params)
     
-    # FIX: Adding &prompt=login forces Salesforce to show the credentials box, 
-    # preventing your active browser session cookies from auto-selecting the source account.
-    auth_url = f"https://{domain}/services/oauth2/authorize?{query_string}&prompt=login"
+    # &prompt=login forces Salesforce account chooser
+    auth_url = f"https://{domain}/services/oauth2/authorize?{urllib.parse.urlencode(params)}&prompt=login"
     return {"url": auth_url}
-
 
 @router.get("/auth/salesforce/callback")
 async def salesforce_callback(code: str = None, state: str = None, error: str = None):
@@ -75,10 +74,9 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
 
     try:
         decoded_bytes = base64.urlsafe_b64decode(state.encode())
-        decoded_state = decoded_bytes.decode()
-        side, user_id, environment, code_verifier = decoded_state.split("::")
+        side, user_id, environment, code_verifier = decoded_bytes.decode().split("::")
     except Exception:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error&message=InvalidState")
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     domain = "test.salesforce.com" if environment == "sandbox" else "login.salesforce.com"
     token_url = f"https://{domain}/services/oauth2/token"
@@ -94,39 +92,26 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
 
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.post(token_url, data=payload)
-        
         if response.status_code != 200:
-            print(f"\n❌ OAUTH TOKEN ERROR: {response.text}\n")
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
             
         token_data = response.json()
-        access_token = token_data.get("access_token")
-        refresh_token = token_data.get("refresh_token", "")
-        instance_url = token_data.get("instance_url", "")
 
     try:
-        # FIX: Explicitly target BOTH user_id, crm_type, AND connection_role during the safety wipe
-        # This completely isolates the 'source' row from the 'target' row inside the database engine
-        supabase.table("crm_connections") \
-            .delete() \
-            .eq("user_id", user_id) \
-            .eq("crm_type", "salesforce") \
-            .eq("connection_role", side) \
-            .execute()
+        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
+        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        # Insert the fresh connection mapping row safely
+        # INSERT: Fresh Salesforce connection
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "salesforce",
             "connection_role": side,
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "instance_url": instance_url,
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "instance_url": token_data.get("instance_url", ""),
             "environment": environment
         }).execute()
-        
-    except Exception as database_error:
-        print(f"Supabase Same-Org Salesforce storage failure: {str(database_error)}")
+    except Exception:
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=salesforce")
@@ -145,13 +130,12 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
         "response_type": "code",
         "access_type": "offline",
         "redirect_uri": ZOHO_REDIRECT_URI,
-        "prompt": "consent",
+        "prompt": "consent", # Forces Zoho to ask the user which account to use
         "state": custom_state
     }
     
     auth_url = f"https://accounts.zoho.com/oauth/v2/auth?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
-
 
 @router.get("/auth/zoho/callback")
 async def zoho_callback(code: str, state: str, request: Request):
@@ -171,35 +155,33 @@ async def zoho_callback(code: str, state: str, request: Request):
             "client_secret": ZOHO_CLIENT_SECRET,
             "redirect_uri": ZOHO_REDIRECT_URI
         })
-        
         if response.status_code != 200:
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
             
         token_data = response.json()
-        access_token = token_data.get("access_token")
-        api_domain = token_data.get("api_domain", "https://www.zohoapis.com")
+
+    try:
+        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
+        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        try:
-            supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
-            supabase.table("crm_connections").insert({
-                "user_id": user_id,
-                "crm_type": "zoho",
-                "connection_role": side,
-                "access_token": access_token,
-                "refresh_token": token_data.get("refresh_token", ""),
-                "api_domain": api_domain,
-                "accounts_server": accounts_server,
-                "region": reg_key
-            }).execute()
-        except Exception as e:
-            print(f"Supabase error: {str(e)}")
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        # INSERT: Fresh Zoho connection
+        supabase.table("crm_connections").insert({
+            "user_id": user_id,
+            "crm_type": "zoho",
+            "connection_role": side,
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "api_domain": token_data.get("api_domain", "https://www.zohoapis.com"),
+            "accounts_server": accounts_server,
+            "region": reg_key
+        }).execute()
+    except Exception:
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zoho")
 
-
 # =========================================================
-# 3. ZENDESK ROUTING (Login & Callback)
+# 3. ZENDESK ROUTING
 # =========================================================
 @router.get("/auth/zendesk/login")
 def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_current_user)):
@@ -216,9 +198,9 @@ def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_curren
         "state": custom_state
     }
     
+    # Zendesk isolates accounts dynamically by the {subdomain} injected into this URL
     auth_url = f"https://{subdomain}.zendesk.com/oauth/authorizations/new?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
-
 
 @router.get("/auth/zendesk/callback")
 async def zendesk_callback(code: str, state: str):
@@ -236,28 +218,27 @@ async def zendesk_callback(code: str, state: str):
             "redirect_uri": ZD_REDIRECT_URI,
             "scope": "read write"
         })
-        
         if response.status_code != 200:
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
             
         token_data = response.json()
-        access_token = token_data.get("access_token")
 
-        try:
-            supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
-            supabase.table("crm_connections").insert({
-                "user_id": user_id,
-                "crm_type": "zendesk",
-                "connection_role": side,
-                "access_token": access_token,
-                "subdomain": subdomain
-            }).execute()
-        except Exception as e:
-            print(f"Supabase error: {str(e)}")
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+    try:
+        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
+        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
+        
+        # INSERT: Fresh Zendesk connection
+        supabase.table("crm_connections").insert({
+            "user_id": user_id,
+            "crm_type": "zendesk",
+            "connection_role": side,
+            "access_token": token_data.get("access_token"),
+            "subdomain": subdomain
+        }).execute()
+    except Exception:
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zendesk")
-
 
 # =========================================================
 # CORE CONNECTIONS MANAGEMENT
