@@ -1,11 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
 import { CrmAuthService, CrmConnection } from 'src/app/services/CrmAuthService.service';
 import { ToastrService } from 'ngx-toastr';
+import { Subscription, switchMap, delay } from 'rxjs'; // 👈 Imported delay directly from rxjs
 
 @Component({
   selector: 'app-connection',
@@ -14,11 +15,14 @@ import { ToastrService } from 'ngx-toastr';
   templateUrl: './connection.component.html',
   styleUrls: ['./connection.component.scss']
 })
-export class ConnectionComponent implements OnInit {
+export class ConnectionComponent implements OnInit, OnDestroy {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private crmAuthService = inject(CrmAuthService);
   private toastr = inject(ToastrService);
+  private cdr = inject(ChangeDetectorRef);
+
+  private authSubscription!: Subscription;
 
   availableCRMs = [
     { id: 'zendesk', name: 'Zendesk', icon: 'icon-headphones' },
@@ -37,75 +41,111 @@ export class ConnectionComponent implements OnInit {
   sourceInstanceUrl: string = '';
   targetInstanceUrl: string = '';
 
-  // Fully isolated variables for Source
+  // Source isolated states
   sourceZendeskSubdomain: string = '';
   sourceZohoRegion: string = 'IN';
   sourceSalesforceEnv: string = 'production';
 
-  // Fully isolated variables for Target
+  // Target isolated states
   targetZendeskSubdomain: string = '';
   targetZohoRegion: string = 'IN';
   targetSalesforceEnv: string = 'production';
 
   ngOnInit() {
-    this.route.queryParams.subscribe(params => {
-      const status = params['status'];
-      const side = params['side']; 
-      const crm = params['crm'];   
+    this.authSubscription = this.route.queryParams.pipe(
+      switchMap(params => {
+        const status = params['status'];
+        const crm = params['crm'];   
 
-      if (status === 'success') {
-        this.toastr.success(`${crm ? crm.toUpperCase() : 'CRM'} Connected Successfully!`);
-        
-        if (side === 'source' && crm) {
-          this.selectedSource = crm;
-          this.isSourceConnected = true;
-        } else if (side === 'target' && crm) {
-          this.selectedTarget = crm;
-          this.isTargetConnected = true;
+        if (status === 'success') {
+          this.toastr.success(`${crm ? crm.toUpperCase() : 'CRM'} Connected Successfully!`);
+          this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
+        } else if (status === 'error') {
+          this.toastr.error('Failed to connect to CRM. Please try again.');
+          this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
         }
 
-        this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
-      } else if (status === 'error') {
-        this.toastr.error('Failed to connect to CRM. Please try again.');
-        this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
-      }
-      
-      this.loadActiveConnections();
-    });
-  }
-
-  loadActiveConnections() {
-    this.crmAuthService.getUserConnections().subscribe({
+        return this.crmAuthService.getUserConnections();
+      }),
+      delay(0) // 👈 FIX: Pushes the pipeline output to the next JavaScript event loop tick
+    ).subscribe({
       next: (connections: CrmConnection[]) => {
-        this.isSourceConnected = false;
-        this.isTargetConnected = false;
-        this.sourceInstanceUrl = ''; 
-        this.targetInstanceUrl = ''; 
-
-        connections.forEach(conn => {
-          if (conn.connection_role === 'source') {
-            this.selectedSource = conn.crm_type;
-            this.isSourceConnected = true;
-            this.sourceInstanceUrl = conn.instance_url || ''; 
-            if (conn.crm_type === 'zendesk' && conn.subdomain) this.sourceZendeskSubdomain = conn.subdomain;
-            if (conn.crm_type === 'zoho' && conn.region) this.sourceZohoRegion = conn.region;
-            if (conn.crm_type === 'salesforce' && conn.environment) this.sourceSalesforceEnv = conn.environment;
-          } 
-          else if (conn.connection_role === 'target') {
-            this.selectedTarget = conn.crm_type;
-            this.isTargetConnected = true;
-            this.targetInstanceUrl = conn.instance_url || ''; 
-            if (conn.crm_type === 'zendesk' && conn.subdomain) this.targetZendeskSubdomain = conn.subdomain;
-            if (conn.crm_type === 'zoho' && conn.region) this.targetZohoRegion = conn.region;
-            if (conn.crm_type === 'salesforce' && conn.environment) this.targetSalesforceEnv = conn.environment;
-          }
-        });
+        this.parseConnections(connections);
       },
       error: (err) => {
         console.error('Failed to load CRM connections', err);
         this.toastr.error('Could not load your saved connections.');
       }
     });
+  }
+
+  // Fallback programmatic loader (used on direct UI form field manual resets)
+  loadActiveConnections() {
+    this.crmAuthService.getUserConnections().pipe(
+      delay(0) // 👈 FIX: Protects manual drop-down manipulation event changes from NG0100
+    ).subscribe({
+      next: (connections: CrmConnection[]) => {
+        this.parseConnections(connections);
+      }
+    });
+  }
+
+  /**
+   * Unified parser logic to assign variables atomically
+   */
+  private parseConnections(connections: CrmConnection[]) {
+    let nextSourceConnected = false;
+    let nextTargetConnected = false;
+    let nextSelectedSource = '';
+    let nextSelectedTarget = '';
+    let nextSourceUrl = '';
+    let nextTargetUrl = '';
+
+    connections.forEach(conn => {
+      if (conn.connection_role === 'source') {
+        nextSelectedSource = conn.crm_type;
+        nextSourceConnected = true;
+        
+        if (conn.crm_type === 'salesforce') {
+          nextSourceUrl = conn.instance_url || '';
+          if (conn.environment) this.sourceSalesforceEnv = conn.environment;
+        } else if (conn.crm_type === 'zoho') {
+          nextSourceUrl = conn.api_domain || '';
+          if (conn.region) this.sourceZohoRegion = conn.region;
+        } else if (conn.crm_type === 'zendesk') {
+          nextSourceUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
+          if (conn.subdomain) this.sourceZendeskSubdomain = conn.subdomain;
+        }
+      } 
+      else if (conn.connection_role === 'target') {
+        nextSelectedTarget = conn.crm_type;
+        nextTargetConnected = true;
+        
+        if (conn.crm_type === 'salesforce') {
+          nextTargetUrl = conn.instance_url || '';
+          if (conn.environment) this.targetSalesforceEnv = conn.environment;
+        } else if (conn.crm_type === 'zoho') {
+          nextTargetUrl = conn.api_domain || '';
+          if (conn.region) this.targetZohoRegion = conn.region;
+        } else if (conn.crm_type === 'zendesk') {
+          nextTargetUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
+          if (conn.subdomain) this.targetZendeskSubdomain = conn.subdomain;
+        }
+      }
+    });
+
+    // Atomic execution assignment pass
+    this.selectedSource = nextSelectedSource;
+    this.selectedTarget = nextSelectedTarget;
+    this.isSourceConnected = nextSourceConnected;
+    this.isTargetConnected = nextTargetConnected;
+    this.sourceInstanceUrl = nextSourceUrl;
+    this.targetInstanceUrl = nextTargetUrl;
+
+    // 🚨 FIX FOR NG0100: Tell Angular to safely update the DOM with these new values
+    this.cdr.detectChanges();
+
+    console.log('--- UI Consolidated Layout State Sync Completed ---');
   }
 
   getCrmConfig(crmId: string) {
@@ -122,7 +162,6 @@ export class ConnectionComponent implements OnInit {
 
   loginToCRM(side: 'source' | 'target') {
     const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
-
     const subdomain = side === 'source' ? this.sourceZendeskSubdomain : this.targetZendeskSubdomain;
     const region = side === 'source' ? this.sourceZohoRegion : this.targetZohoRegion;
     const env = side === 'source' ? this.sourceSalesforceEnv : this.targetSalesforceEnv;
@@ -139,30 +178,36 @@ export class ConnectionComponent implements OnInit {
     this.crmAuthService.disconnectCrm(side).subscribe({
       next: () => {
         this.toastr.success('Disconnected successfully.');
+        
         if (side === 'source') {
           this.isSourceConnected = false;
           this.selectedSource = '';
-          this.sourceZendeskSubdomain = '';
+          this.sourceInstanceUrl = '';
         } else {
           this.isTargetConnected = false;
           this.selectedTarget = '';
-          this.targetZendeskSubdomain = '';
+          this.targetInstanceUrl = '';
         }
+
+        // 🚨 FIX FOR NG0100: Safely force Angular to update the DOM after resetting values
+        this.cdr.detectChanges();
       },
       error: () => {
         this.toastr.error('Failed to disconnect. Please try again.');
       }
     });
   }
-
   goToMappingPage() {
     if (this.isSourceConnected && this.isTargetConnected) {
       this.router.navigate(['/api-mapping'], {
-        state: {
-          sourceCrm: this.selectedSource,
-          targetCrm: this.selectedTarget
-        }
+        state: { sourceCrm: this.selectedSource, targetCrm: this.selectedTarget }
       });
+    }
+  }
+
+  ngOnDestroy() {
+    if (this.authSubscription) {
+      this.authSubscription.unsubscribe();
     }
   }
 }

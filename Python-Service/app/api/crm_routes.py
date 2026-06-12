@@ -1,5 +1,7 @@
 import os
 import base64
+import hashlib
+import secrets
 import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -7,12 +9,6 @@ import httpx
 from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
 from app.utils.config import supabase
-import hashlib
-import secrets
-import base64
-import urllib.parse
-from fastapi import APIRouter, Depends
-from app.api.dependencies.auth import get_current_user
 
 router = APIRouter()
 
@@ -40,21 +36,18 @@ ZOHO_REGIONS = {
 }
 
 # =========================================================
-# 1. SALESFORCE ROUTING (Fixed Environment Column & Base64 State)
+# 1. SALESFORCE ROUTING (With Account Isolation & PKCE)
 # =========================================================
 @router.get("/auth/salesforce/login")
 def get_salesforce_url(side: str, environment: str = "production", current_user = Depends(get_current_user)):
     domain = "test.salesforce.com" if environment.lower() == "sandbox" else "login.salesforce.com"
     
-    # 1. Generate PKCE values
-    # code_verifier must be a high-entropy cryptographic string between 43 and 128 characters
+    # 1. Generate PKCE values securely
     code_verifier = secrets.token_urlsafe(64)
-    
-    # code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
     sha256_hash = hashlib.sha256(code_verifier.encode('ascii')).digest()
     code_challenge = base64.urlsafe_b64encode(sha256_hash).decode('ascii').rstrip('=')
     
-    # 2. Pack the raw code_verifier into the state so we can grab it on callback!
+    # 2. Pack verifier into Base64 state payload to prevent character truncation
     raw_state = f"{side}::{current_user.id}::{environment}::{code_verifier}"
     encoded_state = base64.urlsafe_b64encode(raw_state.encode()).decode()
     
@@ -62,14 +55,16 @@ def get_salesforce_url(side: str, environment: str = "production", current_user 
         "response_type": "code",
         "client_id": SF_CLIENT_ID,
         "redirect_uri": SF_REDIRECT_URI,
-        "prompt": "login consent",  
         "scope": "api refresh_token offline_access",
         "state": encoded_state,
-        "code_challenge": code_challenge,        # <-- ADD THIS
-        "code_challenge_method": "S256"          # <-- ADD THIS
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256"
     }
     query_string = urllib.parse.urlencode(params)
-    auth_url = f"https://{domain}/services/oauth2/authorize?{query_string}"
+    
+    # FIX: Adding &prompt=login forces Salesforce to show the credentials box, 
+    # preventing your active browser session cookies from auto-selecting the source account.
+    auth_url = f"https://{domain}/services/oauth2/authorize?{query_string}&prompt=login"
     return {"url": auth_url}
 
 
@@ -81,7 +76,6 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
     try:
         decoded_bytes = base64.urlsafe_b64decode(state.encode())
         decoded_state = decoded_bytes.decode()
-        # Unpack the 4 distinct elements now out of state
         side, user_id, environment, code_verifier = decoded_state.split("::")
     except Exception:
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error&message=InvalidState")
@@ -95,11 +89,12 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
         "client_id": SF_CLIENT_ID,
         "client_secret": SF_CLIENT_SECRET,
         "redirect_uri": SF_REDIRECT_URI,
-        "code_verifier": code_verifier # <-- ADD THIS to verify payload integrity!
+        "code_verifier": code_verifier
     }
 
     async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post(token_url, data=payload)        
+        response = await client.post(token_url, data=payload)
+        
         if response.status_code != 200:
             print(f"\n❌ OAUTH TOKEN ERROR: {response.text}\n")
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
@@ -110,10 +105,16 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
         instance_url = token_data.get("instance_url", "")
 
     try:
-        # Step A: Delete conflicting role row safely
-        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
+        # FIX: Explicitly target BOTH user_id, crm_type, AND connection_role during the safety wipe
+        # This completely isolates the 'source' row from the 'target' row inside the database engine
+        supabase.table("crm_connections") \
+            .delete() \
+            .eq("user_id", user_id) \
+            .eq("crm_type", "salesforce") \
+            .eq("connection_role", side) \
+            .execute()
         
-        # Step B: Insert the clear map (Now environment safely matches our added SQL column!)
+        # Insert the fresh connection mapping row safely
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "salesforce",
@@ -123,15 +124,15 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
             "instance_url": instance_url,
             "environment": environment
         }).execute()
+        
     except Exception as database_error:
-        print(f"Supabase Salesforce storage failure: {str(database_error)}")
+        print(f"Supabase Same-Org Salesforce storage failure: {str(database_error)}")
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=salesforce")
 
-
 # =========================================================
-# 2. ZOHO ROUTING (Aligned to Match Database Column Schema)
+# 2. ZOHO ROUTING 
 # =========================================================
 @router.get("/auth/zoho/login")
 def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_current_user)):
@@ -180,20 +181,18 @@ async def zoho_callback(code: str, state: str, request: Request):
         
         try:
             supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
-            
-            # FIX: Mapping elements to match your explicit schema columns exactly!
             supabase.table("crm_connections").insert({
                 "user_id": user_id,
                 "crm_type": "zoho",
                 "connection_role": side,
                 "access_token": access_token,
                 "refresh_token": token_data.get("refresh_token", ""),
-                "api_domain": api_domain,             # Matches DB Column
-                "accounts_server": accounts_server,   # Matches DB Column
-                "region": reg_key                    # Matches DB Column
+                "api_domain": api_domain,
+                "accounts_server": accounts_server,
+                "region": reg_key
             }).execute()
         except Exception as e:
-            print(f"Supabase Zoho Storage failure: {str(e)}")
+            print(f"Supabase error: {str(e)}")
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zoho")

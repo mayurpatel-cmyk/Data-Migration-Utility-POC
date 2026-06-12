@@ -32,11 +32,11 @@
    <div class="flex-grow-1">
         <label class="fw-bold mb-2"><i class="feather icon-download-cloud text-info"></i> Target CRM</label>
         <select class="form-select border-secondary" [(ngModel)]="selectedTarget" (change)="onCrmChange('target')">
-          <option value="" disabled selected>-- Select Target --</option>
-          @for (crm of availableCRMs; track crm.id) {
-            <option [value]="crm.id">{{ crm.name }}</option>
-          }
-        </select>
+  <option value="" disabled selected>-- Select Target --</option>
+  @for (crm of availableCRMs; track crm.id) {
+    <option [value]="crm.id">{{ crm.name }}</option>
+  }
+</select>
       </div>
     </div>
   </div>

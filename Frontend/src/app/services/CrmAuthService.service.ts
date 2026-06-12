@@ -3,11 +3,15 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 export interface CrmConnection {
+  id?: string;
+  user_id?: string;
   crm_type: string;
   connection_role: 'source' | 'target';
   subdomain?: string;
   region?: string;
   instance_url?: string;
+  api_domain?: string;         // Fixed: Safe optional descriptor instead of string | undefined
+  accounts_server?: string;
   environment?: string;
 }
 
