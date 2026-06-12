@@ -1,9 +1,6 @@
 import asyncio
 import sys
 
-# 🚨 CRITICAL WINDOWS FIX FOR [WinError 10035] 🚨
-# This forces Python on Windows to use a stable networking loop.
-# It MUST be at the very top of the file!
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

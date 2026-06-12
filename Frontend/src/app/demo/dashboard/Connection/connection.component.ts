@@ -67,7 +67,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
 
         return this.crmAuthService.getUserConnections();
       }),
-      delay(0) // 👈 FIX: Pushes the pipeline output to the next JavaScript event loop tick
+      delay(0)
     ).subscribe({
       next: (connections: CrmConnection[]) => {
         this.parseConnections(connections);
@@ -82,7 +82,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
   // Fallback programmatic loader (used on direct UI form field manual resets)
   loadActiveConnections() {
     this.crmAuthService.getUserConnections().pipe(
-      delay(0) // 👈 FIX: Protects manual drop-down manipulation event changes from NG0100
+      delay(0)
     ).subscribe({
       next: (connections: CrmConnection[]) => {
         this.parseConnections(connections);
@@ -141,11 +141,8 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     this.isTargetConnected = nextTargetConnected;
     this.sourceInstanceUrl = nextSourceUrl;
     this.targetInstanceUrl = nextTargetUrl;
-
-    // 🚨 FIX FOR NG0100: Tell Angular to safely update the DOM with these new values
     this.cdr.detectChanges();
 
-    console.log('--- UI Consolidated Layout State Sync Completed ---');
   }
 
   getCrmConfig(crmId: string) {
@@ -189,7 +186,6 @@ export class ConnectionComponent implements OnInit, OnDestroy {
           this.targetInstanceUrl = '';
         }
 
-        // 🚨 FIX FOR NG0100: Safely force Angular to update the DOM after resetting values
         this.cdr.detectChanges();
       },
       error: () => {

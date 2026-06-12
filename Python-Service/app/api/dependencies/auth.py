@@ -16,12 +16,11 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Security(securi
         user_response = supabase.auth.get_user(token)
         
         if not user_response or not user_response.user:
-            print("❌ Auth Failed: Supabase returned no user.")
+            
             raise HTTPException(status_code=401, detail="Invalid session.")
             
-        print(f"✅ User Authenticated: {user_response.user.id}\n")
         return user_response.user
         
     except Exception as e:
-        print(f"❌ Auth Exception from Supabase: {str(e)}\n")
+        
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")

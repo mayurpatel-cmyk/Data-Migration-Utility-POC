@@ -141,7 +141,6 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
 
-    // 2. 🚨 THE GUARDRAIL: If no CRM is selected, kick them back to the connection page!
     if (!this.sourceCrmId || !this.targetCrmId) {
       this.toastr.warning('Please connect your Source and Target systems first.', 'Connections Required');
       this.router.navigate(['/connection']); // Or whatever your route is named
@@ -786,7 +785,6 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          // 👇 YOU MUST ADD THIS SO FASTAPI KNOWS WHO THE USER IS 👇
           'Authorization': `Bearer ${localStorage.getItem('supabase_token') || ''}`
         },
         body: JSON.stringify(payload)
@@ -1302,7 +1300,6 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         safeQuery = ''; // Default to pulling all records if template unmodified
       }
     }
-    // ----------------------------------------------------
 
     if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);

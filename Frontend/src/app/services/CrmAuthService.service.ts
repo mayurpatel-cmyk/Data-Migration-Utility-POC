@@ -34,14 +34,6 @@ private getAuthHeaders(): HttpHeaders {
     // We now know exactly where your auth.service.ts puts the token!
     const token = localStorage.getItem('supabase_token') || '';
 
-    // 🚨 DEBUG PRINTS 🚨
-    console.log('--- ANGULAR TOKEN CHECK ---');
-    if (token) {
-      console.log(`✅ Token Found! Length: ${token.length}. First 15 chars: ${token.substring(0, 15)}...`);
-    } else {
-      console.error('❌ NO TOKEN FOUND IN LOCAL STORAGE! You are likely not logged in.');
-    }
-
     // Attach the exact token FastAPI is waiting for
     return new HttpHeaders().set('Authorization', `Bearer ${token}`);
   }

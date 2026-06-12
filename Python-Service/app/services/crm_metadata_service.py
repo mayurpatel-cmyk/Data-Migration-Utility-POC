@@ -294,7 +294,7 @@ class CrmMetadataService:
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
-        # 👇 UPGRADED TO v6 API 👇
+        
         url = f"{api_domain.rstrip('/')}/crm/v6/settings/modules"
 
         try:
@@ -328,7 +328,7 @@ class CrmMetadataService:
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
-        # 👇 UPGRADED TO v6 API 👇
+       
         base_url = f"{api_domain.rstrip('/')}/crm/v6"
 
         try:

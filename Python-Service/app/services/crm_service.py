@@ -37,7 +37,6 @@ class CrmService:
             .execute()
             
         if not response.data or len(response.data) == 0:
-            # 👇 CHANGED FROM 401 to 404 👇
             raise HTTPException(status_code=404, detail=f"No active database connection found for {crm_type} ({role}).")
             
         return response.data[0]
