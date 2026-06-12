@@ -175,12 +175,44 @@ async def websocket_migration(websocket: WebSocket):
         if not raw_queue:
             raw_queue = [payload] 
             
-        sf_token = payload.get("sfToken") or raw_queue[0].get("sfToken")
-        sf_instance = payload.get("sfInstance") or raw_queue[0].get("sfInstance")
-        zd_token = payload.get("zdToken") or raw_queue[0].get("zdToken")
-        zd_subdomain = payload.get("zdSubdomain") or raw_queue[0].get("zdSubdomain")
-        zoho_token = payload.get("zohoToken", "") or raw_queue[0].get("zohoToken")
-        zoho_api_domain = payload.get("zohoDomain", "") or raw_queue[0].get("zohoDomain")
+        # 1. Grab the Supabase Token from the Angular Payload
+        auth_token = payload.get("authToken") or raw_queue[0].get("authToken")
+        if not auth_token:
+            await websocket.send_json({"log": "FATAL: Unauthenticated. Missing Supabase Auth Token.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        # 2. Verify the user securely with Supabase
+        from app.utils.config import supabase
+        user_res = supabase.auth.get_user(auth_token)
+        if not user_res or not user_res.user:
+            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        user_id = user_res.user.id
+        source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() # Ensure Angular passes sourceCrmId in the job payload!
+        target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() # Ensure Angular passes targetCrmId in the job payload!
+        
+        # 3. Fetch Secure Credentials directly from the Database!
+        from app.services.crm_service import CrmService
+        try:
+            source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
+            target_creds = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
+        except Exception as e:
+            await websocket.send_json({"log": f"FATAL: Database credential lookup failed: {str(e)}", "status": "Failed"})
+            await websocket.close()
+            return
+
+        # 4. Map the DB variables to your existing variables
+        sf_token = target_creds.get("access_token")
+        sf_instance = target_creds.get("instance_url")
+        
+        zd_token = source_creds.get("access_token") if source_crm == "zendesk" else None
+        zd_subdomain = source_creds.get("subdomain") if source_crm == "zendesk" else None
+        
+        zoho_token = source_creds.get("access_token") if source_crm == "zoho" else None
+        zoho_api_domain = source_creds.get("api_domain") if source_crm == "zoho" else None
 
         if not sf_token or not sf_instance:
             await websocket.send_json({"log": "FATAL: Missing Target Salesforce Credentials.", "status": "Failed"})
@@ -621,7 +653,7 @@ async def websocket_validate_stream(websocket: WebSocket):
             return
         # --- END OF RE-VALIDATION LOGIC ---
 
-        # --- ORIGINAL LOGIC FOR FRESH RUNS ---
+       # --- ORIGINAL LOGIC FOR FRESH RUNS ---
         crm_id = payload.get("crmId", "").lower()
         obj_name = payload.get("objectName", "")
         query = payload.get("query", "").strip()
@@ -629,12 +661,40 @@ async def websocket_validate_stream(websocket: WebSocket):
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
         
-        sf_token = payload.get("sfToken", "")
-        sf_instance = payload.get("sfInstance", "")
-        zd_token = payload.get("zdToken", "")
-        zd_subdomain = payload.get("zdSubdomain", "")
-        zoho_token = payload.get("zohoToken", "")
-        zoho_api_domain = payload.get("zohoDomain", "")
+        # 1. Grab and Verify the Token
+        auth_token = payload.get("authToken")
+        if not auth_token:
+            await websocket.send_json({"log": "FATAL: Unauthenticated.", "status": "Validation Failed"})
+            await websocket.close()
+            return
+            
+        from app.utils.config import supabase
+        user_res = supabase.auth.get_user(auth_token)
+        if not user_res or not user_res.user:
+            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
+            await websocket.close()
+            return
+            
+        # 2. Fetch Secure Credentials
+        from app.services.crm_service import CrmService
+        try:
+            # For validation, we need both Source (to extract) and Target (for rules, though rules are passed in from UI here)
+            # Usually validation just connects to the Source CRM to pull data.
+            source_creds = CrmService.get_active_crm_credentials(user_res.user.id, crm_id, "source")
+        except Exception as e:
+            await websocket.send_json({"log": f"FATAL: Credential lookup failed: {str(e)}", "status": "Validation Failed"})
+            await websocket.close()
+            return
+
+        # 3. Map to existing variables
+        sf_token = source_creds.get("access_token") if crm_id == "salesforce" else None
+        sf_instance = source_creds.get("instance_url") if crm_id == "salesforce" else None
+        
+        zd_token = source_creds.get("access_token") if crm_id == "zendesk" else None
+        zd_subdomain = source_creds.get("subdomain") if crm_id == "zendesk" else None
+        
+        zoho_token = source_creds.get("access_token") if crm_id == "zoho" else None
+        zoho_api_domain = source_creds.get("api_domain") if crm_id == "zoho" else None
 
         # Generate Smart Session ID
         safe_obj = ''.join(e for e in obj_name if e.isalnum()).lower()

@@ -122,7 +122,15 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
 @router.get("/auth/zoho/login")
 def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_current_user)):
     custom_state = f"{side}::{current_user.id}::{region}"
-    scopes = ["ZohoCRM.modules.ALL", "ZohoCRM.bulk.READ", "ZohoCRM.settings.FIELDS.READ"]
+    
+    # 👇 ADDED 'ZohoCRM.settings.modules.READ' and 'ZohoCRM.settings.ALL' 👇
+    scopes = [
+        "ZohoCRM.modules.ALL", 
+        "ZohoCRM.bulk.READ", 
+        "ZohoCRM.settings.FIELDS.READ",
+        "ZohoCRM.settings.modules.READ",
+        "ZohoCRM.settings.ALL"
+    ]
     
     params = {
         "scope": ",".join(scopes),
@@ -130,13 +138,13 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
         "response_type": "code",
         "access_type": "offline",
         "redirect_uri": ZOHO_REDIRECT_URI,
-        "prompt": "consent", # Forces Zoho to ask the user which account to use
+        "prompt": "consent", 
         "state": custom_state
     }
     
     auth_url = f"https://accounts.zoho.com/oauth/v2/auth?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
-
+    
 @router.get("/auth/zoho/callback")
 async def zoho_callback(code: str, state: str, request: Request):
     try:

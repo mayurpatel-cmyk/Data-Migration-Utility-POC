@@ -1,34 +1,38 @@
-from fastapi import FastAPI
-from app.api.routes import router
-from fastapi.middleware.cors import CORSMiddleware
-# 1. Import your core routes
-from app.api.routes import router as core_router
-from app.api.routes import router as auth_router
+import asyncio
+import sys
 
-# 2. Import your NEW migration routes
+# 🚨 CRITICAL WINDOWS FIX FOR [WinError 10035] 🚨
+# This forces Python on Windows to use a stable networking loop.
+# It MUST be at the very top of the file!
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# Import your NEW modular routes
+from app.api.validation_routes import router as validation_router
 from app.api.migration_routes import router as migration_router
 from app.api.auth_routes import router as auth_router
 from app.api.crm_routes import router as crm_router
+from app.api.metadata_routes import router as metadata_router 
 
-app = FastAPI(title="Migartion Engine")
-
+app = FastAPI(title="Migration Engine")
 
 # =========================================================
 # CONFIGURE CORS MIDDLEWARE 
 # =========================================================
 app.add_middleware(
     CORSMiddleware,
-    # Allow requests coming from your Angular frontend
     allow_origins=["http://localhost:4200"], 
     allow_credentials=True,
-    # Allows GET, POST, PUT, and crucially, OPTIONS preflight requests
     allow_methods=["*"], 
-    # CRITICAL: This allows your custom metadata headers like sf-token, zd-token, etc.
     allow_headers=["*"], 
 )
 
 # Register our API routes
-app.include_router(core_router)
+app.include_router(metadata_router) 
 app.include_router(migration_router)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
+app.include_router(validation_router)

@@ -136,12 +136,24 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   
 
   ngOnInit(): void {
-    this.sourceSystem = localStorage.getItem('source_crm_slot') || 'Zendesk';
-    this.targetSystem = localStorage.getItem('target_crm_slot') || 'Salesforce';
-
+    // 1. Securely pull the intended CRMs
     const navState = history.state;
-    this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot') || 'msdynamics';
-    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+    this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
+    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
+
+    // 2. 🚨 THE GUARDRAIL: If no CRM is selected, kick them back to the connection page!
+    if (!this.sourceCrmId || !this.targetCrmId) {
+      this.toastr.warning('Please connect your Source and Target systems first.', 'Connections Required');
+      this.router.navigate(['/connection']); // Or whatever your route is named
+      return;
+    }
+
+    this.sourceSystem = this.sourceCrmId;
+    this.targetSystem = this.targetCrmId;
+    
+    // Save them so a page refresh doesn't break the app
+    localStorage.setItem('source_crm_slot', this.sourceCrmId);
+    localStorage.setItem('target_crm_slot', this.targetCrmId);
 
     this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
@@ -766,18 +778,17 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       query: safeQuery, 
       headers: this.previewHeaders,
       limit: this.previewLimit,
-      sfToken: localStorage.getItem('sf_token') || '',
-      sfInstance: localStorage.getItem('sf_instance_url') || '',
-      zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
-      zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      authToken: localStorage.getItem('supabase_token') || ''
     };
 
     try {
       const response = await fetch(`${environment.apiUrl}/api/metadata/preview-filter`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          // 👇 YOU MUST ADD THIS SO FASTAPI KNOWS WHO THE USER IS 👇
+          'Authorization': `Bearer ${localStorage.getItem('supabase_token') || ''}`
+        },
         body: JSON.stringify(payload)
       });
 
@@ -1005,8 +1016,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.cdr.detectChanges(); 
 
     forkJoin({
-      sourceObjs: this.mappingApi.getObjects(this.sourceCrmId),
-      targetObjs: this.mappingApi.getObjects(this.targetCrmId)
+      // Tell the backend EXACTLY which DB slot to look up
+      sourceObjs: this.mappingApi.getObjects(this.sourceCrmId, 'source'),
+      targetObjs: this.mappingApi.getObjects(this.targetCrmId, 'target')
     }).subscribe({
      next: ({ sourceObjs, targetObjs }) => {
         this.sourceEntities = sourceObjs || [];
@@ -1065,8 +1077,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.cdr.detectChanges(); 
 
     forkJoin({
-      sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject),
-      targetData: this.mappingApi.getFields(this.targetCrmId, this.selectedTargetObject)
+      // Tell the backend EXACTLY which DB slot to look up
+      sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject, 'source'),
+      targetData: this.mappingApi.getFields(this.targetCrmId, this.selectedTargetObject, 'target')
     }).subscribe({
       next: ({ sourceData, targetData }) => {
         this.targetFields = targetData.fields || [];
@@ -1307,12 +1320,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
       sfRules: sfRules,
-      sfToken: localStorage.getItem('sf_token') || '',
-      sfInstance: localStorage.getItem('sf_instance_url') || '',
-      zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
-      zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      authToken: localStorage.getItem('supabase_token') || ''
     };
     
     // Connect to the new streaming websocket
@@ -1626,12 +1634,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
       
-      sfToken: localStorage.getItem('sf_token') || '',
-      sfInstance: localStorage.getItem('sf_instance_url') || '',
-      zdToken: localStorage.getItem('zd_token') || '',
-      zdSubdomain: localStorage.getItem('zd_subdomain') || '',
-      zohoToken: localStorage.getItem('zoho_token') || '',
-      zohoDomain: localStorage.getItem('zoho_api_domain') || ''
+      authToken: localStorage.getItem('supabase_token') || ''
     };
 
     const payload = { queue: [job] };

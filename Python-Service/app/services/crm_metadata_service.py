@@ -284,7 +284,7 @@ class CrmMetadataService:
 
 
 
-    # =========================================================
+   # =========================================================
     # ZOHO CRM METADATA EXTRACTION ENGINE
     # =========================================================
     @staticmethod
@@ -293,8 +293,9 @@ class CrmMetadataService:
             raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        # Assuming api_domain is structured like "https://www.zohoapis.com"
-        url = f"{api_domain.rstrip('/')}/crm/v3/settings/modules"
+        
+        # 👇 UPGRADED TO v6 API 👇
+        url = f"{api_domain.rstrip('/')}/crm/v6/settings/modules"
 
         try:
             async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
@@ -302,11 +303,17 @@ class CrmMetadataService:
                 response.raise_for_status()
 
                 data = response.json()
-                objects = [
-                    {"name": mod["api_name"], "label": mod["module_name"]}
-                    for mod in data.get("modules", [])
-                    if mod.get("api_supported")
-                ]
+                objects = []
+                
+                for mod in data.get("modules", []):
+                    # Ensure we catch Custom Modules even if Zoho flags them weirdly
+                    if mod.get("api_supported", False) or mod.get("generated_type") == "custom":
+                        objects.append({
+                            "name": mod.get("api_name"),
+                            # Use plural_label for a cleaner UI display
+                            "label": mod.get("plural_label") or mod.get("module_name") or mod.get("api_name")
+                        })
+                        
                 return sorted(objects, key=lambda x: x["label"])
 
         except httpx.HTTPStatusError as e:
@@ -320,7 +327,9 @@ class CrmMetadataService:
             raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        base_url = f"{api_domain.rstrip('/')}/crm/v3"
+        
+        # 👇 UPGRADED TO v6 API 👇
+        base_url = f"{api_domain.rstrip('/')}/crm/v6"
 
         try:
             async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
