@@ -8,9 +8,6 @@ security = HTTPBearer()
 def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)):
     token = credentials.credentials
     
-    print("\n--- 🛡️ SECURITY CHECK ---")
-    print(f"Token Received (First 15 chars): {token[:15]}...")
-    
     try:
         # Ask Supabase to verify the token
         user_response = supabase.auth.get_user(token)

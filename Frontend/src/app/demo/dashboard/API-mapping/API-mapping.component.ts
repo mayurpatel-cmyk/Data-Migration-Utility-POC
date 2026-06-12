@@ -1151,28 +1151,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
   autoMap() {
     let matchCount = 0;
-    let skippedEmptyCount = 0; // Track how many fields were ignored because they were empty
 
     this.mappings.forEach((m) => {
-      if (m.targetField) return; // Skip if already mapped
-
-      // ==========================================
-      // EMPTY DATA CHECK
-      // ==========================================
-      // If we have preview data, ensure this source field actually contains at least one non-null value
-      if (this.previewRecords && this.previewRecords.length > 0) {
-        const hasData = this.previewRecords.some(record => {
-          const val = record[m.sourceField];
-          // Check if it's not null, not undefined, and not an empty string
-          return val !== null && val !== undefined && String(val).trim() !== '';
-        });
-
-        // If the column is entirely empty across all preview records, skip mapping it entirely
-        if (!hasData) {
-          skippedEmptyCount++;
-          return; 
-        }
-      }
+      if (m.targetField) return; 
 
       const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -1180,8 +1161,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
       
-      // Clean names (remove underscores, spaces, __c, etc. for fuzzy matching)
-      const srcApiClean = srcApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
+      
+      const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
       const srcType = (sourceMeta.type || 'string').toLowerCase();
 
@@ -1193,7 +1174,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         let score = 0;
         const tgtApiExact = t.name.toLowerCase();
         const tgtLabelExact = t.label.toLowerCase();
-        const tgtApiClean = tgtApiExact.replace(/[^a-z0-9]/g, '').replace('c', '');
+        
+        // Clean target names exactly the same way
+        const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
         const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
         const tgtType = (t.type || 'string').toLowerCase();
 
@@ -1201,7 +1184,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         const isExactTypeMatch = srcType === tgtType;
         const isForgivingTypeMatch = 
           (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-          (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType));
+          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
         
         const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
 
@@ -1210,27 +1193,28 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
           return; // Instantly disqualify if strict mode is on and types clash
         }
 
-        // THE SCORING ALGORITHM
+        
         if (tgtApiExact === srcApiExact) {
-          score += 100; // Perfect API Name Match
-        } else if (tgtLabelExact === srcLabelExact) {
-          score += 90;  // Perfect Label Match
+          score += 100; // Perfect API Match (Guarantees same-CRM mapping works flawlessly)
         } else if (tgtApiClean === srcApiClean) {
-          score += 80;  // Cleaned API Name Match
+          score += 90;  // Cleaned API Match (e.g., Matches Zoho's "First_Name" to Salesforce's "FirstName")
+        } else if (tgtLabelExact === srcLabelExact) {
+          score += 85;  // Perfect Label Match
         } else if (tgtLabelClean === srcLabelClean) {
-          score += 70;  // Cleaned Label Match
+          score += 75;  // Cleaned Label Match
         } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
-          score += 40;  // Fuzzy Substring Match
+          score += 40;  // Fuzzy Substring API Match
+        } else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) {
+          score += 30;  // Fuzzy Substring Label Match
         }
 
-        // DATA TYPE BONUS
-        if (score >= 40 && isExactTypeMatch) {
-           score += 25; 
-        } else if (score >= 40 && isForgivingTypeMatch) {
-           score += 10;
+        // DATA TYPE BONUS (Only apply if the name was a decent match)
+        if (score >= 30) {
+          if (isExactTypeMatch) score += 20; 
+          else if (isForgivingTypeMatch) score += 10;
         }
 
-        // TRACK THE WINNER
+        // TRACK THE WINNER (Must be 50 points or higher to qualify as a match)
         if (score > highestScore && score >= 50) { 
           highestScore = score;
           bestMatch = t;
@@ -1240,6 +1224,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       // Apply the best match found for this specific source field
       if (bestMatch) {
         m.targetField = bestMatch['name'];
+        
+        // Auto-assign External ID requirement for Reference fields
         if (this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
@@ -1249,13 +1235,13 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     this.updateMappedCount();
     
-    // UI Feedback Upgrade (Now includes the skipped count!)
+    // UI Feedback Upgrade
     if (matchCount > 0) {
-      this.toastr.success(`Intelligently matched ${matchCount} fields! (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Complete');
-      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} mapped, ${skippedEmptyCount} ignored due to empty data.`);
+      this.toastr.success(`Intelligently mapped ${matchCount} fields!`, 'Auto-Map Complete');
+      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} fields successfully matched.`);
     } else {
-      this.toastr.info(`No high-confidence matches found. (Skipped ${skippedEmptyCount} empty columns)`, 'Auto-Map Finished');
-      this.logMessages.unshift(`System: Auto-mapping ran, but no high-confidence data-type matches were found. ${skippedEmptyCount} columns were ignored.`);
+      this.toastr.info(`No high-confidence matches found.`, 'Auto-Map Finished');
+      this.logMessages.unshift(`System: Auto-mapping ran, but no matches were found.`);
     }
   }
 
