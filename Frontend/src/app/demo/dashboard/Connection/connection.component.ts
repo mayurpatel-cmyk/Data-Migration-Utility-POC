@@ -62,7 +62,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     this.authSubscription = this.route.queryParams.pipe(
       switchMap(params => {
         const status = params['status'];
-        const crm = params['crm'];   
+        const crm = params['crm'];
 
         if (status === 'success') {
           this.toastr.success(`${crm ? crm.toUpperCase() : 'CRM'} Connected Successfully!`);
@@ -119,7 +119,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       if (conn.connection_role === 'source') {
         nextSelectedSource = conn.crm_type;
         nextSourceConnected = true;
-        
+
         if (conn.crm_type === 'salesforce') {
           nextSourceUrl = conn.instance_url || '';
           if (conn.environment) this.sourceSalesforceEnv = conn.environment;
@@ -129,12 +129,14 @@ export class ConnectionComponent implements OnInit, OnDestroy {
         } else if (conn.crm_type === 'zendesk') {
           nextSourceUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
           if (conn.subdomain) this.sourceZendeskSubdomain = conn.subdomain;
+        }else if (conn.crm_type === 'hubspot') {
+          nextSourceUrl = conn.api_domain || '';
         }
-      } 
+      }
       else if (conn.connection_role === 'target') {
         nextSelectedTarget = conn.crm_type;
         nextTargetConnected = true;
-        
+
         if (conn.crm_type === 'salesforce') {
           nextTargetUrl = conn.instance_url || '';
           if (conn.environment) this.targetSalesforceEnv = conn.environment;
@@ -144,6 +146,8 @@ export class ConnectionComponent implements OnInit, OnDestroy {
         } else if (conn.crm_type === 'zendesk') {
           nextTargetUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
           if (conn.subdomain) this.targetZendeskSubdomain = conn.subdomain;
+        }else if (conn.crm_type === 'hubspot') {
+          nextTargetUrl = conn.api_domain || '';
         }
       }
     });
@@ -193,7 +197,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     }
 
     this.crmAuthService.connectCrm(selectedCrmId, side, subdomain, region, env);
-    
+
     // Safety fallback: if redirect fails or gets blocked, reset loaders after 5s
     setTimeout(() => {
       this.isSourceConnecting = false;
@@ -204,11 +208,11 @@ export class ConnectionComponent implements OnInit, OnDestroy {
 
   disconnectCRM(side: 'source' | 'target') {
     this.isPageLoading = true; // Show page loader while disconnecting
-    
+
     this.crmAuthService.disconnectCrm(side).subscribe({
       next: () => {
         this.toastr.success('Disconnected successfully.');
-        
+
         if (side === 'source') {
           this.isSourceConnected = false;
           this.selectedSource = '';
@@ -218,7 +222,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
           this.selectedTarget = '';
           this.targetInstanceUrl = '';
         }
-        
+
         this.isPageLoading = false;
         this.cdr.detectChanges();
       },

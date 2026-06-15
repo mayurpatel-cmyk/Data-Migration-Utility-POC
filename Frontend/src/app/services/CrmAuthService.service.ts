@@ -20,7 +20,7 @@ export interface CrmConnection {
 })
 export class CrmAuthService {
   private http = inject(HttpClient);
-  
+
   // Point to your FastAPI backend base URL
   private apiBaseUrl = 'http://localhost:8000/api/crm';
 
@@ -42,17 +42,17 @@ private getAuthHeaders(): HttpHeaders {
   // 1. FETCH ACTIVE CONNECTIONS FROM DATABASE
   // =========================================================
   getUserConnections(): Observable<CrmConnection[]> {
-    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`, { 
-      headers: this.getAuthHeaders() 
+    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`, {
+      headers: this.getAuthHeaders()
     });
   }
 
   // =========================================================
-  // 2. OAUTH LOGIN GENERATION & REDIRECT 
+  // 2. OAUTH LOGIN GENERATION & REDIRECT
   // =========================================================
   connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string, environment: string = 'production'): void {
     const safeCrmId = crmId.toLowerCase();
-    
+
     let requestUrl = `${this.apiBaseUrl}/auth/${safeCrmId}/login?side=${side}`;
 
     if (subdomain) {
@@ -63,6 +63,9 @@ private getAuthHeaders(): HttpHeaders {
     }
     if (safeCrmId === 'salesforce') {
       requestUrl += `&environment=${encodeURIComponent(environment)}`; // <-- ADD THIS
+    }
+    if(safeCrmId === 'hubspot') {
+      requestUrl += `&environment=${encodeURIComponent(environment)}`;
     }
 
     // Securely fetch the URL using the authorization headers
@@ -85,8 +88,8 @@ private getAuthHeaders(): HttpHeaders {
   // 3. DISCONNECT (Delete from Database)
   // =========================================================
   disconnectCrm(side: 'source' | 'target'): Observable<any> {
-    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`, { 
-      headers: this.getAuthHeaders() 
+    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`, {
+      headers: this.getAuthHeaders()
     });
   }
 }

@@ -13,7 +13,7 @@ export class MappingApiService {
   private baseUrl = environment.apiUrl ? `${environment.apiUrl}/api` : 'http://localhost:8000/api';
 
   /**
-   * SECURITY UPGRADE: We ONLY send the Supabase token now. 
+   * SECURITY UPGRADE: We ONLY send the Supabase token now.
    * The backend will safely look up the CRM tokens in the database.
    */
   private getAuthHeaders(): HttpHeaders {
@@ -29,7 +29,7 @@ export class MappingApiService {
    */
   getObjects(crmId: string, role: 'source' | 'target'): Observable<any[]> {
     const params = new HttpParams().set('role', role);
-    
+
     return this.http.get<any[]>(`${this.baseUrl}/metadata/${crmId.toLowerCase()}/objects`, {
       headers: this.getAuthHeaders(),
       params: params
@@ -42,7 +42,7 @@ export class MappingApiService {
    */
   getFields(crmId: string, objectName: string, role: 'source' | 'target'): Observable<any> {
     const params = new HttpParams().set('role', role);
-    
+
     return this.http.get<any>(`${this.baseUrl}/metadata/${crmId.toLowerCase()}/fields/${objectName}`, {
       headers: this.getAuthHeaders(),
       params: params
