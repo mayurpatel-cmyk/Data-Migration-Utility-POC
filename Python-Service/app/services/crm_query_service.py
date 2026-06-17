@@ -1,15 +1,15 @@
 import httpx
-import urllib.parse
 import re
 import json
 from fastapi import HTTPException
+import urllib.parse
 
 class CrmQueryService:
     
     @staticmethod
     async def execute_salesforce_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):
         sf_token = creds.get("access_token")
-        sf_instance = creds.get("instance_url", "").rstrip('/')
+        sf_instance = (creds.get("instance_url") or "").rstrip('/')
         
         if query.lower().startswith("select "):
             soql = query
@@ -92,7 +92,7 @@ class CrmQueryService:
     @staticmethod
     async def execute_zoho_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):
         zoho_token = creds.get("access_token")
-        domain = creds.get("api_domain", "https://www.zohoapis.com").rstrip('/')
+        domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"): domain = f"https://{domain}"
         
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}

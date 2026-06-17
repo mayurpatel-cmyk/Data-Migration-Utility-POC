@@ -1,8 +1,9 @@
 import os
 import base64
 import hashlib
-import secrets
+import urllib
 import urllib.parse
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 import httpx
@@ -123,7 +124,7 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
 def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_current_user)):
     custom_state = f"{side}::{current_user.id}::{region}"
     
-    # 👇 ADDED 'ZohoCRM.settings.modules.READ' and 'ZohoCRM.settings.ALL' 👇
+    
     scopes = [
         "ZohoCRM.modules.ALL", 
         "ZohoCRM.bulk.READ", 
@@ -144,7 +145,7 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
     
     auth_url = f"https://accounts.zoho.com/oauth/v2/auth?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
-    
+
 @router.get("/auth/zoho/callback")
 async def zoho_callback(code: str, state: str, request: Request):
     try:

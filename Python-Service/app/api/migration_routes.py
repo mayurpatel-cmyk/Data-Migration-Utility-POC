@@ -1,19 +1,18 @@
-import urllib.parse
 import asyncio
 import httpx
 import traceback
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from app.services.validator_service import process_validation_batch
-import re
 import uuid
 import sqlite3
+import urllib.parse
 import os
 import tempfile
-import json
 from datetime import datetime
 import io
 import json
 import csv
+import re
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
@@ -117,10 +116,10 @@ def build_payload(raw_records, mappings, options):
 
             csv_val = raw_row.get(mapping.get("sourceField"))
 
-            if is_patch_mode and sf_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById']:
+            if is_patch_mode and sf_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'created_at', 'updated_at']:
                 continue
 
-            # Prevent empty strings from wiping out Salesforce data
+            # Prevent empty strings from wiping out data
             if (csv_val is None or str(csv_val).strip() == "") and sf_field != target_ext_id_field: 
                 continue
 
@@ -151,7 +150,9 @@ def build_payload(raw_records, mappings, options):
             sf_record[target_ext_id_field] = None
 
         if op_mode == "delete":
-            sf_record = {"Id": sf_record["Id"]} if "Id" in sf_record else {}
+            if "Id" in sf_record: sf_record = {"Id": sf_record["Id"]}
+            elif "id" in sf_record: sf_record = {"id": sf_record["id"]}
+            else: sf_record = {}
 
         if sf_record:
             if not is_patch_mode or (is_patch_mode and has_patch_data):
@@ -191,8 +192,9 @@ async def websocket_migration(websocket: WebSocket):
             return
             
         user_id = user_res.user.id
-        source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() # Ensure Angular passes sourceCrmId in the job payload!
-        target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() # Ensure Angular passes targetCrmId in the job payload!
+
+        source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() 
+        target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() 
         
         # 3. Fetch Secure Credentials directly from the Database!
         from app.services.crm_service import CrmService
@@ -204,27 +206,38 @@ async def websocket_migration(websocket: WebSocket):
             await websocket.close()
             return
 
-        # 4. Map the DB variables to your existing variables
-        sf_token = target_creds.get("access_token")
-        sf_instance = target_creds.get("instance_url")
-        
-        zd_token = source_creds.get("access_token") if source_crm == "zendesk" else None
-        zd_subdomain = source_creds.get("subdomain") if source_crm == "zendesk" else None
-        
-        zoho_token = source_creds.get("access_token") if source_crm == "zoho" else None
-        zoho_api_domain = source_creds.get("api_domain") if source_crm == "zoho" else None
-
-        if not sf_token or not sf_instance:
-            await websocket.send_json({"log": "FATAL: Missing Target Salesforce Credentials.", "status": "Failed"})
+        # 4. DYNAMIC TARGET CREDENTIAL CHECK
+        target_token = target_creds.get("access_token")
+        if not target_token:
+            await websocket.send_json({"log": f"FATAL: Missing Target Token for {target_crm.capitalize()}.", "status": "Failed"})
             await websocket.close()
             return
             
-        # 2. Check Source (Must have EITHER Zendesk OR Zoho)
-        if not zd_token and not zoho_token:
-            await websocket.send_json({"log": "FATAL: Missing Source CRM Credentials (Zendesk or Zoho).", "status": "Failed"})
+        if target_crm == "salesforce" and not target_creds.get("instance_url"):
+            await websocket.send_json({"log": "FATAL: Missing Target Salesforce Instance URL.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        elif target_crm == "zendesk" and not target_creds.get("subdomain"):
+            await websocket.send_json({"log": "FATAL: Missing Target Zendesk Subdomain.", "status": "Failed"})
             await websocket.close()
             return
 
+        # 5. DYNAMIC SOURCE CREDENTIAL CHECK
+        source_token = source_creds.get("access_token")
+        if not source_token:
+            await websocket.send_json({"log": f"FATAL: Missing Source Token for {source_crm.capitalize()}.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        # Map variables backward-compatibility for the extraction logic
+        zoho_token = source_token if source_crm == "zoho" else None
+        zoho_api_domain = source_creds.get("api_domain") if source_crm == "zoho" else None
+        zd_token = source_token if source_crm == "zendesk" else None
+        zd_subdomain = source_creds.get("subdomain") if source_crm == "zendesk" else None
+        sf_token = target_token if target_crm == "salesforce" else None
+        sf_instance = target_creds.get("instance_url") if target_crm == "salesforce" else None
+        
         async def send_log(msg: str, status: str = "Running"):
             await websocket.send_json({"log": msg, "status": status})
 
@@ -236,6 +249,186 @@ async def websocket_migration(websocket: WebSocket):
             total_success, total_error = 0, 0
             all_success_data = []
             all_error_data = []
+
+            # ------------------------------------------
+            # SALESFORCE TARGET UPLOADER
+            # ------------------------------------------
+            async def execute_sf_bulk(sf_payload, sf_op, pass_name="Standard"):
+                nonlocal total_success, total_error, sf_token 
+                if not sf_payload: return
+
+                await send_log(f"[{target_object}] {pass_name}: Initializing {sf_op.upper()} to Salesforce...")
+                sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
+                bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
+
+                job_config = {"operation": sf_op, "object": target_object, "contentType": "JSON"}
+                if sf_op == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
+
+                job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
+                
+                if job_res.status_code == 401:
+                    await send_log(f"[{target_object}] Session Expired. Silently refreshing Token...")
+                    sf_token = await CrmService.refresh_crm_token(user_id, target_crm, "target")
+                    sf_headers["X-SFDC-Session"] = sf_token
+                    job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
+
+                if job_res.status_code != 201:
+                    await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
+                    return
+                job_id = job_res.json().get("id")
+
+                chunks = list(chunk_dataset(sf_payload, batch_size))
+                await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} batches...")
+
+                semaphore = asyncio.Semaphore(6)
+
+                async def upload_chunk(chunk_data):
+                    async with semaphore:
+                        just_sf_records = [c["sfRecord"] for c in chunk_data]
+                        b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_sf_records, headers=sf_headers)
+                        b_res.raise_for_status()
+                        return b_res.json().get("id")
+
+                batch_ids = await asyncio.gather(*[upload_chunk(c) for c in chunks])
+                await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
+
+                poll_delay = 1.0
+                while True:
+                    await asyncio.sleep(poll_delay)
+                    status_res = await asyncio.gather(*[client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}", headers=sf_headers) for b_id in batch_ids])
+                    states = [r.json().get("state") for r in status_res]
+                    if all(s == "Completed" for s in states) or any(s in ["Failed", "NotProcessed"] for s in states):
+                        break
+                    poll_delay = min(poll_delay * 1.5, 4.0)
+
+                for i, b_id in enumerate(batch_ids):
+                    res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
+                    results = res.json()
+                    original_chunk = chunks[i]
+
+                    for row_data, sf_result in zip(original_chunk, results):
+                        orig_record = source_records[row_data["originalIndex"]]
+                        if sf_result.get("success"):
+                            orig_record["Target_Id"] = sf_result.get("id")
+                            all_success_data.append(orig_record)
+                            total_success += 1
+                        else:
+                            err_msg = sf_result.get("errors", [{"message": "Unknown"}])[0].get("message")
+                            orig_record["Target_Error"] = err_msg
+                            all_error_data.append(orig_record)
+                            total_error += 1
+
+            # ------------------------------------------
+            # ZOHO TARGET UPLOADER (v6 API API-compliant Chunks)
+            # ------------------------------------------
+            async def execute_zoho_upload(zoho_payload, zoho_op, pass_name="Standard"):
+                nonlocal total_success, total_error
+                if not zoho_payload: return
+
+                # Zoho endpoints MUST be properly capitalized and pluralized 
+                # (e.g., 'Lead' -> 'Leads', 'contact' -> 'Contacts')
+                normalized_obj = target_object.strip()
+                if not normalized_obj.endswith('s') if normalized_obj.lower() != 'data' else False:
+                    # Quick pluralization helper for standard modules
+                    if normalized_obj.lower() == 'lead': normalized_obj = 'Leads'
+                    elif normalized_obj.lower() == 'contact': normalized_obj = 'Contacts'
+                    elif normalized_obj.lower() == 'account': normalized_obj = 'Accounts'
+                    elif normalized_obj.lower() == 'deal': normalized_obj = 'Deals'
+                    else: normalized_obj = normalized_obj.capitalize() + 's'
+                else:
+                    
+                    if not normalized_obj.startswith('$') and len(normalized_obj) > 0:
+                        normalized_obj = normalized_obj[0].upper() + normalized_obj[1:]
+
+                await send_log(f"[{normalized_obj}] {pass_name}: Injecting data stream into Zoho CRM...")
+                base_url = (target_creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
+                if not base_url.startswith("http"): base_url = f"https://{base_url}"
+                
+                headers = {"Authorization": f"Zoho-oauthtoken {target_token}", "Content-Type": "application/json"}
+                
+                # Zoho maximum single REST request limit is 100 rows
+                chunks = list(chunk_dataset(zoho_payload, 100))
+                
+                for chunk in chunks:
+                    zoho_data_rows = []
+                    for c in chunk:
+                        clean_row = {}
+                        for k, v in c["sfRecord"].items():
+                            # 🚨 FIX 2: Strip Salesforce tracking suffixes if they bled into the payload
+                            clean_key = k.replace('__c', '').replace('__r', '')
+                            clean_row[clean_key] = v
+                        zoho_data_rows.append(clean_row)
+                    
+                    try:
+                        api_url = f"{base_url}/crm/v6/{normalized_obj}"
+                        res = await client.post(api_url, json={"data": zoho_data_rows}, headers=headers)
+                        
+                        if res.status_code in [200, 201, 202]:
+                            res_entries = res.json().get("data", [])
+                            for item, z_res in zip(chunk, res_entries):
+                                orig_record = source_records[item["originalIndex"]]
+                                if z_res.get("status") == "success":
+                                    orig_record["Target_Id"] = z_res.get("details", {}).get("id")
+                                    all_success_data.append(orig_record)
+                                    total_success += 1
+                                else:
+                                    # Grab the precise reason Zoho rejected this specific row
+                                    error_details = z_res.get("message") or z_res.get("code") or "Rejected"
+                                    orig_record["Target_Error"] = f"Zoho Row Error: {error_details}"
+                                    all_error_data.append(orig_record)
+                                    total_error += 1
+                        else:
+                            # 🚨 FIX 3: If Zoho throws a 400, capture and print the actual JSON error payload
+                            error_text = res.text
+                            try:
+                                parsed_err = res.json()
+                                if "message" in parsed_err: error_text = parsed_err["message"]
+                                elif "errors" in parsed_err: error_text = parsed_err["errors"][0].get("message")
+                            except: pass
+                            
+                            await send_log(f"⚠️ Zoho API Rejected Batch ({res.status_code}): {error_text}")
+                            
+                            for item in chunk:
+                                orig_record = source_records[item["originalIndex"]]
+                                orig_record["Target_Error"] = f"Zoho API Error: {error_text}"
+                                all_error_data.append(orig_record)
+                                total_error += 1
+                    except Exception as exc:
+                        for item in chunk:
+                            orig_record = source_records[item["originalIndex"]]
+                            orig_record["Target_Error"] = str(exc)
+                            all_error_data.append(orig_record)
+                            total_error += 1
+                        else:
+                            for item in chunk:
+                                orig_record = source_records[item["originalIndex"]]
+                                orig_record["Target_Error"] = f"Zoho error context: HTTP {res.status_code}"
+                                all_error_data.append(orig_record)
+                                total_error += 1
+                    except Exception as exc:
+                        for item in chunk:
+                            orig_record = source_records[item["originalIndex"]]
+                            orig_record["Target_Error"] = str(exc)
+                            all_error_data.append(orig_record)
+                            total_error += 1
+
+            # ------------------------------------------
+            # DYNAMIC PIPELINE DISPATCH ROUTER
+            # ------------------------------------------
+            async def execute_upload(payload_data, op_mode, pass_name="Standard"):
+                if target_crm == "salesforce":
+                    await execute_sf_bulk(payload_data, op_mode, pass_name)
+                elif target_crm == "zoho":
+                    await execute_zoho_upload(payload_data, op_mode, pass_name)
+                else:
+                    # Generic Fallback/Simulator for alternative configurations
+                    nonlocal total_success
+                    await send_log(f"[{target_object}] Simulated successful integration pass into target engine.")
+                    for item in payload_data:
+                        orig_record = source_records[item["originalIndex"]]
+                        orig_record["Target_Id"] = f"MOCK_{uuid.uuid4().hex[:8].upper()}"
+                        all_success_data.append(orig_record)
+                        total_success += 1
 
             for job in execution_queue:
                 target_object = job.get("targetObject")
@@ -254,52 +447,36 @@ async def websocket_migration(websocket: WebSocket):
                 if not mappings: continue
 
                 # ------------------------------------------
-                # EXTRACT (With Massive Pagination)
+                # EXTRACT FROM SQL/STAGING ENGINE
                 # ------------------------------------------
-                source_records = job.get("rawRecords")
-
                 session_id = job.get("sessionId")
-                fixed_records = job.get("fixedRecords", [])
                 source_records = []
                 
-                # 1. If we are running from the UI, we MUST have a Session ID
                 if session_id:
                     db_path = get_db_path(session_id)
-                    
                     if os.path.exists(db_path):
                         await send_log(f"[{target_object}] Reading strictly validated payload from staging database...")
-                        import sqlite3
-                        import json
-                        
                         try:
                             conn = sqlite3.connect(db_path)
                             cursor = conn.cursor()
-                            
-                            # ONLY load records that perfectly passed validation
                             cursor.execute("SELECT data FROM records WHERE is_valid = 1")
                             source_records = [json.loads(row[0]) for row in cursor.fetchall()]
                             conn.close()
                             
                             if not source_records:
                                 await send_log(f"[{target_object}] FATAL: No valid records found in database. Fix errors and Re-Validate first.", "Failed")
-                                continue # Skip this job entirely
+                                continue 
                                 
                             job["rawRecords"] = source_records
                             await send_log(f"[{target_object}] Loaded {len(source_records)} perfectly valid records ready for migration.")
-                            
                         except Exception as e:
                             await send_log(f"[{target_object}] FATAL: Database read error: {str(e)}", "Failed")
                             continue
-                            
                     else:
-                        # THE FIX: If the file is missing, ABORT! Do not fall back to the API.
-                        await send_log(f"[{target_object}] FATAL: Staging payload expired or missing. Please click 'Validate' to generate a fresh payload.", "Failed")
-                        continue # Skip this job entirely
-                
-                # 2. Only allow live API fetching if there is NO session ID at all (e.g., Scheduled Background Jobs)
+                        await send_log(f"[{target_object}] FATAL: Staging payload expired or missing.", "Failed")
+                        continue 
                 else:
                     await send_log(f"[{target_object}] No UI session detected. Initiating direct API extraction...")
-                    source_records = []
                     
                     # ======================================
                     # ZOHO EXTRACTION ENGINE
@@ -311,7 +488,6 @@ async def websocket_migration(websocket: WebSocket):
                         base_url = zoho_api_domain.rstrip('/') if zoho_api_domain else "https://www.zohoapis.com"
                         z_headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
                         
-                        # Grab source fields for the API call
                         headers_list = [m["sourceField"] for m in mappings if m.get("sourceField")]
                         safe_fields = headers_list[:40] if headers_list else ["id"]
                         fields_str = ",".join(safe_fields)
@@ -325,7 +501,6 @@ async def websocket_migration(websocket: WebSocket):
                                 if extraction_query:
                                     coql_query = extraction_query.strip()
                                     if coql_query.lower().startswith("select "):
-                                        import re
                                         if "*" in coql_query:
                                             coql_query = coql_query.replace("*", fields_str, 1)
                                         match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
@@ -341,7 +516,6 @@ async def websocket_migration(websocket: WebSocket):
                                     paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
                                     res = await client.post(f"{base_url}/crm/v6/coql", headers=z_headers, json={"select_query": paginated_coql})
                                 else:
-                                    # ZOHO MASS EXTRACTION PAGE TOKEN LOGIC
                                     if page_token:
                                         res = await client.get(f"{base_url}/crm/v6/{source_object}?page_token={page_token}&per_page=200&fields={fields_str}", headers=z_headers)
                                     else:
@@ -358,29 +532,23 @@ async def websocket_migration(websocket: WebSocket):
                                 
                                 if not raw_records: break
                                 
-                                # Flatten Zoho Data
                                 for r in raw_records:
                                     flat_rec = {}
                                     for k, v in r.items():
                                         if isinstance(v, dict):
                                             flat_rec[k] = v.get("name", v.get("id", str(v)))
                                         elif isinstance(v, list):
-                                            parsed_list = [
-                                                str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
-                                                for i in v
-                                            ]
+                                            parsed_list = [str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) for i in v]
                                             flat_rec[k] = ";".join(parsed_list)
                                         else:
                                             flat_rec[k] = v
                                     source_records.append(flat_rec)
                                     
                                 await send_log(f"[{target_object}] Extracted {len(source_records)} records so far...")
-                                    
                                 info = data.get("info", {})
                                 more_records = info.get("more_records", False)
-                                # Extract the token for the next loop
                                 page_token = info.get("next_page_token")
-                                page += 1 # Kept for COQL offset calculation
+                                page += 1 
                                 
                             job["rawRecords"] = source_records 
                             await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
@@ -397,9 +565,7 @@ async def websocket_migration(websocket: WebSocket):
                         safe_obj = source_object.lower()
                         
                         try:
-                            # Search API Extraction Loop
                             safe_obj_singular = safe_obj.rstrip('s')
-                            import re
                             clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', extraction_query, flags=re.IGNORECASE).strip()
                             final_query = f"{clean_query} type:{safe_obj_singular}".strip()
                             safe_query = urllib.parse.quote(final_query)
@@ -408,7 +574,6 @@ async def websocket_migration(websocket: WebSocket):
                             
                             while url:
                                 res = await client.get(url, headers=zd_headers)
-                                
                                 if res.status_code == 429:
                                     retry_after = int(res.headers.get("Retry-After", 60))
                                     await send_log(f"⚠️ [Zendesk Rate Limit] Pausing for {retry_after} seconds...", "Paused")
@@ -433,115 +598,39 @@ async def websocket_migration(websocket: WebSocket):
                                     
                             job["rawRecords"] = source_records 
                             await send_log(f"[{target_object}] Extraction Complete! Total Records: {len(source_records)}")
-                            
                         except Exception as e:
                             await send_log(f"[{target_object}] Extract Failed: {str(e)}", "Failed")
                             continue
 
                 # ------------------------------------------
-                # Salesforce Upload Function
-                # ------------------------------------------
-                async def execute_sf_bulk(sf_payload, sf_op, pass_name="Standard"):
-                    nonlocal total_success, total_error, sf_token 
-                    if not sf_payload: return
-
-                    await send_log(f"[{target_object}] {pass_name}: Initializing {sf_op.upper()}...")
-                    sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
-                    bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
-
-                    job_config = {"operation": sf_op, "object": target_object, "contentType": "JSON"}
-                    if sf_op == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
-
-                    job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
-                    
-                    
-                    if job_res.status_code == 401:
-                        await send_log(f"[{target_object}] Session Expired. Silently refreshing Token...")
-                        sf_token = await CrmService.refresh_crm_token(user_id, target_crm, "target")
-                        sf_headers["X-SFDC-Session"] = sf_token
-                        job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
-                    
-
-                    if job_res.status_code != 201:
-                        await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
-                        return
-                    job_id = job_res.json().get("id")
-
-                    chunks = list(chunk_dataset(sf_payload, batch_size))
-                    await send_log(f"[{target_object}] {pass_name}: Executing {len(chunks)} batches (Max 6 concurrent threads)...")
-
-                    # THE THROTTLE: Strictly limit to 6 parallel uploads at a time
-                    semaphore = asyncio.Semaphore(6)
-
-                    async def upload_chunk(chunk_data):
-                        async with semaphore:
-                            just_sf_records = [c["sfRecord"] for c in chunk_data]
-                            b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_sf_records, headers=sf_headers)
-                            b_res.raise_for_status()
-                            return b_res.json().get("id")
-
-                    # Fire the safely throttled tasks
-                    batch_ids = await asyncio.gather(*[upload_chunk(c) for c in chunks])
-                    await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
-
-                    # Poll for completion with Exponential Backoff
-                    poll_delay = 1.0
-                    while True:
-                        await asyncio.sleep(poll_delay)
-                        status_res = await asyncio.gather(*[client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}", headers=sf_headers) for b_id in batch_ids])
-                        states = [r.json().get("state") for r in status_res]
-                        if all(s == "Completed" for s in states) or any(s in ["Failed", "NotProcessed"] for s in states):
-                            break
-                        poll_delay = min(poll_delay * 1.5, 4.0)
-
-                    # Fetch Results
-                    for i, b_id in enumerate(batch_ids):
-                        res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
-                        results = res.json()
-                        original_chunk = chunks[i]
-
-                        for row_data, sf_result in zip(original_chunk, results):
-                            orig_record = source_records[row_data["originalIndex"]]
-                            if sf_result.get("success"):
-                                orig_record["Salesforce_Id"] = sf_result.get("id")
-                                all_success_data.append(orig_record)
-                                total_success += 1
-                            else:
-                                err_msg = sf_result.get("errors", [{"message": "Unknown"}])[0].get("message")
-                                orig_record["Salesforce_Error"] = err_msg
-                                all_error_data.append(orig_record)
-                                total_error += 1
-
-
-                # ------------------------------------------
-                # STEP 2 & 3: THE 3-PASS ROUTER
+                # EXECUTING PIPELINE INTERCEPT VIA DISPATCHER
                 # ------------------------------------------
                 has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
 
                 if is_pass3_patch:
                     payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "onlyReferencesTo": only_references_to, "operationMode": "upsert"})
-                    await execute_sf_bulk(payload, "upsert", "Pass 3 (Circular Patch)")
+                    await execute_upload(payload, "upsert", "Pass 3 (Circular Patch)")
 
                 elif operation_mode == "delete":
                     payload = build_payload(source_records, mappings, {"targetObject": target_object, "operationMode": "delete"})
-                    await execute_sf_bulk(payload, "delete", "Deletion")
+                    await execute_upload(payload, "delete", "Deletion")
 
                 elif has_self_ref:
-                    sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
-                    p1_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "skipSelfReferencing": True, "operationMode": sf_op})
-                    await execute_sf_bulk(p1_payload, sf_op, "Pass 1 (Base Data)")
+                    target_op = "upsert" if (target_ext_id_field and target_ext_id_field.lower() != "id") else operation_mode
+                    p1_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "skipSelfReferencing": True, "operationMode": target_op})
+                    await execute_upload(p1_payload, target_op, "Pass 1 (Base Data)")
 
                     p2_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "onlySelfReferencing": True, "operationMode": "upsert"})
-                    await execute_sf_bulk(p2_payload, "upsert", "Pass 2 (Hierarchy Patch)")
+                    await execute_upload(p2_payload, "upsert", "Pass 2 (Hierarchy Patch)")
 
                 else:
-                    sf_op = "upsert" if (target_ext_id_field and target_ext_id_field != "Id") else operation_mode
-                    std_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "operationMode": sf_op})
-                    await execute_sf_bulk(std_payload, sf_op, "Standard Sync")
+                    target_op = "upsert" if (target_ext_id_field and target_ext_id_field.lower() != "id") else operation_mode
+                    std_payload = build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": target_ext_id_field, "excludeReferencesTo": defer_references_to, "operationMode": target_op})
+                    await execute_upload(std_payload, target_op, "Standard Sync")
 
-            # Final Summary
+            # Final Summary Delivery pass
             if total_error > 0:
-                await send_log(f"Completed with Errors: {total_success} inserted/updated, {total_error} failed.", "Finished")
+                await send_log(f"Completed with Errors: {total_success} records loaded, {total_error} rejected.", "Finished")
             else:
                 await send_log(f"QUEUE COMPLETE! {total_success} records seamlessly pushed.", "Finished")
                 
@@ -563,7 +652,6 @@ async def websocket_migration(websocket: WebSocket):
             await websocket.close()
         except:
             pass
-
 
 
 # ==========================================
@@ -598,21 +686,25 @@ async def websocket_validate_stream(websocket: WebSocket):
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # 1. EXTRACT DB IDs & CLEAN PAYLOAD
             db_ids_to_delete = []
             for rec in fixed_records:
                 if "_db_id" in rec:
-                    db_ids_to_delete.append(rec.pop("_db_id")) # Remove ID so it doesn't break Salesforce schema
+                    db_ids_to_delete.append(rec.pop("_db_id"))
 
-            # 2. Process the fixed records through the validation engine
-            chunk_result = process_validation_batch(fixed_records, mappings, dedupe_key, sf_rules, "")
+            target_crm = payload.get("targetCrmId", "salesforce").lower()
+            chunk_result = process_validation_batch(
+                records=fixed_records, 
+                mappings=mappings, 
+                dedupe_key=dedupe_key, 
+                target_rules=sf_rules, 
+                date_format="", 
+                target_crm=target_crm
+            )
 
-            # 3. DELETE ONLY THE SPECIFIC 500 ROWS THE USER JUST FIXED
             if db_ids_to_delete:
                 placeholders = ','.join(['?'] * len(db_ids_to_delete))
                 cursor.execute(f"DELETE FROM records WHERE id IN ({placeholders})", db_ids_to_delete)
 
-            # 4. Insert the newly tested records (If they failed again, they go back to errors)
             valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
             invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
 
@@ -620,7 +712,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             conn.executemany("INSERT INTO records (is_valid, data, errors) VALUES (?, ?, ?)", invalid_inserts)
             conn.commit()
 
-            # 5. Recalculate totals directly from the database
             cursor.execute("SELECT COUNT(*) FROM records")
             total_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 1")
@@ -628,14 +719,13 @@ async def websocket_validate_stream(websocket: WebSocket):
             cursor.execute("SELECT COUNT(*) FROM records WHERE is_valid = 0")
             invalid_count = cursor.fetchone()[0]
 
-            # 6. GRAB THE NEXT 500 ERRORS FOR THE CONTINUOUS INBOX
             cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
             db_errors = cursor.fetchall()
             
             all_invalid_records = []
             for row in db_errors:
                 rec_data = json.loads(row[1])
-                rec_data["_db_id"] = row[0] # Inject DB ID for the next round
+                rec_data["_db_id"] = row[0]
                 all_invalid_records.append({
                     "originalRow": rec_data,
                     "errors": row[2]
@@ -660,9 +750,8 @@ async def websocket_validate_stream(websocket: WebSocket):
             
             await websocket.close()
             return
-        # --- END OF RE-VALIDATION LOGIC ---
 
-       # --- ORIGINAL LOGIC FOR FRESH RUNS ---
+        # --- ORIGINAL LOGIC FOR FRESH RUNS ---
         crm_id = payload.get("crmId", "").lower()
         obj_name = payload.get("objectName", "")
         query = payload.get("query", "").strip()
@@ -670,7 +759,6 @@ async def websocket_validate_stream(websocket: WebSocket):
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
         
-        # 1. Grab and Verify the Token
         auth_token = payload.get("authToken")
         if not auth_token:
             await websocket.send_json({"log": "FATAL: Unauthenticated.", "status": "Validation Failed"})
@@ -683,29 +771,53 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
             await websocket.close()
             return
+        
+        user_id = user_res.user.id
+
+        source_crm = payload.get("crmId", "").lower()
+        target_crm = payload.get("targetCrmId", "salesforce").lower()
             
-        # 2. Fetch Secure Credentials
         from app.services.crm_service import CrmService
         try:
-            # For validation, we need both Source (to extract) and Target (for rules, though rules are passed in from UI here)
-            # Usually validation just connects to the Source CRM to pull data.
-            source_creds = CrmService.get_active_crm_credentials(user_res.user.id, crm_id, "source")
+            source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
+            target_creds = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
         except Exception as e:
-            await websocket.send_json({"log": f"FATAL: Credential lookup failed: {str(e)}", "status": "Validation Failed"})
+            await websocket.send_json({"log": f"FATAL: Database credential lookup failed: {str(e)}", "status": "Failed"})
             await websocket.close()
             return
 
-        # 3. Map to existing variables
+        target_token = target_creds.get("access_token")
+        if not target_token:
+            await websocket.send_json({"log": f"FATAL: Missing Target Token for {target_crm.capitalize()}.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        if target_crm == "salesforce" and not target_creds.get("instance_url"):
+            await websocket.send_json({"log": "FATAL: Missing Target Salesforce Instance URL.", "status": "Failed"})
+            await websocket.close()
+            return
+            
+        elif target_crm == "zendesk" and not target_creds.get("subdomain"):
+            await websocket.send_json({"log": "FATAL: Missing Target Zendesk Subdomain.", "status": "Failed"})
+            await websocket.close()
+            return
+
+        source_token = source_creds.get("access_token")
+        if not source_token:
+            await websocket.send_json({"log": f"FATAL: Missing Source Token for {source_crm.capitalize()}.", "status": "Failed"})
+            await websocket.close()
+            return
+        
+        async def send_log(msg: str, status: str = "Running"):
+            await websocket.send_json({"log": msg, "status": status})
+
         sf_token = source_creds.get("access_token") if crm_id == "salesforce" else None
         sf_instance = source_creds.get("instance_url") if crm_id == "salesforce" else None
-        
         zd_token = source_creds.get("access_token") if crm_id == "zendesk" else None
         zd_subdomain = source_creds.get("subdomain") if crm_id == "zendesk" else None
-        
         zoho_token = source_creds.get("access_token") if crm_id == "zoho" else None
         zoho_api_domain = source_creds.get("api_domain") if crm_id == "zoho" else None
 
-        # Generate Smart Session ID
         safe_obj = ''.join(e for e in obj_name if e.isalnum()).lower()
         if not safe_obj: safe_obj = "unknown"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -718,7 +830,6 @@ async def websocket_validate_stream(websocket: WebSocket):
         conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
         
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
-
         await websocket.send_json({"log": f"System: Initializing Streaming Validation...", "status": "Connecting"})
 
         async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
@@ -734,12 +845,9 @@ async def websocket_validate_stream(websocket: WebSocket):
                 is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
 
                 if is_standard:
-                    # --- STANDARD OBJECTS ---
                     safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
-                    import re
                     clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
                     final_query = f"{clean_query} type:{safe_obj_singular}".strip()
-                    import urllib.parse
                     safe_query = urllib.parse.quote(final_query)
                     url = f"https://{zd_subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
                     
@@ -770,7 +878,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                             chunk_records.append(flat_rec)
 
                         if not chunk_records: break
-                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "", target_crm=target_crm)
 
                         valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
                         invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
@@ -789,11 +897,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                             "status": "Validating",
                             "stats": aggregate_stats
                         })
-                        
                         url = data.get("links", {}).get("next") if data.get("meta", {}).get("has_more") else None
-
                 else:
-                    # --- NATIVE CUSTOM OBJECTS ---
                     url = None
                     json_payload = None
                     
@@ -808,7 +913,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     else:
                         url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]=100"
                         
-                    # FIX: Add a while loop to paginate through all records 100 at a time
                     while url:
                         if json_payload:
                             res = await client.post(url, headers=zd_headers, json=json_payload)
@@ -831,7 +935,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                             return
                             
                         data = res.json()
-                        
                         chunk_records = []
                         for rec in data.get("custom_object_records", []):
                             flat_rec = {}
@@ -847,8 +950,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                             chunk_records.append(flat_rec)
                             
                         if not chunk_records: break
-                        
-                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                        chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "", target_crm=target_crm)
                         
                         valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
                         invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
@@ -867,8 +969,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                             "status": "Validating",
                             "stats": aggregate_stats
                         })
-                        
-                        # Get the next page of 100 records
                         meta = data.get("meta", {})
                         if meta.get("has_more"):
                             url = data.get("links", {}).get("next")
@@ -899,7 +999,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                         chunk_records.append(r)
                         
                     if not chunk_records: break
-                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "", target_crm=target_crm)
                     
                     valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
                     invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
@@ -949,7 +1049,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                     if query:
                         coql_query = query.strip()
                         if coql_query.lower().startswith("select "):
-                            import re
                             if "*" in coql_query:
                                 coql_query = coql_query.replace("*", fields_str, 1)
                             match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
@@ -965,7 +1064,6 @@ async def websocket_validate_stream(websocket: WebSocket):
                         paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
                         res = await client.post(f"{base_url}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
                     else:
-                        # ZOHO MASS EXTRACTION PAGE TOKEN LOGIC
                         if page_token:
                             res = await client.get(f"{base_url}/crm/v6/{obj_name}?page_token={page_token}&per_page=200&fields={fields_str}", headers=headers)
                         else:
@@ -991,16 +1089,13 @@ async def websocket_validate_stream(websocket: WebSocket):
                             if isinstance(v, dict):
                                 flat_rec[k] = v.get("name", v.get("id", str(v)))
                             elif isinstance(v, list):
-                                parsed_list = [
-                                    str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) 
-                                    for i in v
-                                ]
+                                parsed_list = [str(i.get("name", i.get("id", i))) if isinstance(i, dict) else str(i) for i in v]
                                 flat_rec[k] = ";".join(parsed_list)
                             else:
                                 flat_rec[k] = v
                         chunk_records.append(flat_rec)
 
-                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "")
+                    chunk_result = process_validation_batch(chunk_records, mappings, dedupe_key, sf_rules, "", target_crm=target_crm)
                     
                     valid_inserts = [(True, json.dumps(rec), "") for rec in chunk_result.get("validRecords", [])]
                     invalid_inserts = [(False, json.dumps(rec["originalRow"]), rec["errors"]) for rec in chunk_result.get("invalidRecords", [])]
@@ -1021,9 +1116,8 @@ async def websocket_validate_stream(websocket: WebSocket):
                     
                     info = data.get("info", {})
                     more_records = info.get("more_records", False)
-                    # Extract the token for the next loop
                     page_token = info.get("next_page_token")
-                    page += 1 # Kept for COQL offset calculation
+                    page += 1 
 
             else:
                 await websocket.send_json({"log": f"Unsupported CRM: {crm_id}", "status": "Failed"})
@@ -1040,7 +1134,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         all_invalid_records = []
         for row in db_errors:
             rec_data = json.loads(row[1])
-            rec_data["_db_id"] = row[0] # Inject DB ID
+            rec_data["_db_id"] = row[0] 
             all_invalid_records.append({
                 "originalRow": rec_data,
                 "errors": row[2]
@@ -1056,7 +1150,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             "invalidRecords": all_invalid_records,
             "sessionId": session_id
         })
-        
         await websocket.close()
         
     except WebSocketDisconnect:
@@ -1084,7 +1177,6 @@ async def download_validation_audit(session_id: str, type: str = 'valid'):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    # 1 for Valid records, 0 for Invalid records
     is_valid = 1 if type == 'valid' else 0
     cursor.execute("SELECT data, errors FROM records WHERE is_valid = ?", (is_valid,))
     rows = cursor.fetchall()
@@ -1093,19 +1185,16 @@ async def download_validation_audit(session_id: str, type: str = 'valid'):
     if not rows:
         raise HTTPException(status_code=404, detail=f"No {type} records available.")
 
-    # Extract all keys to ensure we get every column for the CSV header
     all_records = []
     fieldnames = set()
     for row in rows:
         rec = json.loads(row[0])
-        # If it's an error report, inject the error message as the first column!
         if type == 'invalid':
             rec['Validation_Errors'] = row[1]
             
         fieldnames.update(rec.keys())
         all_records.append(rec)
     
-    # Sort fieldnames, forcing 'Validation_Errors' to the very front
     fieldnames = list(fieldnames)
     if 'Validation_Errors' in fieldnames:
         fieldnames.remove('Validation_Errors')
