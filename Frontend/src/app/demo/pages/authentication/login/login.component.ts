@@ -45,7 +45,7 @@ export class LoginComponent {
     event.preventDefault();
     this.error.set('');
 
-    // Handle Forgot Password Flow
+    // 1. Handle Forgot Password Flow
     if (this.isForgotPasswordMode()) {
       if (!this.email()) {
         this.error.set('Please enter your email address.');
@@ -66,21 +66,49 @@ export class LoginComponent {
           this.loading.set(false);
         }
       });
-      return; // Stop execution here for forgot password
-     } else {
-      const loginCredentials = { email: this.email(), password: this.password() };
-      
-      this.authService.login(loginCredentials).subscribe({
+      return; // Stop execution here
+    } 
+    
+    // 2. Handle Sign-Up Flow
+    if (this.isSignUpMode()) {
+      // Note the keys here should match what your FastAPI backend expects (full_name)
+      const signUpData = { 
+        email: this.email(), 
+        password: this.password(),
+        full_name: this.fullName() 
+      };
+
+      this.loading.set(true);
+      // Assuming your Angular authService has a 'signup' method
+      this.authService.signup(signUpData).subscribe({
         next: () => {
-          this.toastr.success('Welcome back!', 'Success');
+          this.toastr.success('Account created successfully! Please log in.', 'Success');
           this.loading.set(false);
-          this.router.navigate(['/connection']); 
+          this.toggleMode(); // Switch them back to the login view
         },
         error: (err) => {
-          this.error.set(err.error?.detail || 'Invalid credentials.');
+          // Handle backend FastAPI error format
+          this.error.set(err.error?.detail || 'Sign up failed. Please try again.');
           this.loading.set(false);
         }
       });
+      return; // Stop execution here
     }
+
+    // 3. Handle Login Flow (Default)
+    const loginCredentials = { email: this.email(), password: this.password() };
+    this.loading.set(true);
+    
+    this.authService.login(loginCredentials).subscribe({
+      next: () => {
+        this.toastr.success('Welcome back!', 'Success');
+        this.loading.set(false);
+        this.router.navigate(['/connection']); 
+      },
+      error: (err) => {
+        this.error.set(err.error?.detail || 'Invalid credentials.');
+        this.loading.set(false);
+      }
+    });
   }
 }

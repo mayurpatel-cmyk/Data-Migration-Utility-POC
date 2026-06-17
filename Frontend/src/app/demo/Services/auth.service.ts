@@ -39,9 +39,9 @@ export class AuthService {
     );
   }
 
-  signup(credentials: any): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(`${this.apiUrl}/signup`, credentials);
-  }
+  signup(data: { email: string; password: string; full_name: string }) {
+  return this.http.post<any>(`${this.apiUrl}/signup`, data);
+}
 
   // Use this method in your HTTP Interceptor when a 401 Unauthorized occurs
   refreshToken(): Observable<any> {
