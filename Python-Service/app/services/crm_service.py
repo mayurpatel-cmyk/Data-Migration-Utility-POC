@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.utils.config import supabase
 import os
 import httpx
+client = httpx.AsyncClient(verify=False, timeout=30.0)
 
 class CrmService:
     @staticmethod

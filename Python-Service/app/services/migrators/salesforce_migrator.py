@@ -1,17 +1,51 @@
+import urllib.parse
 import asyncio
-import httpx
-import os
 from app.services.crm_service import CrmService
 
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
-class TargetUploadService:
+class SalesforceMigrator:
     
-    @staticmethod
-    async def upload_to_salesforce(client, payload, sf_op, pass_name, options, send_log):
-        """Your exact existing Salesforce Bulk V2 logic, perfectly preserved."""
+    # ==========================================
+    # EXTRACT (Pull from Salesforce)
+    # ==========================================
+    async def extract(self, client, creds, obj_name, query, mappings, send_log):
+        sf_token = creds.get("access_token")
+        sf_instance = creds.get("instance_url", "").rstrip('/')
+        
+        headers_list = [m["sourceField"] if "sourceField" in m else m["csvField"] for m in mappings if m.get("sourceField") or m.get("csvField")]
+        fields_str = ", ".join(headers_list) if headers_list else "Id"
+        where_clause = f" WHERE {query}" if query else ""
+        soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
+        
+        headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
+        safe_soql = urllib.parse.quote(soql)
+        url = f"{sf_instance}/services/data/v60.0/query?q={safe_soql}"
+        
+        source_records = []
+        while url:
+            res = await client.get(url, headers=headers)
+            res.raise_for_status()
+            data = res.json()
+            
+            for r in data.get("records", []):
+                r.pop("attributes", None)
+                source_records.append(r)
+                
+            if len(source_records) % 5000 == 0:
+                await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
+                
+            url = f"{sf_instance}{data.get('nextRecordsUrl')}" if not data.get("done") else None
+
+        await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
+        return source_records
+
+    # ==========================================
+    # UPLOAD (Push to Salesforce)
+    # ==========================================
+    async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, [], []
         
         target_object = options["targetObject"]
@@ -25,12 +59,12 @@ class TargetUploadService:
         total_success, total_error = 0, 0
         all_success_data, all_error_data = [], []
 
-        await send_log(f"[{target_object}] {pass_name}: Initializing {sf_op.upper()} to Salesforce...")
+        await send_log(f"[{target_object}] {pass_name}: Initializing {op_mode.upper()} to Salesforce...")
         sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
         bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
 
-        job_config = {"operation": sf_op, "object": target_object, "contentType": "JSON"}
-        if sf_op == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
+        job_config = {"operation": op_mode, "object": target_object, "contentType": "JSON"}
+        if op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
 
         job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
         
@@ -53,6 +87,7 @@ class TargetUploadService:
 
         async def upload_chunk(chunk_data):
             async with semaphore:
+                # NOTE: Adjusted to use "targetRecord" from your updated PayloadBuilder
                 just_records = [c["targetRecord"] for c in chunk_data]
                 b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=just_records, headers=sf_headers)
                 b_res.raise_for_status()
@@ -88,17 +123,3 @@ class TargetUploadService:
                     total_error += 1
                     
         return total_success, total_error, all_success_data, all_error_data
-
-
-    @staticmethod
-    async def upload_to_zoho(client, payload, op_mode, pass_name, options, send_log):
-        """Placeholder for Zoho Bulk Logic using /crm/v6/{module}/upsert"""
-        await send_log(f"[{options['targetObject']}] Zoho Upload Logic goes here...")
-        # Implementation is similar, chunking arrays of 100 records and POSTing to Zoho
-        return 0, 0, [], []
-
-    @staticmethod
-    async def upload_to_zendesk(client, payload, op_mode, pass_name, options, send_log):
-        """Placeholder for Zendesk Bulk Logic using /api/v2/{object}/create_many"""
-        await send_log(f"[{options['targetObject']}] Zendesk Upload Logic goes here...")
-        return 0, 0, [], []

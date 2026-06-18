@@ -1,4 +1,5 @@
 import httpx
+client = httpx.AsyncClient(verify=False, timeout=30.0)
 from fastapi import HTTPException
 
 class CrmMetadataService:
