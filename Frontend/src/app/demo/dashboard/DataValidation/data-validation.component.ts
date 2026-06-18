@@ -88,7 +88,7 @@ export class DataValidationComponent implements OnInit {
   }
 
   ngOnInit() {
-    this.migrationService.getAllObjects().subscribe(objs => {
+    this.migrationService.getAllObjects('salesforce').subscribe(objs => {
       this.sfObjects = objs;
       this.cdr.detectChanges();
     });
@@ -297,7 +297,7 @@ export class DataValidationComponent implements OnInit {
 
   onObjectChange() {
     if (!this.selectedObject) return;
-    this.migrationService.getObjectFields(this.selectedObject).subscribe((res: any) => {
+    this.migrationService.getObjectFields('salesforce', this.selectedObject).subscribe((res: any) => {
       this.sfFields = res.fields || res;
       this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
       this.cdr.detectChanges();
@@ -565,7 +565,7 @@ export class DataValidationComponent implements OnInit {
     this.dedupeKey = itemToEdit.dedupeKey || '';
 
     this.isLoadingObjects = true;
-    this.migrationService.getObjectFields(this.selectedObject).subscribe({
+    this.migrationService.getObjectFields('salesforce', this.selectedObject).subscribe({
       next: (res: any) => {
         this.sfFields = res.fields || res;
 
@@ -897,7 +897,7 @@ export class DataValidationComponent implements OnInit {
       mapping.isLoadingParentFields = true;
       this.cdr.detectChanges();
 
-      this.migrationService.getObjectFields(parentObj).subscribe({
+      this.migrationService.getObjectFields('salesforce', parentObj).subscribe({
         next: (response: any) => {
           const fieldsArray = response.fields ? response.fields : response;
           this.parentObjectFieldsCache[parentObj] = fieldsArray.sort((a: any, b: any) => (a.label || '').localeCompare(b.label || ''));

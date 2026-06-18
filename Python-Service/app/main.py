@@ -1,5 +1,14 @@
 import asyncio
 import sys
+import ssl
+
+# =========================================================
+# GLOBAL SSL BYPASS (For Local Development Behind Proxies/VPNs)
+# =========================================================
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

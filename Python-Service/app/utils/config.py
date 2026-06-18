@@ -1,8 +1,11 @@
 import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import httpx
 
 load_dotenv()
+
+custom_client = httpx.Client(verify=False)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")

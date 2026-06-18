@@ -1,66 +1,45 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, map, tap } from 'rxjs';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
+import { Observable, timeout } from 'rxjs';
+import { environment } from 'src/environments/environment';
 
 @Injectable({
   providedIn: 'root'
 })
 export class MigrationService {
   private http = inject(HttpClient);
-  private apiUrl = 'http://localhost:3000/api/sf'; 
-  private migrateUrl = 'http://localhost:3000/api/migrate-data';
+  // Point to the Python FastAPI backend
+  private baseUrl = environment.apiUrl ? `${environment.apiUrl}/api` : 'http://localhost:8000/api';
 
- private getHeaders(): HttpHeaders {
-  // Pull directly from the new keys your AuthService uses
-  const accessToken = localStorage.getItem('sf_token') || '';
-  const instanceUrl = localStorage.getItem('sf_instance_url') || ''; 
-  
-  // Note: Your OAuth flow doesn't seem to save an email to local storage anymore.
-  // I am sending a blank string here just in case your Node backend expects the header to exist.
-  const email = localStorage.getItem('sf_user_email') || ''; 
-
-  // DEBUG LOG
-  console.log('🛡️ Auth Headers Check:', { 
-      hasInstanceUrl: !!instanceUrl, 
-      hasToken: !!accessToken 
-  });
-
-  return new HttpHeaders({
-    'user-email': email,
-    'instanceurl': instanceUrl, 
-    'accesstoken': accessToken  
-  });
-}
-
-  getAllObjects(): Observable<any[]> {
-    return this.http.get<{success: boolean, data: any[]}>(`${this.apiUrl}/all-objects`, { 
-      headers: this.getHeaders(),
-      withCredentials: true
-    }).pipe(
-      map(response => response.data) 
-    );
+  // ONLY send the Supabase token. Let Python handle the CRM tokens.
+  private getAuthHeaders(): HttpHeaders {
+    const token = localStorage.getItem('supabase_token') || '';
+    return new HttpHeaders({
+      'Authorization': `Bearer ${token}`
+    });
   }
 
-  getObjectFields(objectName: string): Observable<any[]> {
-    return this.http.get<any>(`${this.apiUrl}/fields/${objectName}`, {
-      headers: this.getHeaders(),
-      withCredentials: true 
-    }).pipe(
-      tap(rawResponse => console.log(`RAW BACKEND RESPONSE for ${objectName}:`, rawResponse)),
-      map(response => {
-        if (response.fields) return response.fields;
-        if (response.data) return response.data;
-        if (Array.isArray(response)) return response;
-        return [];
-      })
-    );
+  getAllObjects(crmId: string, role: 'source' | 'target' = 'target'): Observable<any[]> {
+    const params = new HttpParams().set('role', role);
+    return this.http.get<any[]>(`${this.baseUrl}/metadata/${crmId.toLowerCase()}/objects`, { 
+      headers: this.getAuthHeaders(),
+      params: params
+    }).pipe(timeout(30000));
   }
 
-  migrateData(payload: any): Observable<any> {
-    return this.http.post<any>(this.migrateUrl, payload, {
-      headers: this.getHeaders(),
-      withCredentials: true 
+  getObjectFields(crmId: string, objectName: string, role: 'source' | 'target' = 'target'): Observable<any> {
+    const params = new HttpParams().set('role', role);
+    return this.http.get<any>(`${this.baseUrl}/metadata/${crmId.toLowerCase()}/fields/${objectName}`, {
+      headers: this.getAuthHeaders(),
+      params: params
+    }).pipe(timeout(30000));
+  }
+
+  // NOTE: Your Python backend uses WebSockets for migration (/ws/migrate).
+  // If you want to use HTTP instead, you will need a POST route in Python.
+  migrateDataViaHttp(payload: any): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/migration/migrate-data`, payload, {
+      headers: this.getAuthHeaders()
     });
   }
 }

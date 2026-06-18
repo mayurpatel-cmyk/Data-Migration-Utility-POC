@@ -186,7 +186,7 @@ export class DefaultComponent implements OnInit {
     this.isLoadingObjects = true;
     this.cdr.detectChanges();
 
-    this.migrationService.getAllObjects().subscribe({
+     this.migrationService.getAllObjects('salesforce').subscribe({
       next: (objects) => {
         this.sfObjects = objects;
         setTimeout(() => {
@@ -686,9 +686,10 @@ export class DefaultComponent implements OnInit {
       }
     });
   }
-
+ 
   private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
-    this.migrationService.getObjectFields(objectName).subscribe({
+    // 1. First call uses "objectName"
+    this.migrationService.getObjectFields('salesforce', objectName).subscribe({
       next: (response: any) => {
         setTimeout(() => {
           const fieldsArray = response.fields ? response.fields : response;
@@ -700,7 +701,9 @@ export class DefaultComponent implements OnInit {
             this.mappings.forEach(m => {
               if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
                 m.isLoadingParentFields = true;
-                this.migrationService.getObjectFields(m.parentObjectName).subscribe({
+                
+                // 2. Second call (inside the loop) uses "m.parentObjectName"
+                this.migrationService.getObjectFields('salesforce', m.parentObjectName).subscribe({
                   next: (pRes: any) => {
                     setTimeout(() => {
                       const pFieldsArray = pRes.fields ? pRes.fields : pRes;
@@ -754,7 +757,7 @@ export class DefaultComponent implements OnInit {
       if (!this.parentObjectFieldsCache[parentObj]) {
         setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
 
-        this.migrationService.getObjectFields(parentObj).subscribe({
+        this.migrationService.getObjectFields('salesforce', parentObj).subscribe({
           next: (response: any) => {
             setTimeout(() => {
               const fieldsArray = response.fields ? response.fields : response;
@@ -1049,12 +1052,11 @@ export class DefaultComponent implements OnInit {
   }
 
   // --- UPGRADED: Sequential Batch Processing ---
-  startMigration() {
+ startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
-    if (this.batchSize > 60000) this.batchSize = 60000;
-    if (this.batchSize < 10) this.batchSize = 10;
-
+    
+    // Safety checks
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
@@ -1073,6 +1075,7 @@ export class DefaultComponent implements OnInit {
     const isDeleteOnly = this.isDeleteOnlyBatch;
     const hasDelete = this.hasDeleteInBatch;
 
+    // Build the SweetAlert popup
     const popupTitle = isDeleteOnly
       ? '<strong class="text-danger">Ready for Data Deletion?</strong>'
       : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
@@ -1086,8 +1089,8 @@ export class DefaultComponent implements OnInit {
       : 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold';
 
     const warningText = isDeleteOnly
-      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the Salesforce Recycle Bin.</p>'
-      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>';
+      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the CRM Recycle Bin.</p>'
+      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked by the server to prevent API timeouts.</p>';
 
     Swal.fire({
       title: popupTitle,
@@ -1097,30 +1100,17 @@ export class DefaultComponent implements OnInit {
             <span class="text-muted fw-bold small text-uppercase tracking-wide">Total Records</span>
             <span class="fs-4 fw-bold text-dark">${totalRows.toLocaleString()}</span>
           </div>
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <span class="text-muted fw-bold small text-uppercase tracking-wide">Target Objects</span>
-            <span class="fs-5 fw-bold text-primary bg-primary-subtle px-3 py-1 rounded-pill">${this.migrationQueue.length}</span>
-          </div>
-          <hr class="border-secondary-subtle my-2">
           <div class="d-flex justify-content-between align-items-center pt-2">
             <span class="text-muted fw-bold small text-uppercase tracking-wide">Execution Plan</span>
             <span class="badge bg-dark text-white px-3 py-2 rounded-pill shadow-sm">
-              <i class="feather icon-layers me-1"></i> ~${estimatedBatches} Batches of ${this.batchSize.toLocaleString()}
+              <i class="feather icon-layers me-1"></i> Server Managed
             </span>
           </div>
         </div>
         ${warningText}
       `,
       icon: 'question',
-      iconColor: '#0d6efd',
-      backdrop: `
-        rgba(0, 0, 0, 0.4)
-        backdrop-filter: blur(8px)
-        left top
-        no-repeat
-      `,
       showCancelButton: true,
-      buttonsStyling: false,
       confirmButtonText: confirmBtnText,
       cancelButtonText: 'Review Again',
       customClass: {
@@ -1129,119 +1119,107 @@ export class DefaultComponent implements OnInit {
         confirmButton: confirmBtnClass,
         cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
       }
-    }).then(async (result) => {
+    }).then((result) => {
       if (result.isConfirmed) {
-
+        
+        // 1. Setup UI for loading state
         this.isMigrating = true;
         this.completedJobsCount = 0;
-        this.activeJobStatus = `Initializing sequence for ${this.migrationQueue.length} objects...`;
+        this.activeJobStatus = `Initializing live connection to server...`;
         this.cdr.detectChanges();
 
-        let totalSuccess = 0;
-        let totalFailed = 0;
-        let allFailures: any[] = [];
-        let allSuccesses: any[] = [];
+        // 2. Format the WebSocket URL (converts http:// to ws:// dynamically)
+        // Adjust the base URL below if your environments/config is different
+        const baseUrl = 'http://localhost:8000'; 
+        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
+        
+        // 3. Connect to Python Backend
+        const ws = new WebSocket(wsUrl);
 
-        try {
-          // Process objects sequentially
-          for (let i = 0; i < this.migrationQueue.length; i++) {
-            const job = this.migrationQueue[i];
+        ws.onopen = () => {
+          this.activeJobStatus = `Connection established. Preparing payload...`;
+          this.cdr.detectChanges();
 
-            this.activeJobStatus = `Preparing ${job.targetObject}...`;
-            this.cdr.detectChanges();
+          // Safely grab the JWT Token
+          const token = localStorage.getItem('supabase_token') || '';
 
-            const worksheet = this.workbook!.Sheets[job.sheetName];
-            const rawData: any[] = utils.sheet_to_json(worksheet);
-            const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
-
-            // Sort if relational mapping exists
-            if (relationalMapping) {
-              const parentCsvColumn = relationalMapping.csvField;
-              rawData.sort((a, b) => {
-                const valA = String(a[parentCsvColumn] || '');
-                const valB = String(b[parentCsvColumn] || '');
-                return valA.localeCompare(valB);
-              });
-            }
-
-            // --- NEW: Frontend Chunking Logic ---
-            const totalRecords = rawData.length;
-            const totalBatches = Math.ceil(totalRecords / this.batchSize);
-
-            // Loop through each batch for this specific object
-            for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-              const startRecord = batchIndex * this.batchSize;
-              const endRecord = startRecord + this.batchSize;
-              const batchRecords = rawData.slice(startRecord, endRecord);
-
-              // 1. SHOW PROCESSING STATUS
-              this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
-              this.cdr.detectChanges();
-
-              const singleBatchPayload = [{
-                targetObject: job.targetObject,
-                records: batchRecords,
-                mappings: job.mappings,
-                targetExtIdField: job.targetExtIdField,
-                operationMode: job.operationMode,
+          // Build the final payload. Python expects authToken and the queue.
+          // Note: Be sure to pass in the actual source/target CRMs if they are dynamic!
+          const payload = {
+            authToken: token,
+            queue: this.migrationQueue.map(job => ({
+                ...job,
+                sourceCrmId: 'zendesk',   // <-- UPDATE THIS if dynamic
+                targetCrmId: 'salesforce', // <-- UPDATE THIS if dynamic
                 batchSize: this.batchSize
-              }];
+            }))
+          };
 
-              const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
+          // Send it to Python
+          ws.send(JSON.stringify(payload));
+        };
 
-              // 2. SHOW COMPLETED STATUS
-              this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
-              this.cdr.detectChanges();
-
-              // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
-              await new Promise(resolve => setTimeout(resolve, 600));
-
-              // Tally up the results
-              totalSuccess += response.stats?.success || 0;
-              totalFailed += response.stats?.failed || 0;
-              if (response.failures) allFailures = allFailures.concat(response.failures);
-              if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
-            }
-            // --- End Frontend Chunking ---
-
+        // 4. Listen for Live Streaming Updates from Python
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          
+          // Update the pulsing UI text with Python's exact log message
+          this.activeJobStatus = data.log;
+          
+          // Progress bar pseudo-logic (You can refine this based on your specific messages)
+          if (data.log.includes('Completed:')) {
             this.completedJobsCount++;
-            this.activeJobStatus = `Completed: ${job.targetObject}`;
-            this.cdr.detectChanges();
-
-            // Brief visual pause before the next job starts
-            await new Promise(resolve => setTimeout(resolve, 800));
           }
-
-          // All Jobs Finished (Keep your existing finish logic here)
-          this.isMigrating = false;
-          this.migrationSummary = { success: totalSuccess, failed: totalFailed };
-          this.failedRecords = allFailures;
-          this.successfulRecords = allSuccesses;
-
-          const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
-
-          if (totalSuccess > 0 && totalFailed === 0) {
-            this.toastr.success(msg, 'Migration Complete!');
-          } else if (totalSuccess > 0 && totalFailed > 0) {
-            this.toastr.warning(msg, 'Partial Migration');
-          } else {
-            this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
-          }
-
-          this.currentStep = 5;
-          this.autoNavigate();
+          
           this.cdr.detectChanges();
 
-        } catch (error: any) {
+          // 5. Handle the Final Completion Payload
+          if (data.status === 'Finished' || data.status === 'Failed') {
+              this.isMigrating = false;
+              
+              if (data.successData || data.errorData) {
+                  this.successfulRecords = data.successData || [];
+                  this.failedRecords = data.errorData || [];
+                  this.migrationSummary = { 
+                      success: this.successfulRecords.length, 
+                      failed: this.failedRecords.length 
+                  };
+              }
+
+              if (data.status === 'Finished') {
+                  this.toastr.success('Migration sequence complete.', 'Done');
+              } else {
+                  this.toastr.error('Migration encountered a fatal error. Check logs.', 'Failed');
+              }
+
+              // Move to the summary screen
+              this.currentStep = 5;
+              this.autoNavigate();
+              this.cdr.detectChanges();
+              
+              // Gracefully close the socket
+              ws.close();
+          }
+        };
+
+        // 6. Handle Disconnects/Crashes safely
+        ws.onerror = (error) => {
           this.isMigrating = false;
-          const errMsg = error.error?.message || error.message || 'Check console for details';
-          this.toastr.error(errMsg, 'Server Error');
+          this.toastr.error('Lost connection to the migration server.', 'Network Error');
+          this.activeJobStatus = 'Connection Error';
           this.cdr.detectChanges();
-        }
+        };
+
+        ws.onclose = (event) => {
+          if (this.isMigrating) {
+             this.isMigrating = false;
+             this.toastr.warning('The server closed the connection unexpectedly.', 'Disconnected');
+             this.cdr.detectChanges();
+          }
+        };
       }
     });
   }
-
   showMigrationInstructions() {
     Swal.fire({
       title: '<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>',
