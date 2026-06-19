@@ -286,34 +286,6 @@
       </div>
     </div>
 
-    <!-- Put this in the top right corner of your App Card or next to your 'Run Query' buttons -->
-<!-- @if (recoverableSessions.length > 0) {
-  <div class="dropdown d-inline-block ms-2">
-    <button class="btn btn-outline-warning text-dark fw-bold dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="feather icon-clock"></i> Resume Previous Job
-    </button>
-    <ul class="dropdown-menu shadow-lg border-0 py-0" style="width: 350px;">
-      <li class="bg-light px-3 py-2 border-bottom fw-bold small text-muted">
-        Recoverable Staging Sessions
-      </li>
-      @for (session of recoverableSessions; track session.sessionId) {
-        <li>
-          <a class="dropdown-item py-2 border-bottom" href="javascript:void(0)" 
-             (click)="resumeSession(session.sessionId, session.crm, session.object)">
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <span class="fw-bold">{{ session.object }}</span>
-              <span class="badge bg-secondary">{{ session.sizeMb }} MB</span>
-            </div>
-            <div class="small text-muted">
-              <i class="feather icon-calendar"></i> {{ session.date }}
-            </div>
-          </a>
-        </li>
-      }
-    </ul>
-  </div>
-} -->
-
     <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1" style="height: 400px; overflow: hidden;">
       <div class="card-header bg-white py-3 border-bottom flex-shrink-0 d-flex justify-content-between align-items-center">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
@@ -438,11 +410,7 @@
              [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
           <div class="d-flex justify-content-between align-items-center mb-2">
             <h6 class="fw-bold text-primary-emphasis m-0"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
-            <!-- <div class="form-check form-switch m-0" title="Hide fields you have already mapped">
-              <input class="form-check-input cursor-pointer" type="checkbox" id="hideMapped" [(ngModel)]="hideMappedFields">
-              <label class="form-check-label small text-primary-emphasis fw-bold cursor-pointer" for="hideMapped">Hide Mapped</label>
-            </div> -->
-          </div>
+            </div>
           <div class="d-flex flex-wrap gap-3 mb-2">
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpInsert" value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
@@ -474,7 +442,7 @@
           </div>
         </div>
 
-        <div class="flex-grow-1 pe-2" style="overflow-y: auto; overflow-x: hidden;">
+        <div class="mapping-table-container flex-grow-1 bg-white shadow-sm" style="min-height: 0;">
           @if (isLoading) {
           <div class="d-flex justify-content-center align-items-center h-100">
             <span class="spinner-border text-primary"></span>
@@ -491,90 +459,100 @@
           </div>
           } @else {
           
-          @for (mapping of visibleMappings; track mapping.sourceField; let i = $index) {
-          <div class="d-flex align-items-center gap-2 mb-2 animate__animated animate__fadeIn">
-            
-            <div class="flex-grow-1" style="flex-basis: 45%;">
-              <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center" title="{{ mapping.sourceLabel }}">
-                <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
-                <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1" style="font-size: 0.6rem;">
-                  {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
-                </span>
-              </div>
-            </div>
-            
-            <div class="text-center text-muted px-1">
-              <i class="feather icon-arrow-right small"></i>
-            </div>
-            
-            <div class="flex-grow-1" style="flex-basis: 45%;">
-              <div class="position-relative" (click)="$event.stopPropagation()">
-                <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
-                     [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
-                     (click)="toggleDropdown(mapping, $event)">
-                  
-                  <span class="text-truncate" [class.text-muted]="!mapping.targetField">
-                    {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
-                  </span>
-                  
-                  @if (isTypeMismatch(mapping)) {
-                    <i class="feather icon-alert-triangle text-danger" title="Type Mismatch! You are mapping incompatible data types."></i>
-                  } @else if (mapping.targetField) {
-                    <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}" style="font-size: 0.6rem;">
-                      {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+          <table class="table table-hover table-borderless align-middle mb-0 w-100">
+            <thead class="bg-white">
+              <tr>
+                <th style="width: 45%;" class="text-muted small fw-bold">Source Field</th>
+                <th style="width: 10%;" class="text-center text-muted small fw-bold"><i class="feather icon-arrow-right"></i></th>
+                <th style="width: 40%;" class="text-muted small fw-bold">Target Field</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (mapping of visibleMappings; track mapping.sourceField; let i = $index) {
+              <tr class="animate__animated animate__fadeIn">
+                
+                <td title="{{ mapping.sourceLabel }}">
+                  <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
+                    <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+                    <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1" style="font-size: 0.6rem;">
+                      {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
                     </span>
-                  }
-                </div>
-
-                @if (isReferenceField(mapping.targetField)) {
-                  <div class="mt-1 d-flex align-items-center gap-1 animate__animated animate__fadeIn">
-                    <i class="feather icon-link text-warning"></i>
-                    <div class="input-group input-group-sm shadow-sm">
-                      <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis" style="font-size: 0.7rem;">Parent Ext ID</span>
-                      <input type="text" class="form-control form-control-sm border-warning-subtle" [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id">
-                    </div>
                   </div>
-                }
+                </td>
+                
+                <td class="text-center text-muted px-1">
+                  <i class="feather icon-arrow-right small"></i>
+                </td>
+                
+                <td>
+                  <div class="position-relative" (click)="$event.stopPropagation()">
+                    <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
+                         [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                         (click)="toggleDropdown(mapping, $event)">
+                      
+                      <span class="text-truncate" [class.text-muted]="!mapping.targetField">
+                        {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
+                      </span>
+                      
+                      @if (isTypeMismatch(mapping)) {
+                        <i class="feather icon-alert-triangle text-danger" title="Type Mismatch! You are mapping incompatible data types."></i>
+                      } @else if (mapping.targetField) {
+                        <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}" style="font-size: 0.6rem;">
+                          {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+                        </span>
+                      }
+                    </div>
 
-                @if (mapping.isDropdownOpen) {
-                  <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
-                    <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                      <div class="input-group input-group-sm">
-                        <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                        <input type="text" class="form-control" placeholder="Search target fields..." [(ngModel)]="mapping.searchQuery" autofocus>
-                      </div>
-                    </div>
-                    <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold" (click)="selectField(mapping, '')" [class.bg-light]="mapping.targetField === ''">
-                      <i class="feather icon-slash"></i> -- Ignore --
-                    </div>
-                    @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start" 
-                           (click)="selectField(mapping, field.name)" 
-                           [class.bg-light]="mapping.targetField === field.name">
-                        <div>
-                          <span class="fw-bold text-dark">{{ field.label }} 
-                            @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
-                          </span>
-                          <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+                    @if (isReferenceField(mapping.targetField)) {
+                      <div class="mt-1 d-flex align-items-center gap-1 animate__animated animate__fadeIn">
+                        <i class="feather icon-link text-warning"></i>
+                        <div class="input-group input-group-sm shadow-sm">
+                          <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis" style="font-size: 0.7rem;">Parent Ext ID</span>
+                          <input type="text" class="form-control form-control-sm border-warning-subtle" [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id">
                         </div>
-                        <span class="badge {{ getFieldTypeBadge(field.type) }} mt-1" style="font-size: 0.6rem;">{{ field.type || 'string' }}</span>
+                      </div>
+                    }
+
+                    @if (mapping.isDropdownOpen) {
+                      <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
+                        <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Search target fields..." [(ngModel)]="mapping.searchQuery" autofocus>
+                          </div>
+                        </div>
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold" (click)="selectField(mapping, '')" [class.bg-light]="mapping.targetField === ''">
+                          <i class="feather icon-slash"></i> -- Ignore --
+                        </div>
+                        @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
+                          <div class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start" 
+                               (click)="selectField(mapping, field.name)" 
+                               [class.bg-light]="mapping.targetField === field.name">
+                            <div>
+                              <span class="fw-bold text-dark">{{ field.label }} 
+                                @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
+                              </span>
+                              <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
+                            </div>
+                            <span class="badge {{ getFieldTypeBadge(field.type) }} mt-1" style="font-size: 0.6rem;">{{ field.type || 'string' }}</span>
+                          </div>
+                        }
                       </div>
                     }
                   </div>
-                }
-              </div>
-            </div>
-            
-            <div>
-              <button class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex" (click)="clearMapping(i)">
-                <i class="feather icon-x"></i>
-              </button>
-            </div>
-          </div>
-          }
+                </td>
+                
+                <td class="text-center">
+                  <button class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto" (click)="clearMapping(i)">
+                    <i class="feather icon-x"></i>
+                  </button>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
           }
         </div>
-
         <div class="mt-3 pt-3 border-top d-flex justify-content-between align-items-center flex-shrink-0">
           <div class="d-flex align-items-center gap-3">
             <div class="form-check form-switch m-0" title="Enforce Strict Salesforce Rules">
@@ -792,7 +770,7 @@
       <div class="card-body p-0 d-flex flex-grow-1 overflow-hidden">
 
        <div class="bg-light p-3 border-end d-flex flex-column gap-3 justify-content-center" style="min-width: 170px;">
-          
+         
           <button class="btn bg-white shadow-sm border border-secondary-subtle action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
                   (click)="validateData()">
             <div class="bg-light rounded-circle d-flex align-items-center justify-content-center mb-1 border" style="width: 38px; height: 38px;">

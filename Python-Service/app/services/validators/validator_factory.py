@@ -15,6 +15,6 @@ class ValidatorFactory:
         elif crm == "zendesk":
             return ZendeskValidator()
         elif crm == "hubspot":
-            return HubspotValidator
+            return HubspotValidator()
         else:
             return BaseValidator()

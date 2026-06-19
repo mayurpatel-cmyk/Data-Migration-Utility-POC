@@ -10,6 +10,7 @@ from app.services.crm_service import CrmService
 from app.services.migrators.salesforce_migrator import SalesforceMigrator
 from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
+from app.services.migrators.hubspot_migrator import HubspotMigrator
 from app.services.payload_builder import PayloadBuilderService
 
 import uuid
@@ -28,7 +29,8 @@ BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
 MIGRATORS = {
     "salesforce": SalesforceMigrator(),
     "zoho": ZohoMigrator(),
-    "zendesk": ZendeskMigrator()
+    "zendesk": ZendeskMigrator(),
+    "hubspot": HubspotMigrator()
 }
 
 def get_db_path(session_id: str):
