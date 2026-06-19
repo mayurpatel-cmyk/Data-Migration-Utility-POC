@@ -249,8 +249,70 @@ async def zendesk_callback(code: str, state: str):
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zendesk")
 
 # =========================================================
-# CORE CONNECTIONS MANAGEMENT
+# HUBSPOT OAUTH FLOW
 # =========================================================
+@router.get("/auth/hubspot/login")
+def get_hubspot_url(side: str):
+    import uuid
+    import urllib.parse
+
+    HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", "http://localhost:8000/api/crm/auth/hubspot/callback")
+
+    # Generate state without requiring current_user - it will be handled in callback
+    custom_state = f"{side}::{uuid.uuid4()}"
+
+    scopes = "crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write crm.objects.tickets.read crm.objects.tickets.write"
+
+    params = {
+        "client_id": HS_CLIENT_ID,
+        "redirect_uri": HS_REDIRECT_URI,
+        "scope": scopes,
+        "state": custom_state
+    }
+
+    auth_url = f"https://app.hubapi.com/oauth/authorize?{urllib.parse.urlencode(params)}"
+    return {"url": auth_url}
+
+@router.get("/auth/hubspot/callback")
+async def hubspot_callback(code: str, state: str):
+    try:
+        side, state_id = state.split("::")
+    except ValueError:
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+    HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
+    HS_CLIENT_SECRET = os.getenv("HS_CLIENT_SECRET", "").strip()
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", "http://localhost:8000/api/crm/auth/hubspot/callback")
+
+    async with httpx.AsyncClient(verify=False) as client:
+        response = await client.post("https://api.hubapi.com/oauth/v1/token", data={
+            "grant_type": "authorization_code",
+            "client_id": HS_CLIENT_ID,
+            "client_secret": HS_CLIENT_SECRET,
+            "redirect_uri": HS_REDIRECT_URI,
+            "code": code
+        })
+        if response.status_code != 200:
+            errorBody = await response.text()
+            print(f"HubSpot token error: {errorBody}")
+            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+        token_data = response.json()
+
+    # Redirect to frontend with token in URL - frontend will handle storage
+    redirect_params = {
+        "source": "hubspot",
+        "status": "success",
+        "token": token_data.get("access_token"),
+        "refreshToken": token_data.get("refresh_token"),
+        "side": side
+    }
+
+    redirect_url = f"{ANGULAR_FRONTEND_URL}/connection?" + urllib.parse.urlencode(redirect_params)
+    return RedirectResponse(url=redirect_url)
+
+
 @router.get("/connections")
 def get_connections(current_user = Depends(get_current_user)):
     return CrmService.get_user_connections(current_user.id)

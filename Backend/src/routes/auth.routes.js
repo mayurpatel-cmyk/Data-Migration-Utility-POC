@@ -10,4 +10,8 @@ router.get('/callback', authController.callback); // Handle Salesforce callback
 router.post('/zoho-login', authController.zohoLogin);
 router.get('/zoho-callback', authController.zohoCallback);
 
+// HubSpot OAuth routes
+router.post('/hubspot-login', authController.hubspotLogin);
+router.get('/hubspot-callback', authController.hubspotCallback);
+
 module.exports = router;

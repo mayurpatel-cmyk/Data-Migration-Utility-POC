@@ -149,10 +149,103 @@ const refreshZohoToken = async (savedRefreshToken, accountsServer) => {
   return data.access_token;
 };
 
-module.exports = { 
+/**
+ * HUBSPOT OAUTH FLOW
+ */
+
+/**
+ * STEP 1 (HUBSPOT): Generate HubSpot OAuth Login URL
+ */
+const getHubSpotAuthUrl = () => {
+  const clientId = process.env.HUBSPOT_CLIENT_ID;
+  const redirectUri = process.env.HUBSPOT_REDIRECT_URI || 'http://localhost:3000/api/auth/hubspot-callback';
+  const scopes = [
+    'crm.objects.contacts.read',
+    'crm.objects.contacts.write',
+    'crm.objects.companies.read',
+    'crm.objects.companies.write',
+    'crm.objects.deals.read',
+    'crm.objects.deals.write',
+    'crm.objects.tickets.read',
+    'crm.objects.tickets.write'
+  ].join('%20');
+
+  const authUrl = `https://app.hubapi.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}`;
+
+  logger.info('Generated HubSpot OAuth URL', { clientId });
+  return authUrl;
+};
+
+/**
+ * STEP 2 (HUBSPOT): Exchange Authorization Code for Access Token
+ */
+const authorizeHubSpot = async (code) => {
+  const tokenUrl = 'https://api.hubapi.com/oauth/v1/token';
+
+  const params = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: process.env.HUBSPOT_CLIENT_ID,
+    client_secret: process.env.HUBSPOT_CLIENT_SECRET,
+    redirect_uri: process.env.HUBSPOT_REDIRECT_URI || 'http://localhost:3000/api/auth/hubspot-callback',
+    code: code
+  });
+
+  try {
+    const response = await fetch(tokenUrl, { method: 'POST', body: params });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`HubSpot OAuth failed: ${errorBody}`);
+    }
+
+    const tokenData = await response.json();
+
+    logger.info('HubSpot OAuth authorization successful');
+    return {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresIn: tokenData.expires_in,
+      userId: 'hubspot-user'
+    };
+  } catch (error) {
+    logger.error('HubSpot OAuth authorization error', { error: error.message });
+    throw error;
+  }
+};
+
+/**
+ * STEP 3 (HUBSPOT): Refresh Access Token
+ * HubSpot tokens expire in 30 minutes
+ */
+const refreshHubSpotToken = async (refreshToken) => {
+  const tokenUrl = 'https://api.hubapi.com/oauth/v1/token';
+
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: process.env.HUBSPOT_CLIENT_ID,
+    client_secret: process.env.HUBSPOT_CLIENT_SECRET,
+    refresh_token: refreshToken
+  });
+
+  try {
+    const response = await fetch(tokenUrl, { method: 'POST', body: params });
+    if (!response.ok) throw new Error("Could not refresh HubSpot access token.");
+
+    const data = await response.json();
+    logger.info('HubSpot token refreshed successfully');
+    return data.access_token;
+  } catch (error) {
+    logger.error('HubSpot token refresh error', { error: error.message });
+    throw error;
+  }
+};
+
+module.exports = {
    getAuthUrl,
    authorize,
    getZohoAuthUrl,
    authorizeZoho,
-   refreshZohoToken
+   refreshZohoToken,
+   getHubSpotAuthUrl,
+   authorizeHubSpot,
+   refreshHubSpotToken
 };

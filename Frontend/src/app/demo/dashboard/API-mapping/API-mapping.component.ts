@@ -2708,6 +2708,62 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.updateMappedCount();
   }
 
+  // Helper function to calculate mapping score
+  private calculateMappingScore(sourceMeta: FieldMeta, targetFieldMeta: FieldMeta, isStrictMapping: boolean): { score: number, isCompatible: boolean } {
+    let score = 0;
+
+    const srcApiExact = sourceMeta.name.toLowerCase();
+    const srcLabelExact = sourceMeta.label.toLowerCase();
+    const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+    const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+    const srcType = (sourceMeta.type || 'string').toLowerCase();
+
+    const tgtApiExact = targetFieldMeta.name.toLowerCase();
+    const tgtLabelExact = targetFieldMeta.label.toLowerCase();
+    const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+    const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
+    const tgtType = (targetFieldMeta.type || 'string').toLowerCase();
+
+    // Data Type Compatibility Check
+    const isExactTypeMatch = srcType === tgtType;
+    const isForgivingTypeMatch =
+      (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
+      (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+
+    const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
+
+    // Strict Mode Enforcement
+    if (isStrictMapping && !isCompatible) {
+      return { score: 0, isCompatible: false }; // Instantly disqualify if strict mode is on and types clash
+    }
+
+    // The Scoring Algorithm
+    if (tgtApiExact === srcApiExact) {
+      score += 100; // Perfect API Match (Guarantees same-CRM mapping works flawlessly)
+    } else if (tgtApiClean === srcApiClean) {
+      score += 90;  // Cleaned API Match (e.g., Matches Zoho's "First_Name" to Salesforce's "FirstName")
+    } else if (tgtLabelExact === srcLabelExact) {
+      score += 85;  // Perfect Label Match
+    } else if (tgtLabelClean === srcLabelClean) {
+      score += 75;  // Cleaned Label Match
+    } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
+      score += 40;  // Fuzzy Substring API Match
+    } else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) {
+      score += 30;  // Fuzzy Substring Label Match
+    }
+
+    // Data Type Bonus (Only apply if the name was a decent match)
+    if (score >= 30) {
+      if (isExactTypeMatch) {
+        score += 20;
+      } else if (isForgivingTypeMatch) {
+        score += 10;
+      }
+    }
+
+    return { score, isCompatible };
+  }
+
   autoMap() {
     let matchCount = 0;
     let skippedEmptyCount = 0;

@@ -9,6 +9,7 @@ const sfRoutes = require('./src/routes/sfRoutes');
 const migrateRoutes = require('./src/routes/migration.routes');
 const validationRoutes = require('./src/routes/validation.routes');
 const zohoRoutes = require('./src/routes/ZohoRoutes.routes');
+const hubspotRoutes = require('./src/routes/hubspotRoutes');
 
 
 const app = express();
@@ -45,6 +46,7 @@ app.use('/api/sf',sfRoutes );
 app.use('/api/migrate-data',migrateRoutes );
 app.use('/api/validation', validationRoutes);
 app.use('/api/zoho', zohoRoutes);
+app.use('/api/hubspot', hubspotRoutes);
 
 // Export the app
 module.exports = app;

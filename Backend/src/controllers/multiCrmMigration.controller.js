@@ -3,12 +3,25 @@ const hubspotMigrationService = require('../services/hubspotMigration.service');
 const zohoMigrationService = require('../services/zohoMigration.service');
 const logger = require('../utils/logger')(__filename);
 
+/**
+ * Multi-CRM Migration Controller
+ * Routes migrations to appropriate CRM-specific service based on target CRM
+ */
+
 exports.migrateData = async (req, res) => {
   const email = req.headers['user-email'];
-  const targetCrm = (req.headers['target-crm'] || 'salesforce').toLowerCase();
+  const targetCrm = req.headers['target-crm']; // 'salesforce', 'zoho', or 'hubspot'
   const jobs = req.body;
 
   try {
+    // Validate input
+    if (!targetCrm) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing 'target-crm' header. Must be one of: salesforce, zoho, hubspot"
+      });
+    }
+
     if (!Array.isArray(jobs) || jobs.length === 0) {
       return res.status(400).json({
         success: false,
@@ -25,7 +38,11 @@ exports.migrateData = async (req, res) => {
     let result;
 
     // Route to appropriate migration service
-    switch (targetCrm) {
+    switch (targetCrm.toLowerCase()) {
+      case 'salesforce':
+        result = await migrateTosalesforce(req, jobs);
+        break;
+
       case 'zoho':
         result = await migrateToZoho(req, jobs);
         break;
@@ -34,10 +51,11 @@ exports.migrateData = async (req, res) => {
         result = await migrateToHubSpot(req, jobs);
         break;
 
-      case 'salesforce':
       default:
-        result = await migrateToSalesforce(req, jobs);
-        break;
+        return res.status(400).json({
+          success: false,
+          message: `Unsupported target CRM: ${targetCrm}. Must be one of: salesforce, zoho, hubspot`
+        });
     }
 
     const stats = {
@@ -59,7 +77,7 @@ exports.migrateData = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Migration Controller Error', {
+    logger.error('Multi-CRM Migration Error', {
       error: error.message,
       userEmail: email,
       targetCrm,
@@ -76,7 +94,7 @@ exports.migrateData = async (req, res) => {
 /**
  * Migrate to Salesforce
  */
-async function migrateToSalesforce(req, jobs) {
+async function migrateTosalesforce(req, jobs) {
   const conn = req.sfConn;
 
   if (!conn) {
@@ -84,64 +102,7 @@ async function migrateToSalesforce(req, jobs) {
   }
 
   const result = await migrationService.executeUpsertBatch(conn, jobs);
-
-  const rawResults = result.results || [];
-  const sentRecords = result.sentRecords || [];
-
-  let successfulRecords = result.successfulRecords || [];
-  let failures = result.failures || [];
-
-  // Apply Salesforce-specific result formatting
-  if (rawResults.length > 0 && sentRecords.length > 0) {
-    successfulRecords = rawResults
-      .map((resItem, index) => {
-        if (resItem.success) {
-          return {
-            SalesforceId: resItem.id,
-            ...sentRecords[index]
-          };
-        }
-        return null;
-      })
-      .filter(record => record !== null);
-
-    failures = rawResults
-      .map((resItem, index) => {
-        if (!resItem.success) {
-          let errorMessage = 'Validation Error';
-
-          if (Array.isArray(resItem.errors) && resItem.errors.length > 0) {
-            errorMessage = resItem.errors.map(e => {
-              if (e.statusCode === 'DUPLICATES_DETECTED') {
-                return `Duplicate Found: This record already exists in Salesforce. (Rule: ${e.message})`;
-              }
-              if (e.fields && e.fields.length > 0) {
-                return `${e.message} [Fields: ${e.fields.join(', ')}]`;
-              }
-              return e.message || JSON.stringify(e);
-            }).join(' | ');
-          } else if (resItem.error) {
-            errorMessage = resItem.error;
-          }
-
-          return {
-            record: sentRecords[index],
-            error: errorMessage
-          };
-        }
-        return null;
-      })
-      .filter(record => record !== null);
-  }
-
-  return {
-    successfulRecords,
-    failures,
-    stats: {
-      success: successfulRecords.length,
-      failed: failures.length
-    }
-  };
+  return result;
 }
 
 /**

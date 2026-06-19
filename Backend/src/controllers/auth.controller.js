@@ -23,7 +23,7 @@ const login = async (req, res) => {
 
     // This calls the authService.getAuthUrl() we discussed earlier
     const authUrl = authService.getAuthUrl(environment.toLowerCase());
-    
+
     logger.info('Generated Salesforce Auth URL successfully', { environment: environment.toLowerCase() });
     logger.debug('Generated Auth URL', { authUrl, environment: environment.toLowerCase() });
 
@@ -45,14 +45,14 @@ const callback = async (req, res) => {
 
   try {
     const authData = await authService.authorize(code, state);
-    
+
     logger.info('OAuth Callback Successful', { userId: authData.userId });
 
     // Redirect the browser back to your Angular Dashboard with the token
     // Angular will pick up these parameters from the URL
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4200';
     res.redirect(`${frontendUrl}/data-import?token=${authData.accessToken}&instanceUrl=${authData.instanceUrl}&name=${encodeURIComponent(authData.userName)}`);
-    
+
   } catch (error) {
     logger.error('OAuth Callback Failed', { error: error.message });
     res.redirect(`${process.env.FRONTEND_URL}/login?error=AuthenticationFailed`);
@@ -97,4 +97,41 @@ const zohoCallback = async (req, res) => {
   }
 };
 
-module.exports = { login, callback, zohoLogin, zohoCallback };
+// --- HUBSPOT OAUTH HANDLERS ---
+
+const hubspotLogin = async (req, res) => {
+  try {
+    const authUrl = authService.getHubSpotAuthUrl();
+    logger.info('Generated HubSpot OAuth URL successfully');
+    return res.status(200).json({ success: true, url: authUrl });
+  } catch (error) {
+    logger.error('Failed to generate HubSpot Auth URL', { error: error.message });
+    return res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+const hubspotCallback = async (req, res) => {
+  const { code } = req.query;
+
+  try {
+    if (!code) throw new Error("Authorization code not provided by HubSpot.");
+
+    const hubspotAuthContext = await authService.authorizeHubSpot(code);
+    logger.info('HubSpot OAuth callback successful');
+
+    // Redirect back to frontend with token
+    const redirectParams = new URLSearchParams({
+      source: 'hubspot',
+      status: 'success',
+      token: hubspotAuthContext.accessToken,
+      refreshToken: hubspotAuthContext.refreshToken
+    }).toString();
+
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:4200'}/#/dashboard/connection?${redirectParams}`);
+  } catch (error) {
+    logger.error('HubSpot OAuth callback error', { error: error.message });
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:4200'}/#/dashboard/connection?status=error&crm=hubspot`);
+  }
+};
+
+module.exports = { login, callback, zohoLogin, zohoCallback, hubspotLogin, hubspotCallback };
