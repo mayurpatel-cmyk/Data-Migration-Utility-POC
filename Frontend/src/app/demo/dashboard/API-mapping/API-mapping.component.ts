@@ -358,6 +358,27 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
               });
             }
           }
+
+          else if (crm === 'hubspot') {
+       suggestions.push({
+         label: 'Basic Filter (Snippet)',
+         kind: monaco.languages.CompletionItemKind.Snippet,
+         insertText: `{\n  "filterGroups": [\n    {\n      "filters": [\n        {\n          "propertyName": "email",\n          "operator": "EQ",\n          "value": ""\n        }\n      ]\n    }\n  ]\n}`,
+         insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+         documentation: 'Auto-generates a basic HubSpot JSON filter block.',
+         range: range
+       });
+       
+       const hsOperators = ['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE', 'BETWEEN', 'IN', 'NOT_IN', 'HAS_PROPERTY', 'NOT_HAS_PROPERTY', 'CONTAINS_TOKEN', 'NOT_CONTAINS_TOKEN'];
+       hsOperators.forEach(op => {
+         suggestions.push({
+           label: op,
+           kind: monaco.languages.CompletionItemKind.Value,
+           insertText: `"${op}"`,
+           range: range
+         });
+       });
+    }
           // ------------------------------------
           //  SALESFORCE & ZOHO (SQL) MODE
           // ------------------------------------
@@ -485,6 +506,24 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   }
 }`;
 
+readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter 
+ - Leave blank to fetch all records.
+ - Uses HubSpot's JSON Search syntax.
+*/
+{
+  "filterGroups": [
+    {
+      "filters": [
+        {
+          "propertyName": "email",
+          "operator": "EQ",
+          "value": "test@domain.com"
+        }
+      ]
+    }
+  ]
+}`;
+
   buildDefaultQuery(entityName: string) {
     const crm = this.sourceCrmId.toLowerCase();
     
@@ -499,6 +538,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         // --- UPGRADED: Auto-inject the custom layout instructions ---
         this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE; 
       }
+    }else if (crm === 'hubspot') {
+      this.customQuery = this.HUBSPOT_SEARCH_TEMPLATE; 
     } else if (crm === 'salesforce') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
     } else if (crm === 'zoho') {
@@ -732,6 +773,15 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
+    }else if (crm === 'hubspot') {
+      return {
+        title: 'HubSpot Search Filter',
+        placeholder: '{\n  "filterGroups": [\n    {\n      "filters": [\n        { "propertyName": "hs_object_id", "operator": "GT", "value": "0" }\n      ]\n    }\n  ]\n}',
+        helpText: "Use HubSpot JSON search syntax to filter records. Leave blank to fetch all.",
+        icon: 'icon-filter',
+        buttonText: 'Apply Filter',
+        loadingText: 'Filtering...'
+      };
     } else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
@@ -793,6 +843,14 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       
       const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = ''; 
+      }
+    }
+
+    if (this.sourceCrmId.toLowerCase() === 'hubspot') {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      const cleanBlankTemplate = this.HUBSPOT_SEARCH_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       if (safeQuery === cleanBlankTemplate) {
         safeQuery = ''; 
       }
@@ -953,6 +1011,25 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
           return applySquiggle(`Invalid Syntax: '${token}' is not formatted correctly.`, token);
         }
       }
+    }
+
+    // ==========================================
+    // HUBSPOT JSON VALIDATION
+    // ==========================================
+    else if (crm === 'hubspot') {
+      const cleanJsonText = this.customQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+
+      if (cleanJsonText === '') return true; // Blank is fine (fetches all)
+
+      if (!cleanJsonText.startsWith('{')) {
+        return applySquiggle("HubSpot filters require a valid JSON block.", this.customQuery.trim().split(' ')[0] || " ");
+      }
+      try {
+        JSON.parse(cleanJsonText);
+      } catch (e) {
+        return applySquiggle("Invalid JSON Syntax. Please check your brackets, keys, and trailing commas.", "{");
+      }
+      return true;
     }
     
     // ==========================================
@@ -1320,6 +1397,14 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       }
     }
 
+    if (this.sourceCrmId.toLowerCase() === 'hubspot') {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      const cleanBlankTemplate = this.HUBSPOT_SEARCH_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = ''; 
+      }
+    }
+
     if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
@@ -1628,6 +1713,14 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       if (safeQuery === cleanBlankTemplate) {
         safeQuery = '';
+      }
+    }
+
+    if (this.sourceCrmId.toLowerCase() === 'hubspot') {
+      safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      const cleanBlankTemplate = this.HUBSPOT_SEARCH_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (safeQuery === cleanBlankTemplate) {
+        safeQuery = ''; 
       }
     }
 

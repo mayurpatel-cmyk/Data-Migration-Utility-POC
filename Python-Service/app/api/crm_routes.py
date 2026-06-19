@@ -249,6 +249,77 @@ async def zendesk_callback(code: str, state: str):
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zendesk")
+# =========================================================
+# HUBSPOT OAUTH FLOW
+# =========================================================
+@router.get("/auth/hubspot/login")
+def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
+    import urllib.parse
+
+    HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
+    # Ensure this matches the exact redirect URI configured in your HubSpot App
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
+
+    # Pass the user_id in the state, matching your other CRMs
+    custom_state = f"{side}::{current_user.id}"
+
+    scopes = "crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write tickets"
+    params = {
+        "client_id": HS_CLIENT_ID,
+        "redirect_uri": HS_REDIRECT_URI,
+        "scope": scopes,
+        "state": custom_state
+    }
+
+    auth_url = f"https://app.hubspot.com/oauth/authorize?{urllib.parse.urlencode(params)}"
+    return {"url": auth_url}
+
+@router.get("/auth/hubspot/callback")
+async def hubspot_callback(code: str, state: str):
+    try:
+        # Extract side and user_id from state
+        side, user_id = state.split("::")
+    except ValueError:
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+    HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
+    HS_CLIENT_SECRET = os.getenv("HS_CLIENT_SECRET", "").strip()
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
+
+    async with httpx.AsyncClient(verify=False) as client:
+        response = await client.post("https://api.hubapi.com/oauth/v1/token", data={
+            "grant_type": "authorization_code",
+            "client_id": HS_CLIENT_ID,
+            "client_secret": HS_CLIENT_SECRET,
+            "redirect_uri": HS_REDIRECT_URI,
+            "code": code
+        })
+        if response.status_code != 200:
+            errorBody = await response.text()
+            print(f"HubSpot token error: {errorBody}")
+            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+        token_data = response.json()
+
+    try:
+        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
+        supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
+        
+        # INSERT: Fresh HubSpot connection
+        supabase.table("crm_connections").insert({
+            "user_id": user_id,
+            "crm_type": "hubspot",
+            "connection_role": side,
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "api_domain": "https://api.hubapi.com" # Setting standard Hubspot API domain
+        }).execute()
+    except Exception as e:
+        print(f"Hubspot DB Insert Error: {e}")
+        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+
+    # Redirect to frontend exactly like the other CRMs do
+    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=hubspot")
 
 # =========================================================
 # CORE CONNECTIONS MANAGEMENT

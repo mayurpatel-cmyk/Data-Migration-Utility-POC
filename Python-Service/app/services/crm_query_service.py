@@ -146,3 +146,65 @@ class CrmQueryService:
                 sample_records.append(flat_rec)
                 
             return {"records": sample_records}
+
+    @staticmethod
+    async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):
+        import json
+        hs_token = creds.get("access_token")
+        domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
+        
+        headers = {
+            "Authorization": f"Bearer {hs_token}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            # 1. Define properties to return
+            # HubSpot requires explicit properties. If headers_list is empty, we must fetch schema first or request standard fields.
+            # For safety, we request top 50 fields if headers_list exists, otherwise basic fields.
+            properties = headers_list[:50] if headers_list else ["hs_object_id", "createdate", "lastmodifieddate"]
+            
+            # 2. Build the request payload
+            # The Search API requires a POST request
+            url = f"{domain}/crm/v3/objects/{obj_name}/search"
+            
+            payload = {
+                "limit": limit,
+                "properties": properties
+            }
+            
+            # 3. Handle Filtering
+            if query and query.strip():
+                try:
+                    # Expect the frontend to pass a valid HubSpot Search JSON payload for the query
+                    # Example frontend query: {"filterGroups":[{"filters":[{"propertyName":"email","operator":"EQ","value":"test@test.com"}]}]}
+                    query_dict = json.loads(query)
+                    
+                    # Merge the query dict with our base payload
+                    if "filterGroups" in query_dict:
+                        payload["filterGroups"] = query_dict["filterGroups"]
+                    if "sorts" in query_dict:
+                        payload["sorts"] = query_dict["sorts"]
+                        
+                except json.JSONDecodeError:
+                    raise HTTPException(status_code=400, detail="Invalid JSON payload provided for HubSpot Search filter.")
+            
+            # 4. Execute POST request
+            res = await client.post(url, headers=headers, json=payload)
+            
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"HubSpot rejected search query: {res.text}")
+                
+            raw_results = res.json().get("results", [])
+            
+            # 5. Flatten the records for the frontend
+            flattened_records = []
+            for r in raw_results:
+                flat_rec = {"id": r.get("id")}
+                props = r.get("properties", {})
+                if props:
+                    for k, v in props.items():
+                        flat_rec[k] = v
+                flattened_records.append(flat_rec)
+                
+            return {"records": flattened_records}

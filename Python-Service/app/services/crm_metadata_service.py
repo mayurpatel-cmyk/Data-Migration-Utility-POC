@@ -1,6 +1,8 @@
 import httpx
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+import urllib.parse 
 from fastapi import HTTPException
+
+client = httpx.AsyncClient(verify=False, timeout=30.0)
 
 class CrmMetadataService:
     
@@ -401,3 +403,139 @@ class CrmMetadataService:
             raise HTTPException(status_code=e.response.status_code, detail=f"Zoho schema error: {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Network error connecting to Zoho: {str(e)}")
+
+
+    # =========================================================
+    # HUBSPOT METADATA EXTRACTION ENGINE
+    # =========================================================
+    @staticmethod
+    async def fetch_hubspot_objects(hs_token: str, api_domain: str = "https://api.hubapi.com"):
+        if not hs_token:
+            raise HTTPException(status_code=401, detail="Missing HubSpot session credentials.")
+
+        headers = {
+            "Authorization": f"Bearer {hs_token}",
+            "Content-Type": "application/json"
+        }
+        
+        objects = []
+        
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                # 1. Fetch Standard Objects (HubSpot doesn't have a single /schemas endpoint for everything)
+                standard_objects = [
+                    {"name": "contacts", "label": "Contacts"},
+                    {"name": "companies", "label": "Companies"},
+                    {"name": "deals", "label": "Deals"},
+                    {"name": "tickets", "label": "Tickets"},
+                    {"name": "products", "label": "Products"},
+                    {"name": "line_items", "label": "Line Items"},
+                    {"name": "quotes", "label": "Quotes"},
+                    {"name": "calls", "label": "Calls"},
+                    {"name": "emails", "label": "Emails"},
+                    {"name": "meetings", "label": "Meetings"},
+                    {"name": "notes", "label": "Notes"},
+                    {"name": "tasks", "label": "Tasks"}
+                ]
+                objects.extend(standard_objects)
+
+                # 2. Fetch Custom Objects
+                custom_url = f"{api_domain.rstrip('/')}/crm/v3/schemas"
+                # We catch errors here silently in case the user's tier doesn't support custom objects
+                res = await client.get(custom_url, headers=headers)
+                if res.status_code == 200:
+                    for schema in res.json().get("results", []):
+                        objects.append({
+                            "name": schema.get("objectTypeId"), # Internal ID needed for querying
+                            "label": schema.get("labels", {}).get("plural", schema.get("name")),
+                            "isCustomObject": True
+                        })
+                
+                return sorted(objects, key=lambda x: x["label"])
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"HubSpot rejected object request: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to HubSpot: {str(e)}")
+
+    @staticmethod
+    async def fetch_hubspot_fields(hs_token: str, api_domain: str, object_name: str):
+        if not hs_token:
+            raise HTTPException(status_code=401, detail="Missing HubSpot session credentials.")
+
+        headers = {
+            "Authorization": f"Bearer {hs_token}",
+            "Content-Type": "application/json"
+        }
+        base_url = f"{api_domain.rstrip('/')}/crm/v3/properties/{object_name}"
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+                # 1. Fetch Schema Properties
+                props_res = await client.get(base_url, headers=headers)
+                props_res.raise_for_status()
+
+                fields_raw = props_res.json().get("results", [])
+                
+                type_mapping = {
+                    "string": "string",
+                    "number": "number",
+                    "date": "date",
+                    "datetime": "date",
+                    "enumeration": "picklist",
+                    "bool": "boolean",
+                    "phone_number": "string"
+                }
+
+                parsed_fields = []
+                select_fields_list = []
+
+                for f in fields_raw:
+                    # Skip internal/hidden fields that shouldn't be mapped
+                    if f.get("hidden"):
+                        continue
+                        
+                    api_name = f.get("name")
+                    select_fields_list.append(api_name)
+                    
+                    parsed_fields.append({
+                        "name": api_name,
+                        "label": f.get("label"),
+                        "type": type_mapping.get(f.get("type"), "string"),
+                        "isRequired": False, # HubSpot doesn't strictly enforce schema-level required fields like SF
+                        "custom": not f.get("hubspotDefined", True),
+                        "referenceTo": f.get("referencedObjectType")
+                    })
+
+                # 2. Fetch Sample Data
+                # HubSpot requires us to specify which properties we want returned
+                sample_fields = select_fields_list[:50] # Limit to avoid URI too long errors
+                properties_query = "&".join([f"properties={urllib.parse.quote(p)}" for p in sample_fields])
+                
+                records_url = f"{api_domain.rstrip('/')}/crm/v3/objects/{object_name}?limit=5&{properties_query}"
+                records_res = await client.get(records_url, headers=headers)
+                
+                sample_records = []
+                if records_res.status_code == 200:
+                    raw_records = records_res.json().get("results", [])
+                    for r in raw_records:
+                        flat_rec = {"id": r.get("id")}
+                        
+                        # Merge properties into the flat record
+                        props = r.get("properties", {})
+                        if props:
+                            for k, v in props.items():
+                                flat_rec[k] = v
+                                
+                        sample_records.append(flat_rec)
+
+                return {
+                    "headers": sample_fields[:12],
+                    "sampleRecords": sample_records,
+                    "fields": sorted(parsed_fields, key=lambda x: x["label"])
+                }
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"HubSpot schema error for '{object_name}': {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to HubSpot: {str(e)}")

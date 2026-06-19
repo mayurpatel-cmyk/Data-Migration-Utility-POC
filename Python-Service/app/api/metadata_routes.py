@@ -23,6 +23,8 @@ async def get_crm_objects(crm_id: str, role: str = "source", current_user = Depe
     elif crm_lower == "zoho":
         # Note: You'll need to slightly update your `fetch_zoho_objects` in CrmMetadataService to just take (token, domain)
         return await CrmMetadataService.fetch_zoho_objects(creds["access_token"], creds["api_domain"])
+    elif crm_lower == "hubspot":
+        return await CrmMetadataService.fetch_hubspot_objects(creds["access_token"], creds.get("api_domain", "https://api.hubapi.com"))
     else:
         raise HTTPException(status_code=400, detail="Unsupported CRM")
 
@@ -40,6 +42,8 @@ async def get_crm_fields(crm_id: str, object_name: str, role: str = "source", cu
         return await CrmMetadataService.fetch_zendesk_fields(creds["access_token"], creds["subdomain"], object_name)
     elif crm_lower == "zoho":
         return await CrmMetadataService.fetch_zoho_fields(creds["access_token"], creds["api_domain"], object_name)
+    elif crm_lower == "hubspot":
+        return await CrmMetadataService.fetch_hubspot_fields(creds["access_token"], creds.get("api_domain", "https://api.hubapi.com"), object_name)
     else:
         raise HTTPException(status_code=400, detail="Unsupported CRM")
 
@@ -69,5 +73,7 @@ async def get_filtered_preview(request: Request, current_user = Depends(get_curr
         return await CrmQueryService.execute_zendesk_query(creds, obj_name, query, limit)
     elif crm_id == "zoho":
         return await CrmQueryService.execute_zoho_query(creds, obj_name, query, headers_list, limit)
+    elif crm_id == "hubspot":
+        return await CrmQueryService.execute_hubspot_query(creds, obj_name, query, headers_list, limit)
     else:
         raise HTTPException(status_code=400, detail="Unsupported CRM Engine")

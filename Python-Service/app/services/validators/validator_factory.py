@@ -1,6 +1,6 @@
 from app.services.validators.salesforce_validator import SalesforceValidator
 from app.services.validators.zoho_validator import ZohoValidator
-from app.services.validators.zendesk_validator import ZendeskValidator
+from app.services.validators.hubspot_validator import HubspotValidator
 from app.services.validators.base_validator import BaseValidator
 
 class ValidatorFactory:
@@ -14,5 +14,7 @@ class ValidatorFactory:
             return ZohoValidator()
         elif crm == "zendesk":
             return ZendeskValidator()
+        elif crm == "hubspot":
+            return HubspotValidator
         else:
             return BaseValidator()
