@@ -43,7 +43,7 @@ class ZohoMigrator:
                     res = await client.get(f"{domain}/crm/v6/{obj_name}?page=1&per_page=200&fields={fields_str}", headers=headers)
             
             if res.status_code == 429:
-                await send_log("⚠️ Zoho Rate Limit. Pausing 30s...")
+                await send_log(" Zoho Rate Limit. Pausing 30s...")
                 await asyncio.sleep(30)
                 continue
                 
@@ -108,7 +108,7 @@ class ZohoMigrator:
 
                 res = await client.post(api_path, json=req_payload, headers=headers)
                 
-                if res.status_code in [200, 201, 202]:
+                if res.status_code in [200, 201, 202, 207]:
                     for item, z_res in zip(chunk, res.json().get("data", [])):
                         orig_record = source_records[item["originalIndex"]]
                         if z_res.get("status") == "success":
@@ -124,7 +124,7 @@ class ZohoMigrator:
                     try: error_text = res.json().get("message", res.json().get("errors", [{}])[0].get("message", res.text))
                     except: pass
                     
-                    await send_log(f"⚠️ Zoho API Rejected Batch ({res.status_code}): {error_text}")
+                    await send_log(f" Zoho API Rejected Batch ({res.status_code}): {error_text}")
                     for item in chunk:
                         orig_record = source_records[item["originalIndex"]]
                         orig_record["Target_Error"] = f"Zoho API Error: {error_text}"

@@ -152,7 +152,7 @@ async def websocket_migration(websocket: WebSocket):
 
                 async def execute_upload(payload_data, current_op, pass_name):
                     options_pass = dict(options_base)
-                    succ, err = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
+                    _, _, succ, err = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
                     all_success_data.extend(succ)
                     all_error_data.extend(err)
 

@@ -50,19 +50,36 @@ class PayloadBuilderService:
                         elif target_field.endswith('__c'): rel_name = target_field.replace('__c', '__r')
 
                     rel_ext_id = mapping.get("relationalExtIdField")
-                    if mapping.get("type") == "reference" and rel_ext_id and rel_name:
-                        target_record[f"{rel_name}.{rel_ext_id}"] = csv_val
+                    
+                    # --- SALESFORCE FIX: Handle V1 Bulk Relationships ---
+                    if mapping.get("type") == "reference" and rel_ext_id:
+                        if rel_ext_id.lower() == "id":
+                            # Native ID mapping (e.g., AccountId = "001...")
+                            target_record[target_field] = csv_val
+                        else:
+                            # External ID mapping requires nested JSON for Bulk API V1
+                            target_record[rel_name] = {rel_ext_id: csv_val}
+                            
                         if is_patch_mode: has_patch_data = True
                     else:
                         target_record[target_field] = csv_val
                 
                 elif target_crm == "zoho":
-                    # Zoho expects flat reference IDs or dicts depending on API version, keeping flat for simplicity
                     target_record[target_field] = csv_val
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
                 
                 elif target_crm == "zendesk":
-                    target_record[target_field] = csv_val
+                    # --- ZENDESK FIX: Group custom fields into the required array ---
+                    if target_field.startswith("custom_field_"):
+                        if "custom_fields" not in target_record:
+                            target_record["custom_fields"] = []
+                        
+                        # Extract just the numeric ID from the string
+                        cf_id = int(target_field.replace("custom_field_", ""))
+                        target_record["custom_fields"].append({"id": cf_id, "value": csv_val})
+                    else:
+                        target_record[target_field] = csv_val
+                        
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
 
             # Ensure External ID is present for Upserts

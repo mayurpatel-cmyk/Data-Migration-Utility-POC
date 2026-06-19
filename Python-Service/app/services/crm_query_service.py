@@ -13,6 +13,15 @@ class CrmQueryService:
         
         if query.lower().startswith("select "):
             soql = query
+            
+            
+            if " * " in soql.lower() or soql.lower().startswith("select *"):
+                # Grab top 40 fields to prevent massive URL sizes
+                safe_fields = headers_list[:40] if headers_list else ["Id", "Name"]
+                fields_str = ", ".join(safe_fields)
+                soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
+            
+            
             if "limit " not in soql.lower():
                 soql += f" LIMIT {limit}"
         else:
@@ -47,7 +56,7 @@ class CrmQueryService:
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             if is_standard:
                 if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
-                clean_query = re.sub(r'(?i)^(select.*from\s+\w+\s+where\s+)', '', query).strip()
+                clean_query = re.sub(r'(?i)^(select\s+.*\s+from\s+[a-zA-Z0-9_]+\s*(where\s+)?)', '', query).strip()
                 full_query = f"{clean_query} type:{safe_obj}" if clean_query else f"type:{safe_obj}"
                 
                 url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page={limit}"
@@ -101,6 +110,11 @@ class CrmQueryService:
             if query:
                 coql_query = query.strip()
                 if coql_query.lower().startswith("select "):
+                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
+                        safe_fields = headers_list[:40] if headers_list else ["id"]
+                        fields_str = ",".join(safe_fields)
+                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
+                        
                     # Auto-inject ID if limit is required by Zoho
                     if " where " not in coql_query.lower():
                         coql_query += " where id is not null"

@@ -499,8 +499,11 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         // --- UPGRADED: Auto-inject the custom layout instructions ---
         this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE; 
       }
-    } else if (crm === 'salesforce' || crm === 'zoho') {
+    } else if (crm === 'salesforce') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
+    } else if (crm === 'zoho') {
+      // FIX: Default to a safe WHERE condition for Zoho instead of SELECT *
+      this.customQuery = `id is not null`; 
     } else {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
@@ -791,12 +794,12 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
       
       const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       if (safeQuery === cleanBlankTemplate) {
-        safeQuery = ''; // Treat placeholder structure as clear/all records fetch
+        safeQuery = ''; 
       }
     }
 
 
-    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
+    if ((this.sourceCrmId.toLowerCase() === 'salesforce' || this.sourceCrmId.toLowerCase() === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
       const whereMatch = safeQuery.match(/where\s+(.*)/i);
       safeQuery = whereMatch ? whereMatch[1].trim() : '';
     }

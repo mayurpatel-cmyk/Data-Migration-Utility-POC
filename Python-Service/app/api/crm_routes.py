@@ -130,7 +130,8 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
         "ZohoCRM.bulk.READ", 
         "ZohoCRM.settings.FIELDS.READ",
         "ZohoCRM.settings.modules.READ",
-        "ZohoCRM.settings.ALL"
+        "ZohoCRM.settings.ALL",
+        "ZohoCRM.coql.READ"
     ]
     
     params = {
