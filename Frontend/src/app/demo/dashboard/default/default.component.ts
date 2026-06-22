@@ -1099,9 +1099,11 @@ export class DefaultComponent implements OnInit {
         this.activeJobStatus = `Initializing live connection to server...`;
         this.cdr.detectChanges();
 
-        const baseUrl = 'http://localhost:8000'; 
-        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
-        const ws = new WebSocket(wsUrl);
+        this.authService.refreshToken().subscribe({
+          next: () => {
+            const baseUrl = 'http://localhost:8000'; 
+            const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
+            const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
           this.activeJobStatus = `Connection established. Preparing payload...`;
@@ -1183,7 +1185,15 @@ export class DefaultComponent implements OnInit {
              this.cdr.detectChanges();
           }
         };
+      },
+      error: () => {
+            this.isMigrating = false;
+            this.toastr.error('Authentication expired. Please log in again.');
+            this.router.navigate(['/login']);
+          }
+        });
       }
+
     });
   }
 

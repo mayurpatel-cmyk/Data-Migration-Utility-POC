@@ -1,5 +1,6 @@
 import re
 import asyncio
+from app.services.crm_service import CrmService
 
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
@@ -9,6 +10,7 @@ class ZohoMigrator:
 
     async def extract(self, client, creds, obj_name, query, mappings, send_log):
         token = creds.get("access_token")
+        user_id = creds.get("user_id") # <-- Need this to refresh!
         domain = creds.get("api_domain", "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"): domain = f"https://{domain}"
         
@@ -35,17 +37,30 @@ class ZohoMigrator:
                     coql_query = f"select {fields_str} from {obj_name} where {coql_query}"
                     
                 paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
-                res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
-            else:
-                if page_token:
-                    res = await client.get(f"{domain}/crm/v6/{obj_name}?page_token={page_token}&per_page=200&fields={fields_str}", headers=headers)
+                
+            # --- FIX: Silent Retry Loop for Extraction ---
+            while True:
+                if query:
+                    res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": paginated_coql})
                 else:
-                    res = await client.get(f"{domain}/crm/v6/{obj_name}?page=1&per_page=200&fields={fields_str}", headers=headers)
-            
-            if res.status_code == 429:
-                await send_log(" Zoho Rate Limit. Pausing 30s...")
-                await asyncio.sleep(30)
-                continue
+                    if page_token:
+                        res = await client.get(f"{domain}/crm/v6/{obj_name}?page_token={page_token}&per_page=200&fields={fields_str}", headers=headers)
+                    else:
+                        res = await client.get(f"{domain}/crm/v6/{obj_name}?page=1&per_page=200&fields={fields_str}", headers=headers)
+                
+                # Catch Expiration Mid-Extract
+                if res.status_code == 401:
+                    await send_log("⚠️ Zoho token expired during extraction. Silently refreshing...")
+                    token = await CrmService.refresh_crm_token(user_id, "zoho", "source")
+                    headers["Authorization"] = f"Zoho-oauthtoken {token}"
+                    continue # Retry the request with the new token
+                
+                if res.status_code == 429:
+                    await send_log("⚠️ Zoho Rate Limit. Pausing 30s...")
+                    await asyncio.sleep(30)
+                    continue
+                
+                break # Exit retry loop on success or hard error
                 
             res.raise_for_status()
             data = res.json()
@@ -70,11 +85,13 @@ class ZohoMigrator:
         await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
         return source_records
 
+
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, [], []
 
         target_object = options["targetObject"]
         token = options["token"]
+        user_id = options.get("userId") # <-- Need this to refresh!
         domain = options["instance_url"].rstrip('/')
         source_records = options["sourceRecords"]
 
@@ -91,22 +108,29 @@ class ZohoMigrator:
         await send_log(f"[{normalized_obj}] {pass_name}: Injecting data stream into Zoho CRM...")
         headers = {"Authorization": f"Zoho-oauthtoken {token}", "Content-Type": "application/json"}
         
-        # Zoho max payload size is 100 records
         chunks = list(chunk_dataset(payload, 100))
-        
-        # Zoho handles upserts via the /upsert endpoint
         api_path = f"{domain}/crm/v6/{normalized_obj}/upsert" if op_mode == "upsert" else f"{domain}/crm/v6/{normalized_obj}"
 
         for chunk in chunks:
             zoho_data_rows = [c["targetRecord"] for c in chunk]
             
             try:
-                # Upsert requires passing the duplicate_check_fields
                 req_payload = {"data": zoho_data_rows}
                 if op_mode == "upsert" and options.get("targetExtIdField"):
                     req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
-                res = await client.post(api_path, json=req_payload, headers=headers)
+                # --- FIX: Silent Retry Loop for Uploads ---
+                while True:
+                    res = await client.post(api_path, json=req_payload, headers=headers)
+                    
+                    # Catch Expiration Mid-Upload
+                    if res.status_code == 401:
+                        await send_log("⚠️ Zoho token expired mid-migration. Silently refreshing...")
+                        token = await CrmService.refresh_crm_token(user_id, "zoho", "target")
+                        headers["Authorization"] = f"Zoho-oauthtoken {token}"
+                        continue # Retry the exact same chunk
+                        
+                    break # Success or hard error
                 
                 if res.status_code in [200, 201, 202, 207]:
                     for item, z_res in zip(chunk, res.json().get("data", [])):
@@ -124,7 +148,7 @@ class ZohoMigrator:
                     try: error_text = res.json().get("message", res.json().get("errors", [{}])[0].get("message", res.text))
                     except: pass
                     
-                    await send_log(f" Zoho API Rejected Batch ({res.status_code}): {error_text}")
+                    await send_log(f"⚠️ Zoho API Rejected Batch ({res.status_code}): {error_text}")
                     for item in chunk:
                         orig_record = source_records[item["originalIndex"]]
                         orig_record["Target_Error"] = f"Zoho API Error: {error_text}"

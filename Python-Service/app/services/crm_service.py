@@ -78,6 +78,23 @@ class CrmService:
                 })
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")
+
+            elif crm == "hubspot":
+                res = await client.post("https://api.hubapi.com/oauth/v1/token", data={
+                    "grant_type": "refresh_token",
+                    "client_id": os.getenv("HS_CLIENT_ID"),
+                    "client_secret": os.getenv("HS_CLIENT_SECRET"),
+                    "refresh_token": refresh_token
+                })
+                if res.status_code == 200:
+                    new_access_token = res.json().get("access_token")
+                    # HubSpot also rotates the refresh_token, so update both!
+                    new_refresh_token = res.json().get("refresh_token")
+                    supabase.table("crm_connections").update({
+                        "access_token": new_access_token,
+                        "refresh_token": new_refresh_token
+                    }).eq("id", creds["id"]).execute()
+                    return new_access_token
                     
         if new_access_token:
             # Save new token back to database
