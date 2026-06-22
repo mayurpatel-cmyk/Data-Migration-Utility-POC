@@ -7,7 +7,7 @@
           <label class="form-label fw-bold">1. Upload Raw Data (.csv, .xlsx)</label>
           <input type="file" class="form-control border-primary" accept=".csv, .xlsx" (change)="onFileSelected($event)">
 
-          @if (selectedFile?.name?.endsWith('.xlsx') && selectedFile?.size > 50000000) {
+          @if (selectedFile && selectedFile.name.endsWith('.xlsx') && selectedFile.size > 50000000) {
              <div class="text-warning small mt-2 fw-bold d-flex align-items-center gap-1">
                <i class="feather icon-alert-triangle"></i> Excel > 50MB detected. CSV processes faster!
              </div>
@@ -30,7 +30,7 @@
         </div>
 
         <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
-          <label class="form-label fw-bold">2. Target Salesforce Object</label>
+          <label class="form-label fw-bold">2. Target {{ targetCrmId | titlecase }} Object</label>
 
           <div class="position-relative" (click)="$event.stopPropagation()">
             <div class="form-select cursor-pointer bg-white" [class.text-muted]="!selectedObject"
@@ -92,18 +92,18 @@
           @if (sfFields.length === 0 || isLoadingObjects) {
           <div class="alert alert-secondary d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-secondary-subtle">
             <span class="spinner-border spinner-border-sm me-2 text-primary"></span>
-            <span class="fw-bold text-secondary small">Loading Salesforce Rules...</span>
+            <span class="fw-bold text-secondary small">Loading {{ targetCrmId | titlecase }} Rules...</span>
           </div>
         } @else if (getTotalRequiredFieldsCount() === 0) {
           <div class="alert alert-info d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-info-subtle">
             <i class="feather icon-info fs-5 me-2 text-info"></i>
-            <span class="fw-bold text-info-emphasis small">There are no strictly required fields for this Salesforce object.</span>
+            <span class="fw-bold text-info-emphasis small">There are no strictly required fields for this {{ targetCrmId | titlecase }} object.</span>
           </div>
         } @else if (getMissingRequiredFields().length > 0) {
           <div class="alert alert-warning d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-warning-subtle">
             <i class="feather icon-alert-triangle fs-4 me-3 text-warning"></i>
             <div>
-              <h6 class="fw-bold mb-1 text-warning-emphasis" style="font-size: 0.85rem;">Salesforce Strictly Requires These Fields:</h6>
+              <h6 class="fw-bold mb-1 text-warning-emphasis" style="font-size: 0.85rem;">{{ targetCrmId | titlecase }} Strictly Requires These Fields:</h6>
               <div class="d-flex flex-wrap gap-1">
                 @for (reqField of getMissingRequiredFields(); track reqField) {
                   <span class="badge bg-warning text-dark border border-warning-subtle shadow-sm">{{ reqField }}</span>
@@ -139,8 +139,8 @@
                     <span>CSV Header</span>
                   </div>
                 </th>
-                <th width="35%" class="py-3">Salesforce Field Mapping</th>
-                <th width="35%" class="py-3">Salesforce Rules & Limits</th>
+                <th width="35%" class="py-3">{{ targetCrmId | titlecase }} Field Mapping</th>
+                <th width="35%" class="py-3">{{ targetCrmId | titlecase }} Rules & Limits</th>
               </tr>
             </thead>
             <tbody>
@@ -219,7 +219,7 @@
                                 <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectParentField(mapping, 'Id')"
                                   [class.bg-light]="mapping.relationalExtIdField === 'Id'">
                                   <span class="fw-bold">Id</span>
-                                  <div class="small text-muted" style="font-family: monospace;">Standard Salesforce ID</div>
+                                 <div class="small text-muted" style="font-family: monospace;">Standard {{ targetCrmId | titlecase }} ID</div>
                                 </div>
                                 <hr class="my-1">
                                 @for (pField of getFilteredParentFields(mapping); track pField.name) {
@@ -446,8 +446,7 @@
               <table class="table table-sm table-bordered align-middle mb-0" style="min-width: 800px;">
                <thead class="table-light position-sticky top-0 shadow-sm" style="z-index: 10;">
                   <tr>
-                    <th width="30%" class="text-danger fw-bold py-2 ps-3 align-middle bg-white">Salesforce Error Rule</th>
-
+                    <th width="30%" class="text-danger fw-bold py-2 ps-3 align-middle bg-white">{{ targetCrmId | titlecase }} Error Rule</th>
                     @for (mapping of selectedJob.mappings; track mapping.csvField) {
                     <th class="py-2 align-middle transition-all" style="min-width: 180px;"
                         [class.bg-danger-subtle]="hasErrorsInColumn(selectedJob, mapping.csvField)"

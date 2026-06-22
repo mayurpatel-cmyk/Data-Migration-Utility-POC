@@ -373,7 +373,7 @@ class CrmMetadataService:
                         "name": api_name,
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
-                        "required": f.get("system_mandatory", False) or f.get("required", False)
+                        "isRequired": f.get("system_mandatory", False) or f.get("required", False)
                     })
 
                 # 2. Fetch Sample Data
@@ -396,7 +396,7 @@ class CrmMetadataService:
                 return {
                     "headers": select_fields_list[:12],
                     "sampleRecords": sample_records,
-                    "fields": sorted(parsed_fields, key=lambda x: x["required"], reverse=True)
+                    "fields": sorted(parsed_fields, key=lambda x: x["isRequired"], reverse=True)
                 }
 
         except httpx.HTTPStatusError as e:

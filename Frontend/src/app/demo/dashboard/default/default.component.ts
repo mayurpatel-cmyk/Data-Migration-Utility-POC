@@ -9,7 +9,7 @@ import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
-import { firstValueFrom } from 'rxjs'; // <-- Required for sequential async/await calls
+import { firstValueFrom } from 'rxjs'; 
 import { DataTransferService } from 'src/app/services/data-transfer.service';
 
 interface MappingMeta {
@@ -55,7 +55,6 @@ export class DefaultComponent implements OnInit {
   private authService = inject(AuthService);
   private dataTransfer = inject(DataTransferService);
 
-
   migrationQueue: JobQueueItem[] = [];
 
   currentStep: number = 2;
@@ -96,97 +95,92 @@ export class DefaultComponent implements OnInit {
 
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
-  displayName = signal('Salesforce User');
+  displayName = signal('CRM User');
 
-  // --- NEW: Real-Time UI State Trackers ---
+  // --- Real-Time UI State Trackers ---
   activeJobStatus: string = '';
   completedJobsCount: number = 0;
 
+  targetCrmId: string = 'salesforce';
+  sourceCrmId: string = 'csv';
 
- ngOnInit() {
-  const transferred = this.dataTransfer.getValidatedData();
+  ngOnInit() {
+    const navState = history.state;
+    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+    this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot') || 'csv';
 
-  // Check if we have an array of jobs transferred from Validation
-  if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
-    console.log("📥 Received Clean Data from Validation:", transferred.data);
+    localStorage.setItem('target_crm_slot', this.targetCrmId);
+    localStorage.setItem('source_crm_slot', this.sourceCrmId);
 
-    const newWorkbook = utils.book_new();
-    this.availableSheets = [];
+    const transferred = this.dataTransfer.getValidatedData();
 
-    // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
-    transferred.data.forEach((job: any, index: number) => {
-      const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
-      const worksheet = utils.json_to_sheet(job.results.validRecords);
+    // Check if we have an array of jobs transferred from Validation
+    if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
 
-      utils.book_append_sheet(newWorkbook, worksheet, sheetName);
-      this.availableSheets.push(sheetName);
-    });
+      const newWorkbook = utils.book_new();
+      this.availableSheets = [];
 
-    // Bind the new workbook and file to the UI
-    this.workbook = newWorkbook;
-    this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
+      transferred.data.forEach((job: any, index: number) => {
+        const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
+        const worksheet = utils.json_to_sheet(job.results.validRecords);
 
-    // --- ✨ MAGIC: AUTO-BUILD THE ENTIRE MIGRATION QUEUE ✨ ---
-
-    this.migrationQueue = []; // Reset just in case
-
-    transferred.data.forEach((job: any, index: number) => {
-      // Reformat the simple mappings from Validation into the complex MappingMeta needed by Migration
-      const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
-        csvField: m.csvField,
-        sfField: m.sfField,
-        type: m.type,
-        // Note: Relationship lookup fields won't be fully auto-resolved here because 
-        // we don't have the parent object data from Step 1, but standard fields will map perfectly.
-        relationalExtIdField: '',
-        parentObjectName: undefined
-      }));
-
-      // Push directly into the execution queue
-      this.migrationQueue.push({
-        sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
-        targetObject: job.targetObject,
-        csvHeaders: Object.keys(job.results.validRecords[0] || {}),
-        mappings: enhancedMappings,
-        operationMode: 'insert', // Default to insert, user can change later if needed
-        targetExtIdField: job.dedupeKey || ''
+        utils.book_append_sheet(newWorkbook, worksheet, sheetName);
+        this.availableSheets.push(sheetName);
       });
-    });
 
-    // 2. We skip Step 2 and Step 3 completely!
-    // Take them directly to the final review screen
-    this.currentStep = 3;
-    this.selectedObject = '';
+      // Bind the new workbook and file to the UI
+      this.workbook = newWorkbook;
+      this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-    this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
-    this.cdr.detectChanges();
+      // --- AUTO-BUILD THE ENTIRE MIGRATION QUEUE ---
+      this.migrationQueue = []; 
 
-  } else {
-    // Only show pop-up instructions if arriving manually
+      transferred.data.forEach((job: any, index: number) => {
+        const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
+          csvField: m.csvField,
+          sfField: m.sfField,
+          type: m.type,
+          relationalExtIdField: '',
+          parentObjectName: undefined
+        }));
+
+        this.migrationQueue.push({
+          sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
+          targetObject: job.targetObject,
+          csvHeaders: Object.keys(job.results.validRecords[0] || {}),
+          mappings: enhancedMappings,
+          operationMode: 'insert', 
+          targetExtIdField: job.dedupeKey || ''
+        });
+      });
+
+      this.currentStep = 3;
+      this.selectedObject = '';
+
+      this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
+      this.cdr.detectChanges();
+
+    } else {
+      setTimeout(() => {
+        this.showMigrationInstructions();
+      }, 0);
+    }
+
     setTimeout(() => {
-      this.showMigrationInstructions();
+      if (this.authService.isLoggedIn()) {
+        this.loadTargetObjects();
+      } else {
+        this.router.navigate(['/login']);
+      }
     }, 0);
   }
 
-  // --- UPDATED AUTHENTICATION LOGIC ---
-  // We no longer need to intercept Salesforce OAuth tokens from the URL.
-  // Just check if the user has a valid session from Supabase.
-  setTimeout(() => {
-    if (this.authService.isLoggedIn()) {
-      // User is logged in via Supabase, proceed to load necessary data
-      this.loadSalesforceObjects();
-    } else {
-      // User is not logged in, boot them to the login screen
-      this.router.navigate(['/login']);
-    }
-  }, 0);
-}
-
-  private loadSalesforceObjects() {
+  private loadTargetObjects() {
     this.isLoadingObjects = true;
     this.cdr.detectChanges();
 
-     this.migrationService.getAllObjects('salesforce').subscribe({
+    this.migrationService.getAllObjects(this.targetCrmId, 'target').subscribe({
       next: (objects) => {
         this.sfObjects = objects;
         setTimeout(() => {
@@ -204,7 +198,8 @@ export class DefaultComponent implements OnInit {
           this.toastr.error('Session expired. Please log in again.');
           this.authService.logout();
         } else {
-          this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
+          // FIX: Removed invalid bitwise | operator that crashed the TypeScript build!
+          this.toastr.error(`Could not load objects for ${this.targetCrmId.toUpperCase()}.`, 'Connection Error');
         }
       }
     });
@@ -297,7 +292,7 @@ export class DefaultComponent implements OnInit {
 
   getParentFieldLabel(mapping: MappingMeta, fieldName?: string): string {
     if (!fieldName) return '';
-    if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
+    if (fieldName === 'Id') return `Id (Standard ${this.targetCrmId.toUpperCase()} ID)`;
     if (!mapping.parentObjectName) return fieldName;
     const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
     const field = parentFields.find((f: any) => f.name === fieldName);
@@ -447,12 +442,8 @@ export class DefaultComponent implements OnInit {
 
   moveQueueItemUp(index: number) {
     if (index > 0) {
-      // Remove the item from its current position
       const item = this.migrationQueue.splice(index, 1)[0];
-      // Insert it one position higher
       this.migrationQueue.splice(index - 1, 0, item);
-
-      // Reset previews to prevent UI glitches when rows shift
       this.previewingItemIndex = null;
       this.showPreview = false;
       this.cdr.detectChanges();
@@ -461,19 +452,15 @@ export class DefaultComponent implements OnInit {
 
   moveQueueItemDown(index: number) {
     if (index < this.migrationQueue.length - 1) {
-      // Remove the item from its current position
       const item = this.migrationQueue.splice(index, 1)[0];
-      // Insert it one position lower
       this.migrationQueue.splice(index + 1, 0, item);
-
-      // Reset previews to prevent UI glitches when rows shift
       this.previewingItemIndex = null;
       this.showPreview = false;
       this.cdr.detectChanges();
     }
   }
 
-  // --- 💾 SAVED MAPPING TEMPLATES ---
+  // --- SAVED MAPPING TEMPLATES ---
   async saveMappingTemplate() {
     const activeMappings = this.mappings.filter(m => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -502,18 +489,17 @@ export class DefaultComponent implements OnInit {
         mappings: activeMappings
       };
 
-      let templates = JSON.parse(localStorage.getItem('sf_mapping_templates') || '[]');
-      // Overwrite if name already exists
+      let templates = JSON.parse(localStorage.getItem(`${this.targetCrmId}_mapping_templates`) || '[]');
       templates = templates.filter((t: any) => t.name !== templateName);
       templates.push({ name: templateName, data: template });
-      localStorage.setItem('sf_mapping_templates', JSON.stringify(templates));
+      localStorage.setItem(`${this.targetCrmId}_mapping_templates`, JSON.stringify(templates));
 
       this.toastr.success(`Template "${templateName}" saved successfully!`, 'Template Saved');
     }
   }
 
   async loadMappingTemplate() {
-    const templates = JSON.parse(localStorage.getItem('sf_mapping_templates') || '[]');
+    const templates = JSON.parse(localStorage.getItem(`${this.targetCrmId}_mapping_templates`) || '[]');
     const objectTemplates = templates.filter((t: any) => t.data.targetObject === this.selectedObject);
 
     if (objectTemplates.length === 0) {
@@ -538,10 +524,8 @@ export class DefaultComponent implements OnInit {
       this.operationMode = t.operationMode;
       this.targetExtIdField = t.targetExtIdField;
 
-      // Clear existing mappings
       this.mappings.forEach(m => { m.sfField = ''; m.parentObjectName = undefined; m.relationalExtIdField = ''; });
 
-      // Apply saved mappings
       t.mappings.forEach((savedMap: any) => {
         const match = this.mappings.find(m => m.csvField === savedMap.csvField);
         if (match) {
@@ -549,7 +533,6 @@ export class DefaultComponent implements OnInit {
           match.parentObjectName = savedMap.parentObjectName;
           match.relationalExtIdField = savedMap.relationalExtIdField;
 
-          // Trigger parent field load if it was a relational mapping
           if (match.parentObjectName) {
             this.onSfFieldChange(match);
           }
@@ -603,7 +586,7 @@ export class DefaultComponent implements OnInit {
       let matchCount = 0;
       let memoryCount = 0;
 
-      const savedMappingData = localStorage.getItem(`sf_map_${this.selectedObject}`);
+      const savedMappingData = localStorage.getItem(`${this.targetCrmId}_map_${this.selectedObject}`);
       const pastMappings = savedMappingData ? JSON.parse(savedMappingData) : {};
 
       const normalizeString = (str: string) => {
@@ -686,10 +669,9 @@ export class DefaultComponent implements OnInit {
       }
     });
   }
- 
+
   private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
-    // 1. First call uses "objectName"
-    this.migrationService.getObjectFields('salesforce', objectName).subscribe({
+    this.migrationService.getObjectFields(this.targetCrmId, objectName, 'target').subscribe({
       next: (response: any) => {
         setTimeout(() => {
           const fieldsArray = response.fields ? response.fields : response;
@@ -702,8 +684,7 @@ export class DefaultComponent implements OnInit {
               if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
                 m.isLoadingParentFields = true;
                 
-                // 2. Second call (inside the loop) uses "m.parentObjectName"
-                this.migrationService.getObjectFields('salesforce', m.parentObjectName).subscribe({
+                this.migrationService.getObjectFields(this.targetCrmId, m.parentObjectName, 'target').subscribe({
                   next: (pRes: any) => {
                     setTimeout(() => {
                       const pFieldsArray = pRes.fields ? pRes.fields : pRes;
@@ -757,7 +738,7 @@ export class DefaultComponent implements OnInit {
       if (!this.parentObjectFieldsCache[parentObj]) {
         setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
 
-        this.migrationService.getObjectFields('salesforce', parentObj).subscribe({
+        this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
           next: (response: any) => {
             setTimeout(() => {
               const fieldsArray = response.fields ? response.fields : response;
@@ -796,7 +777,7 @@ export class DefaultComponent implements OnInit {
 
     const hasSfId = activeMappings.some((m) => m.sfField === 'Id');
     if (this.operationMode === 'delete' && !hasSfId) {
-      this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+      this.toastr.error(`Delete operation requires the ${this.targetCrmId.toUpperCase()} "Id" field to be mapped.`, 'Missing ID');
       return;
     }
 
@@ -828,7 +809,7 @@ export class DefaultComponent implements OnInit {
 
     const mapToSave: any = {};
     activeMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
-    localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+    localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
     this.migrationQueue.push({
       sheetName: this.selectedSheetName,
@@ -951,7 +932,7 @@ export class DefaultComponent implements OnInit {
 
       const hasSfId = this.confirmedMappings.some((m) => m.sfField === 'Id');
       if (this.operationMode === 'delete' && !hasSfId) {
-        this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+        this.toastr.error(`Delete operation requires the ${this.targetCrmId.toUpperCase()} "Id" field to be mapped.`, 'Missing ID');
         return;
       }
       if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
@@ -981,7 +962,7 @@ export class DefaultComponent implements OnInit {
 
       const mapToSave: any = {};
       this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
-      localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+      localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
       this.migrationQueue.push({
         sheetName: this.selectedSheetName,
@@ -1016,34 +997,28 @@ export class DefaultComponent implements OnInit {
       return;
     }
 
-    // Create the CSV Headers
-    let csvContent = 'Target Object,Source Sheet,Operation Mode,External ID Key,CSV Column,Salesforce Field,Relational Lookup Key\n';
+    let csvContent = 'Target Object,Source Sheet,Operation Mode,External ID Key,CSV Column,Destination Field,Relational Lookup Key\n';
 
-    // Loop through the queue and extract every mapped field
     this.migrationQueue.forEach(job => {
       const activeMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
 
       activeMappings.forEach(m => {
-        // Handle potential commas in the CSV column headers to prevent formatting breaks
         const safeCsvCol = `"${m.csvField.replace(/"/g, '""')}"`;
         const safeSfField = `"${m.sfField.replace(/"/g, '""')}"`;
         const relation = m.type === 'reference' && m.relationalExtIdField ? `Linked via ${m.relationalExtIdField}` : 'N/A';
         const safeExtId = job.targetExtIdField || 'N/A';
 
-        // Append the row
         csvContent += `"${job.targetObject}","${job.sheetName}","${job.operationMode}","${safeExtId}",${safeCsvCol},${safeSfField},"${relation}"\n`;
       });
     });
 
-    // Trigger the browser download
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
 
-    // Name the file with today's date for good record-keeping
     const dateStr = new Date().toISOString().split('T')[0];
-    link.download = `Salesforce_Mapping_Receipt_${dateStr}.csv`;
+    link.download = `${this.targetCrmId.toUpperCase()}_Mapping_Receipt_${dateStr}.csv`;
 
     link.click();
     window.URL.revokeObjectURL(url);
@@ -1052,11 +1027,10 @@ export class DefaultComponent implements OnInit {
   }
 
   // --- UPGRADED: Sequential Batch Processing ---
- startMigration() {
+  startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
     
-    // Safety checks
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
@@ -1071,11 +1045,9 @@ export class DefaultComponent implements OnInit {
       });
     }
 
-    const estimatedBatches = Math.ceil(totalRows / this.batchSize);
     const isDeleteOnly = this.isDeleteOnlyBatch;
     const hasDelete = this.hasDeleteInBatch;
 
-    // Build the SweetAlert popup
     const popupTitle = isDeleteOnly
       ? '<strong class="text-danger">Ready for Data Deletion?</strong>'
       : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
@@ -1122,58 +1094,55 @@ export class DefaultComponent implements OnInit {
     }).then((result) => {
       if (result.isConfirmed) {
         
-        // 1. Setup UI for loading state
         this.isMigrating = true;
         this.completedJobsCount = 0;
         this.activeJobStatus = `Initializing live connection to server...`;
         this.cdr.detectChanges();
 
-        // 2. Format the WebSocket URL (converts http:// to ws:// dynamically)
-        // Adjust the base URL below if your environments/config is different
         const baseUrl = 'http://localhost:8000'; 
         const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
-        
-        // 3. Connect to Python Backend
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
           this.activeJobStatus = `Connection established. Preparing payload...`;
           this.cdr.detectChanges();
 
-          // Safely grab the JWT Token
           const token = localStorage.getItem('supabase_token') || '';
 
-          // Build the final payload. Python expects authToken and the queue.
-          // Note: Be sure to pass in the actual source/target CRMs if they are dynamic!
           const payload = {
             authToken: token,
-            queue: this.migrationQueue.map(job => ({
-                ...job,
-                sourceCrmId: 'zendesk',   // <-- UPDATE THIS if dynamic
-                targetCrmId: 'salesforce', // <-- UPDATE THIS if dynamic
-                batchSize: this.batchSize
-            }))
+            queue: this.migrationQueue.map(job => {
+                let parsedSourceRecords = undefined;
+
+                if (this.sourceCrmId === 'csv' && this.workbook) {
+                    const worksheet = this.workbook.Sheets[job.sheetName];
+                    parsedSourceRecords = utils.sheet_to_json(worksheet);
+                }
+
+                return {
+                    ...job,
+                    sourceCrmId: this.sourceCrmId, 
+                    targetCrmId: this.targetCrmId, 
+                    batchSize: this.batchSize,
+                    sourceRecords: parsedSourceRecords
+                };
+            })
           };
 
-          // Send it to Python
           ws.send(JSON.stringify(payload));
         };
 
-        // 4. Listen for Live Streaming Updates from Python
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
           
-          // Update the pulsing UI text with Python's exact log message
           this.activeJobStatus = data.log;
           
-          // Progress bar pseudo-logic (You can refine this based on your specific messages)
           if (data.log.includes('Completed:')) {
             this.completedJobsCount++;
           }
           
           this.cdr.detectChanges();
 
-          // 5. Handle the Final Completion Payload
           if (data.status === 'Finished' || data.status === 'Failed') {
               this.isMigrating = false;
               
@@ -1192,17 +1161,14 @@ export class DefaultComponent implements OnInit {
                   this.toastr.error('Migration encountered a fatal error. Check logs.', 'Failed');
               }
 
-              // Move to the summary screen
               this.currentStep = 5;
               this.autoNavigate();
               this.cdr.detectChanges();
               
-              // Gracefully close the socket
               ws.close();
           }
         };
 
-        // 6. Handle Disconnects/Crashes safely
         ws.onerror = (error) => {
           this.isMigrating = false;
           this.toastr.error('Lost connection to the migration server.', 'Network Error');
@@ -1220,12 +1186,13 @@ export class DefaultComponent implements OnInit {
       }
     });
   }
+
   showMigrationInstructions() {
     Swal.fire({
-      title: '<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>',
+      title: `<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>`,
       html: `
         <div class="text-start fs-6 text-muted mt-2">
-          <p class="mb-2">Please review these critical guidelines to ensure a successful Salesforce migration. <strong>Scroll to read all points.</strong></p>
+          <p class="mb-2">Please review these critical guidelines to ensure a successful ${this.targetCrmId.toUpperCase()} migration. <strong>Scroll to read all points.</strong></p>
           
           <div style="max-height: 45vh; overflow-y: auto; overflow-x: hidden; padding-right: 10px;" class="mb-3 border rounded shadow-sm bg-light">
             <ul class="list-group list-group-flush">
@@ -1242,22 +1209,22 @@ export class DefaultComponent implements OnInit {
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-list text-info me-2"></i>
-                <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in Salesforce (they are case-sensitive).
+                <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in ${this.targetCrmId.toUpperCase()} (they are case-sensitive).
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-calendar text-danger me-2"></i>
-                <strong>4. Date & Time Formats:</strong> Salesforce prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
+                <strong>4. Date & Time Formats:</strong> ${this.targetCrmId.toUpperCase()} prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-key text-success me-2"></i>
-                <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or Salesforce ID column to prevent duplicate records.
+                <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or ${this.targetCrmId.toUpperCase()} ID column to prevent duplicate records.
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-alert-circle text-warning me-2"></i>
-                <strong>6. Required Fields:</strong> Check Salesforce to ensure you are mapping all universally required fields for your target object.
+                <strong>6. Required Fields:</strong> Check ${this.targetCrmId.toUpperCase()} to ensure you are mapping all universally required fields for your target object.
               </li>
               
               <li class="list-group-item bg-white py-3">
@@ -1281,7 +1248,7 @@ export class DefaultComponent implements OnInit {
 
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-users text-info me-2"></i>
-                <strong>10. Record Ownership:</strong> Want someone else to own these records? Ensure you map the <code>OwnerId</code> column with the correct Salesforce User IDs. If left blank, you will own all migrated records.
+                <strong>10. Record Ownership:</strong> Want someone else to own these records? Ensure you map the <code>OwnerId</code> column with the correct User IDs. If left blank, you will own all migrated records.
               </li>
 
               <li class="list-group-item bg-white py-3">
@@ -1291,7 +1258,7 @@ export class DefaultComponent implements OnInit {
 
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-map-pin text-danger me-2"></i>
-                <strong>12. State & Country Picklists:</strong> If your Salesforce org has State and Country Picklists enabled, your CSV data must perfectly match the configured Integration Values or ISO Codes, or the rows will fail.
+                <strong>12. State & Country Picklists:</strong> If your ${this.targetCrmId.toUpperCase()} org has State and Country Picklists enabled, your CSV data must perfectly match the configured Integration Values or ISO Codes, or the rows will fail.
               </li>
 
               <li class="list-group-item bg-white py-3">
@@ -1383,7 +1350,6 @@ export class DefaultComponent implements OnInit {
     this.previewHeaders = [];
     this.previewingItemIndex = null;
 
-    // reset real time vars
     this.activeJobStatus = '';
     this.completedJobsCount = 0;
 
@@ -1401,7 +1367,7 @@ export class DefaultComponent implements OnInit {
         const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
         if (!isParentInQueue) {
-          return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in Salesforce, or add a ${parentName} sheet to your queue.`;
+          return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in your Target CRM, or add a ${parentName} sheet to your queue.`;
         }
       }
     }

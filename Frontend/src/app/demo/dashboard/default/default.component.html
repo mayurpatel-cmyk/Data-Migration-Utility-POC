@@ -57,7 +57,7 @@
 
         <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <div class="form-group mb-0">
-            <label class="form-label fw-bold">2. Select Target Salesforce Object</label>
+            <label class="form-label fw-bold">2. Select Target {{ targetCrmId | titlecase }} Object</label>
 
             <div class="position-relative" (click)="$event.stopPropagation()">
               <div class="form-select cursor-pointer bg-white"
@@ -122,7 +122,7 @@
             <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">
               Update
             </label>
-            <div class="text-muted small">Updates via SF Id or mapped Ext ID.</div>
+            <div class="text-muted small">Updates via CRM Id or mapped Ext ID.</div>
           </div>
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert"
@@ -138,7 +138,7 @@
             <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">
               Delete
             </label>
-            <div class="text-muted small">Removes mapped SF Id records.</div>
+            <div class="text-muted small">Removes mapped CRM Id records.</div>
           </div>
         </div>
 
@@ -309,7 +309,7 @@
         <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative"
           [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
-            Target Salesforce Object</label>
+            Target {{ targetCrmId | titlecase }} Object</label>
 
           <div class="position-relative" (click)="$event.stopPropagation()">
             <div class="form-select cursor-pointer bg-white border-secondary"
@@ -398,16 +398,6 @@
         </div>
         <div class="d-flex flex-wrap gap-2">
 
-          <!-- <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2 shadow-sm"
-                  (click)="loadMappingTemplate()" [disabled]="isLoadingFields">
-            <i class="feather icon-download"></i> Load Template
-          </button>
-          
-          <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
-                  (click)="saveMappingTemplate()" [disabled]="getConfirmedCount(mappings) === 0">
-            <i class="feather icon-save"></i> Save Template
-          </button> -->
-
           @if (getConfirmedCount(mappings) > 0) {
           <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
             (click)="clearAllMappings()">
@@ -427,7 +417,7 @@
           <thead class="table-light position-sticky top-0" style="z-index: 105;">
             <tr>
               <th width="45%" class="py-3 ps-4">CSV Column </th>
-              <th width="55%" class="py-3">Salesforce Field Mapping</th>
+              <th width="55%" class="py-3">{{ targetCrmId | titlecase }} Field Mapping</th>
             </tr>
           </thead>
           <tbody>
@@ -535,7 +525,7 @@
                         (click)="selectParentField(mapping, 'Id')"
                         [class.bg-light]="mapping.relationalExtIdField === 'Id'">
                         <span class="fw-bold">Id</span>
-                        <div class="small text-muted" style="font-family: monospace;">Standard Salesforce ID</div>
+                        <div class="small text-muted" style="font-family: monospace;">Standard {{ targetCrmId | titlecase }} ID</div>
                       </div>
 
                       <hr class="my-1">
@@ -621,7 +611,7 @@
       } @else {
       <div class="text-center p-5 border rounded bg-light border-dashed mb-4">
         <i class="feather icon-mouse-pointer text-primary opacity-50" style="font-size: 3rem;"></i>
-        <h5 class="mt-3 text-muted fw-normal">Select a Target Salesforce Object from the dropdown above to continue
+        <h5 class="mt-3 text-muted fw-normal">Select a Target {{ targetCrmId | titlecase }} Object from the dropdown above to continue
           mapping.</h5>
       </div>
       }
@@ -638,7 +628,7 @@
             <thead class="table-light">
               <tr>
                 <th width="25%" class="py-3">Excel Sheet</th>
-                <th width="25%" class="py-3">Salesforce Object</th>
+                <th width="25%" class="py-3">Target Object</th>
                 <th width="20%" class="py-3">Mapped Fields</th>
                 <th width="30%" class="text-end py-3">Actions</th>
               </tr>
@@ -775,6 +765,7 @@
   </div>
 </div>
 }
+
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 4: Review Final Migration Plan">
@@ -835,7 +826,7 @@
                 <tr>
                   <th width="45%" class="ps-4 border-0 py-3">Source Column </th>
                   <th width="10%" class="text-center border-0 py-3"></th>
-                  <th width="45%" class="border-0 py-3">Destination Field (Salesforce)</th>
+                  <th width="45%" class="border-0 py-3">Destination Field ({{ targetCrmId | titlecase }})</th>
                 </tr>
               </thead>
               <tbody>
@@ -907,7 +898,7 @@
         <div class="animation-container py-3">
           <i class="feather icon-check-circle text-success" style="font-size: 5rem;"></i>
           <h2 class="text-success mt-3 fw-bold">{{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Successful!</h2>
-          <p class="text-muted fs-5 mt-2">Excellent! All batches processed in Salesforce without any issues.</p>
+          <p class="text-muted fs-5 mt-2">Excellent! All batches processed in {{ targetCrmId | titlecase }} without any issues.</p>
         </div>
         }
 
@@ -962,7 +953,7 @@
             <thead class="table-danger sticky-top">
               <tr>
                 <th width="30%" class="text-danger-emphasis fw-bold p-3">Record Identifier</th>
-                <th width="70%" class="text-danger-emphasis fw-bold p-3">Salesforce Error Description</th>
+                <th width="70%" class="text-danger-emphasis fw-bold p-3">{{ targetCrmId | titlecase }} Error Description</th>
               </tr>
             </thead>
             <tbody>

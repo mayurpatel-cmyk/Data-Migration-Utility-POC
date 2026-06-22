@@ -107,10 +107,14 @@ async def websocket_migration(websocket: WebSocket):
         source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() 
         target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() 
         
-        source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
-        target_creds = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
+        if source_crm != "csv":
+            source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
+            source_migrator = MIGRATORS.get(source_crm)
+        else:
+            source_creds = None
+            source_migrator = None
 
-        source_migrator = MIGRATORS.get(source_crm)
+        target_creds = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
         target_migrator = MIGRATORS.get(target_crm)
 
         async def send_log(msg: str, status: str = "Running"):
@@ -134,7 +138,11 @@ async def websocket_migration(websocket: WebSocket):
                 source_records = []
 
                 session_id = job.get("sessionId")
-                if session_id:
+                if source_crm == "csv":
+                    source_records = job.get("sourceRecords", [])
+                    await send_log(f"[{target_object}] Loaded {len(source_records)} records from CSV payload.")
+                    
+                elif session_id:
                     db_path = get_db_path(session_id)
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
@@ -142,10 +150,10 @@ async def websocket_migration(websocket: WebSocket):
                     source_records = [json.loads(row[0]) for row in cursor.fetchall()]
                     conn.close()
                     await send_log(f"[{target_object}] Loaded {len(source_records)} valid records from staging.")
+                    
                 else:
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
                     source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log)
-
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,
                     "token": target_creds.get("access_token"), "instance_url": target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain"),

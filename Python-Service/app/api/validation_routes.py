@@ -80,6 +80,9 @@ async def validate_batch(
     sheet_name = payload.get("sheetName", "")
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
+    
+    # --- FIX 1: Extract Dynamic CRM ---
+    target_crm = payload.get("targetCrmId", "salesforce")
 
     ext = os.path.splitext(file.filename)[1].lower()
 
@@ -101,9 +104,10 @@ async def validate_batch(
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 chunk_records = chunk_df.to_dict(orient="records")
                 
+                # --- FIX 2: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
-                    records=chunk_records, mappings=mappings, dedupe_key=dedupe_key, 
-                    sf_rules=sf_rules, date_format=date_format
+                    records=chunk_records, mappings=mappings, dedupe_key=dedupe_key,  
+                    target_rules=sf_rules, date_format=date_format, target_crm=target_crm
                 )
                 
                 total_count += result["stats"]["total"]
@@ -132,9 +136,10 @@ async def validate_batch(
                     chunk_df = pd.DataFrame(chunk_records)
                     chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                     
+                    # --- FIX 3: Pass target_rules and target_crm to the processor ---
                     result = process_validation_batch(
                         records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
-                        sf_rules=sf_rules, date_format=date_format
+                        target_rules=sf_rules, date_format=date_format, target_crm=target_crm
                     )
                     
                     total_count += result["stats"]["total"]
@@ -150,9 +155,10 @@ async def validate_batch(
                 chunk_df = pd.DataFrame(chunk_records)
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 
+                # --- FIX 4: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
                     records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
-                    sf_rules=sf_rules, date_format=date_format
+                    target_rules=sf_rules, date_format=date_format, target_crm=target_crm
                 )
                 
                 total_count += result["stats"]["total"]
@@ -198,13 +204,18 @@ async def revalidate_batch_json(request: Request):
     dedupe_key = payload.get("dedupeKey", "")
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
+    
+    # --- FIX 5: Extract Dynamic CRM ---
+    target_crm = payload.get("targetCrmId", "salesforce")
 
+    # --- FIX 6: Pass target_rules and target_crm to the processor ---
     result = process_validation_batch(
         records=records, 
         mappings=mappings, 
         dedupe_key=dedupe_key,  
-        sf_rules=sf_rules,
-        date_format=date_format
+        target_rules=sf_rules,
+        date_format=date_format,
+        target_crm=target_crm
     )
     
     return result

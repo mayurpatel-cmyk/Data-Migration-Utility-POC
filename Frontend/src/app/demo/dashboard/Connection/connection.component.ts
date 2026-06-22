@@ -51,7 +51,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
   targetZohoRegion: string = 'IN';
   targetSalesforceEnv: string = 'production';
 
-  // 🚨 NEW: Loading States
+  showPathSelection: boolean = false;
   isPageLoading: boolean = true;
   isSourceConnecting: boolean = false;
   isTargetConnecting: boolean = false;
@@ -230,10 +230,23 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     });
   }
 
-  goToMappingPage() {
-    if (this.isSourceConnected && this.isTargetConnected) {
+  goToMappingPage(method: 'api' | 'csv') {
+    localStorage.setItem('target_crm_slot', this.selectedTarget);
+
+    if (method === 'api') {
+      if (!this.isSourceConnected || !this.isTargetConnected) return;
+      localStorage.setItem('source_crm_slot', this.selectedSource);
+      
       this.router.navigate(['/api-mapping'], {
         state: { sourceCrm: this.selectedSource, targetCrm: this.selectedTarget }
+      });
+      
+    } else if (method === 'csv') {
+      if (!this.isTargetConnected) return;
+      localStorage.setItem('source_crm_slot', 'csv'); // Force the context to CSV
+      
+      this.router.navigate(['/data-validation'], {
+        state: { sourceCrm: 'csv', targetCrm: this.selectedTarget }
       });
     }
   }

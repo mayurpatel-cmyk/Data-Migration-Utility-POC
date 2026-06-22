@@ -11,6 +11,7 @@ import Swal from 'sweetalert2';
 import { ValidationApiService } from 'src/app/services/validation-api.service';
 import { MigrationService } from 'src/app/services/migration.service';
 import { DataTransferService } from 'src/app/services/data-transfer.service';
+import { AuthService } from '../../Services/auth.service';
 
 interface ValidationJob {
   sheetName: string;
@@ -35,6 +36,7 @@ export class DataValidationComponent implements OnInit {
   private validationApi = inject(ValidationApiService);
   private migrationService = inject(MigrationService);
   private dataTransfer = inject(DataTransferService);
+  private authService = inject(AuthService);
   private cdr = inject(ChangeDetectorRef);
 
   currentStep = 1;
@@ -51,7 +53,8 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
-  selectedDateFormat = ''; // <-- ADDED: For Date Format selection
+  selectedDateFormat = '';
+  targetCrmId: string = 'salesforce';
 
   mappings: { csvField: string, sfField: string, type: string, isActive?: boolean, isDropdownOpen?: boolean, searchQuery?: string, dateFormat?: string, massUpdateValue?: string,
     isRequired?: boolean, picklistValues?: string[],
@@ -88,9 +91,44 @@ export class DataValidationComponent implements OnInit {
   }
 
   ngOnInit() {
-    this.migrationService.getAllObjects('salesforce').subscribe(objs => {
-      this.sfObjects = objs;
-      this.cdr.detectChanges();
+    // Safely grab the Target CRM chosen on the connection page
+    const navState = history.state;
+    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+    
+    // Lock Contexts into Storage
+    localStorage.setItem('target_crm_slot', this.targetCrmId);
+    localStorage.setItem('source_crm_slot', 'csv');
+
+    setTimeout(() => {
+      if (this.authService.isLoggedIn()) {
+        this.loadTargetObjects();
+      } else {
+        this.router.navigate(['/login']);
+      }
+    }, 0);
+  }
+
+  private loadTargetObjects() {
+    this.isLoadingObjects = true;
+    this.cdr.detectChanges();
+
+    this.migrationService.getAllObjects(this.targetCrmId, 'target').subscribe({
+      next: (objects: any) => {
+        this.sfObjects = Array.isArray(objects) ? objects : (objects.objects || objects.data || []);
+        this.sfObjects.sort((a, b) => (a.label || a.name || '').localeCompare(b.label || b.name || ''));
+        this.isLoadingObjects = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.isLoadingObjects = false;
+        if (err.status === 401) {
+          this.toastr.error('Session expired. Please log in again.');
+          this.router.navigate(['/login']);
+        } else {
+          this.toastr.error(`Could not load objects for ${this.targetCrmId.toUpperCase()}.`, 'API Error');
+        }
+        this.cdr.detectChanges();
+      }
     });
   }
 
@@ -160,9 +198,7 @@ export class DataValidationComponent implements OnInit {
 
   getTotalRequiredFieldsCount(): number {
     if (!this.sfFields || this.sfFields.length === 0) return 0;
-    const requiredFields = this.sfFields.filter(f => {
-      return f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
-    });
+    const requiredFields = this.sfFields.filter(f => f.isRequired === true);
     return requiredFields.length;
   }
 
@@ -172,8 +208,7 @@ export class DataValidationComponent implements OnInit {
       .filter(m => m.isActive && m.sfField && m.sfField !== '')
       .map(m => m.sfField);
     const missingFields = this.sfFields.filter(f => {
-      const isStrictlyRequired = f.isRequired || (!f.nillable && f.createable && !f.defaultedOnCreate);
-      return isStrictlyRequired && !currentlyMapped.includes(f.name);
+      return f.isRequired === true && !currentlyMapped.includes(f.name);
     });
     return missingFields.map(f => f.label || f.name);
   }
@@ -219,7 +254,6 @@ export class DataValidationComponent implements OnInit {
     const file = event.target.files[0];
     if (!file) return;
 
-    // NEW: Take a snapshot of the user's current work before we overwrite the file
     const previousMappings = [...this.mappings];
     const previousSheet = this.selectedSheetName;
 
@@ -246,12 +280,10 @@ export class DataValidationComponent implements OnInit {
       this.allHeadersMap = res.headersMap;
 
       if (this.availableSheets.length > 0) {
-        // NEW: If they re-uploaded a file with the same sheet name, restore their work!
         if (previousSheet && this.availableSheets.includes(previousSheet)) {
           this.restoreSheetAndMappings(previousSheet, previousMappings);
           this.toastr.success('File updated. Previous mappings restored!', 'Smart Upload');
         } else {
-          // Otherwise, treat it as a brand new upload
           this.onSheetSelect(this.availableSheets[0]);
         }
       }
@@ -265,10 +297,9 @@ export class DataValidationComponent implements OnInit {
     this.csvHeaders = this.allHeadersMap[sheetName] || [];
 
     this.mappings = this.csvHeaders.map(header => {
-      // Look to see if this column was mapped before the re-upload
       const existing = previousMappings.find(m => m.csvField === header);
       return existing
-        ? { ...existing } // Keep everything (SF Field, Default Value, Skip rules, etc.)
+        ? { ...existing } 
         : {
             csvField: header,
             sfField: '',
@@ -297,21 +328,29 @@ export class DataValidationComponent implements OnInit {
 
   onObjectChange() {
     if (!this.selectedObject) return;
-    this.migrationService.getObjectFields('salesforce', this.selectedObject).subscribe((res: any) => {
-      this.sfFields = res.fields || res;
-      this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
-      this.cdr.detectChanges();
+    this.isLoadingObjects = true;
+    
+    this.migrationService.getObjectFields(this.targetCrmId, this.selectedObject, 'target').subscribe({
+      next: (res: any) => {
+        this.sfFields = res.fields || res || [];
+        this.mappings = this.csvHeaders.map(header => ({ csvField: header, sfField: '', type: 'string', dateFormat: '', isActive: true, massUpdateValue: '' }));
+        this.isLoadingObjects = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.isLoadingObjects = false;
+        this.toastr.error(`Failed to load fields for ${this.selectedObject}.`);
+        this.cdr.detectChanges();
+      }
     });
   }
 
   applyMassUpdate(job: any, csvField: string, value: string | undefined) {
     if (value === undefined) value = '';
-   // Check if there are actually records to update
     if (!job.results || !job.results.invalidRecords || job.results.invalidRecords.length === 0) return;
 
     let updatedCount = 0;
 
-    // Loop through ALL error records, but ONLY apply the fix if that specific cell failed!
     job.results.invalidRecords.forEach((record: any) => {
       if (this.hasCellError(record, csvField)) {
         record.originalRow[csvField] = value;
@@ -331,18 +370,12 @@ export class DataValidationComponent implements OnInit {
 
   hasErrorsInColumn(job: any, csvField: string): boolean {
     if (!job || !job.results || !job.results.invalidRecords) return false;
-
-    // Python returns errors formatted exactly like: "[Email: Invalid format.]"
-    // We search the array to see if this column caused any of the failures.
     const searchStr = `[${csvField}:`;
     return job.results.invalidRecords.some((record: any) => record.errors.includes(searchStr));
   }
 
-  // NEW: Checks if a SPECIFIC cell in a specific row has an error
   hasCellError(record: any, csvField: string): boolean {
     if (!record || !record.errors) return false;
-    // By adding the bracket and colon, it forces an exact match!
-    // E.g., it looks for "[Name:" instead of just "Name"
     const searchStr = `[${csvField}:`;
     return record.errors.includes(searchStr);
   }
@@ -352,7 +385,6 @@ export class DataValidationComponent implements OnInit {
   }
 
   toggleMappingActive(mapping: any) {
-    // If the user unchecks the box, clear the mapped field
     if (!mapping.isActive) {
       mapping.sfField = '';
       mapping.isDropdownOpen = false;
@@ -363,8 +395,6 @@ export class DataValidationComponent implements OnInit {
     const isChecked = event.target.checked;
     this.mappings.forEach(mapping => {
       mapping.isActive = isChecked;
-
-      // If deselecting all, wipe out their field mappings for safety
       if (!isChecked) {
         mapping.sfField = '';
         mapping.isDropdownOpen = false;
@@ -483,6 +513,17 @@ export class DataValidationComponent implements OnInit {
     });
   }
 
+  // --- NEW: Helper to extract Field Schema to send to Python ---
+  private buildRulesDict(): any {
+    const rules: any = {};
+    if (this.sfFields) {
+      this.sfFields.forEach(f => {
+        rules[f.name] = f;
+      });
+    }
+    return rules;
+  }
+
   addToQueue() {
     const activeMappings = this.mappings.filter(m => m.isActive && m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -494,7 +535,7 @@ export class DataValidationComponent implements OnInit {
     if (missingReqFields.length > 0) {
       Swal.fire({
         title: 'Missing Required Fields!',
-        html: `Salesforce requires the following fields to create a <b>${this.selectedObject}</b>, but you haven't mapped them:<br><br>
+        html: `The target CRM requires the following fields to create a <b>${this.selectedObject}</b>, but you haven't mapped them:<br><br>
                <div class="text-danger fw-bold text-start p-3 bg-light border rounded mt-2" style="max-height: 150px; overflow-y: auto;">
                  <i class="feather icon-alert-triangle me-1"></i> ${missingReqFields.join('<br><i class="feather icon-alert-triangle me-1"></i> ')}
                </div><br>
@@ -513,7 +554,7 @@ export class DataValidationComponent implements OnInit {
 
     const cleanMappings = activeMappings.map(m => {
       const meta = this.getSfFieldMeta(m.sfField);
-      const isReq = meta ? (meta.isRequired || (!meta.nillable && meta.createable && !meta.defaultedOnCreate)) : false;
+      const isReq = meta ? (meta.isRequired === true) : false;
 
       const picklistVals = meta && meta.picklistValues
         ? meta.picklistValues.filter((p: any) => p.active).map((p: any) => p.value.toLowerCase())
@@ -548,7 +589,6 @@ export class DataValidationComponent implements OnInit {
 
     this.selectedObject = '';
     this.dedupeKey = '';
-    // Reset mapping table for the next job
     this.mappings = this.csvHeaders.map(header => ({
       csvField: header, sfField: '', type: 'string',
       dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: ''
@@ -565,9 +605,9 @@ export class DataValidationComponent implements OnInit {
     this.dedupeKey = itemToEdit.dedupeKey || '';
 
     this.isLoadingObjects = true;
-    this.migrationService.getObjectFields('salesforce', this.selectedObject).subscribe({
+    this.migrationService.getObjectFields(this.targetCrmId, this.selectedObject, 'target').subscribe({
       next: (res: any) => {
-        this.sfFields = res.fields || res;
+        this.sfFields = res.fields || res || [];
 
         this.mappings = this.csvHeaders.map(header => {
           const existing = itemToEdit.mappings.find((m: any) => m.csvField === header);
@@ -576,7 +616,7 @@ export class DataValidationComponent implements OnInit {
                 ...existing,
                 isDropdownOpen: false,
                 searchQuery: '',
-                isActive: true // Turn the checkbox back on
+                isActive: true 
               }
             : {
                 csvField: header,
@@ -597,8 +637,9 @@ export class DataValidationComponent implements OnInit {
 
         this.toastr.info(`You can now edit the mapping rules for ${this.selectedObject}.`, 'Edit Mode');
       },
-      error: () => {
-        this.toastr.error('Failed to load Salesforce fields for editing.', 'Error');
+      error: (err) => {
+        console.error("Field Fetch Error:", err);
+        this.toastr.error('Failed to load fields for editing.', 'Error');
         this.isLoadingObjects = false;
       }
     });
@@ -629,6 +670,9 @@ export class DataValidationComponent implements OnInit {
     let queueHasErrors = false;
     let processedAtLeastOne = false;
 
+    // Build the rules dictionary once per run
+    const schemaRules = this.buildRulesDict();
+
     for (const job of this.validationQueue) {
       if (job.status === 'done') continue;
 
@@ -643,7 +687,9 @@ export class DataValidationComponent implements OnInit {
         targetObject: job.targetObject,
         sheetName: job.sheetName,
         mappings: job.mappings,
-        dedupeKey: job.dedupeKey
+        dedupeKey: job.dedupeKey,
+        targetCrmId: this.targetCrmId,
+        sfRules: schemaRules // <-- IMPORTANT: Pass the full schema rules to Python
       };
 
       formData.append('config', JSON.stringify(config));
@@ -728,7 +774,6 @@ export class DataValidationComponent implements OnInit {
 
     this.validationQueue.forEach(job => {
       if (job.results?.invalidRecords?.length > 0) {
-        // Filter the invalid records to ONLY get the ones marked as Duplicates
         const duplicateRecords = job.results.invalidRecords
           .filter((ir: any) => ir.errors.includes('Duplicate Record'))
           .map((ir: any) => ({
@@ -748,7 +793,6 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
-    // Generate and download the CSV just like the Error Log!
     const worksheet = utils.json_to_sheet(allDuplicates);
     const csvOutput = utils.sheet_to_csv(worksheet);
     const blob = new Blob([csvOutput], { type: 'text/csv;charset=utf-8;' });
@@ -787,7 +831,6 @@ export class DataValidationComponent implements OnInit {
     this.toastr.info(`Re-validating ${job.targetObject} records...`, 'Processing');
     this.cdr.detectChanges();
 
-    // Deep copy the records so we don't accidentally mutate live data
     const recordsToTest = job.results.invalidRecords.map((ir: any) => {
       return { ...ir.originalRow, _originalRowNumber: ir.rowNumber };
     });
@@ -795,7 +838,9 @@ export class DataValidationComponent implements OnInit {
       targetObject: job.targetObject,
       records: recordsToTest,
       mappings: job.mappings,
-      dedupeKey: job.dedupeKey
+      dedupeKey: job.dedupeKey,
+      targetCrmId: this.targetCrmId,
+      sfRules: this.buildRulesDict() // <-- IMPORTANT: Send schema rules to Python
     };
 
     try {
@@ -804,7 +849,7 @@ export class DataValidationComponent implements OnInit {
       const previousValid = job.results.validRecords || [];
       const newValid = res.validRecords || [];
 
-      job.results.validRecords = [...previousValid, ...newValid]; // Combine them safely!
+      job.results.validRecords = [...previousValid, ...newValid]; 
       job.results.invalidRecords = res.invalidRecords || [];
 
       this.recalculateStats();
@@ -886,66 +931,69 @@ export class DataValidationComponent implements OnInit {
       }
     });
   }
+
   onSfFieldChange(mapping: any) {
-  const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+    const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-  if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
-    const parentObj = fieldMeta.referenceTo[0];
-    mapping.parentObjectName = parentObj;
+    if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
+      const parentObj = fieldMeta.referenceTo[0];
+      mapping.parentObjectName = parentObj;
 
-    if (!this.parentObjectFieldsCache[parentObj]) {
-      mapping.isLoadingParentFields = true;
-      this.cdr.detectChanges();
+      if (!this.parentObjectFieldsCache[parentObj]) {
+        mapping.isLoadingParentFields = true;
+        this.cdr.detectChanges();
 
-      this.migrationService.getObjectFields('salesforce', parentObj).subscribe({
-        next: (response: any) => {
-          const fieldsArray = response.fields ? response.fields : response;
-          this.parentObjectFieldsCache[parentObj] = fieldsArray.sort((a: any, b: any) => (a.label || '').localeCompare(b.label || ''));
-          mapping.isLoadingParentFields = false;
-          this.cdr.detectChanges();
-        },
-        error: () => {
-          mapping.isLoadingParentFields = false;
-          this.toastr.error(`Failed to load fields for parent object: ${parentObj}`);
-          this.cdr.detectChanges();
-        }
-      });
+        this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
+          next: (response: any) => {
+            const fieldsArray = response.fields ? response.fields : response || [];
+            this.parentObjectFieldsCache[parentObj] = fieldsArray.sort((a: any, b: any) => (a.label || '').localeCompare(b.label || ''));
+            mapping.isLoadingParentFields = false;
+            this.cdr.detectChanges();
+          },
+          error: (err) => {
+            mapping.isLoadingParentFields = false;
+            console.error("Parent Field Fetch Error:", err);
+            this.toastr.error(`Failed to load fields for parent object: ${parentObj}`);
+            this.cdr.detectChanges();
+          }
+        });
+      }
+    } else {
+      mapping.parentObjectName = undefined;
+      mapping.relationalExtIdField = '';
     }
-  } else {
-    mapping.parentObjectName = undefined;
-    mapping.relationalExtIdField = '';
   }
-}
 
-getParentFieldLabel(mapping: any, fieldName?: string): string {
-  if (!fieldName) return '';
-  if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
-  if (!mapping.parentObjectName) return fieldName;
-  const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
-  const field = parentFields.find((f: any) => f.name === fieldName);
-  return field ? `${field.label} (${field.name})` : fieldName;
-}
+  getParentFieldLabel(mapping: any, fieldName?: string): string {
+    if (!fieldName) return '';
+    // Dynamic label for Standard IDs based on CRM
+    if (fieldName === 'Id') return `Id (Standard ${this.targetCrmId.toUpperCase()} ID)`;
+    
+    if (!mapping.parentObjectName) return fieldName;
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+    const field = parentFields.find((f: any) => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
 
-getFilteredParentFields(mapping: any): any[] {
-  if (!mapping.parentObjectName) return [];
-  const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
+  getFilteredParentFields(mapping: any): any[] {
+    if (!mapping.parentObjectName) return [];
+    const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
 
+    if (!mapping.parentSearchQuery) return parentFields;
+    const query = mapping.parentSearchQuery.toLowerCase();
+    return parentFields.filter(f => f.label.toLowerCase().includes(query) || f.name.toLowerCase().includes(query));
+  }
 
-  if (!mapping.parentSearchQuery) return parentFields;
-  const query = mapping.parentSearchQuery.toLowerCase();
-  return parentFields.filter(f => f.label.toLowerCase().includes(query) || f.name.toLowerCase().includes(query));
-}
+  toggleParentDropdown(mapping: any, event: Event) {
+    event.stopPropagation();
+    const wasOpen = mapping.isParentDropdownOpen;
+    this.closeAllDropdowns();
+    mapping.isParentDropdownOpen = !wasOpen;
+    if (mapping.isParentDropdownOpen) mapping.parentSearchQuery = '';
+  }
 
-toggleParentDropdown(mapping: any, event: Event) {
-  event.stopPropagation();
-  const wasOpen = mapping.isParentDropdownOpen;
-  this.closeAllDropdowns();
-  mapping.isParentDropdownOpen = !wasOpen;
-  if (mapping.isParentDropdownOpen) mapping.parentSearchQuery = '';
-}
-
-selectParentField(mapping: any, fieldName: string) {
-  mapping.relationalExtIdField = fieldName;
-  mapping.isParentDropdownOpen = false;
-}
+  selectParentField(mapping: any, fieldName: string) {
+    mapping.relationalExtIdField = fieldName;
+    mapping.isParentDropdownOpen = false;
+  }
 }

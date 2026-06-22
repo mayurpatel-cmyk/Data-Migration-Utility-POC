@@ -17,10 +17,13 @@ class PayloadBuilderService:
             has_patch_data = False
 
             for mapping in mappings:
-                target_field = mapping.get("targetField")
+                # --- FIX: Support BOTH API Mapping and CSV Mapping formats ---
+                target_field = mapping.get("targetField") or mapping.get("sfField")
                 if not target_field: continue
 
-                csv_val = raw_row.get(mapping.get("sourceField"))
+                source_field = mapping.get("sourceField") or mapping.get("csvField")
+                csv_val = raw_row.get(source_field)
+                # -------------------------------------------------------------
 
                 if is_patch_mode and target_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'created_at', 'updated_at']:
                     continue
@@ -51,13 +54,10 @@ class PayloadBuilderService:
 
                     rel_ext_id = mapping.get("relationalExtIdField")
                     
-                    # --- SALESFORCE FIX: Handle V1 Bulk Relationships ---
                     if mapping.get("type") == "reference" and rel_ext_id:
                         if rel_ext_id.lower() == "id":
-                            # Native ID mapping (e.g., AccountId = "001...")
                             target_record[target_field] = csv_val
                         else:
-                            # External ID mapping requires nested JSON for Bulk API V1
                             target_record[rel_name] = {rel_ext_id: csv_val}
                             
                         if is_patch_mode: has_patch_data = True
@@ -69,12 +69,10 @@ class PayloadBuilderService:
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
                 
                 elif target_crm == "zendesk":
-                    # --- ZENDESK FIX: Group custom fields into the required array ---
                     if target_field.startswith("custom_field_"):
                         if "custom_fields" not in target_record:
                             target_record["custom_fields"] = []
                         
-                        # Extract just the numeric ID from the string
                         cf_id = int(target_field.replace("custom_field_", ""))
                         target_record["custom_fields"].append({"id": cf_id, "value": csv_val})
                     else:
