@@ -1036,6 +1036,11 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     //  SALESFORCE & ZOHO SQL VALIDATION
     // ==========================================
     else if (crm === 'salesforce' || crm === 'zoho') {
+
+      if (this.customQuery.includes('"')) {
+        return applySquiggle("Salesforce strictly requires single quotes (') for text values. Do not use double quotes (\").", '"');
+      }
+      
       if (queryLower.includes('limit ')) {
         return applySquiggle("Do not use LIMIT. The engine handles pagination automatically.", "limit");
       } else if (queryLower.includes('order by ')) {
