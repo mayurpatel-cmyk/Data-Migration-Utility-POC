@@ -1,3 +1,5 @@
+import math
+
 class PayloadBuilderService:
     @staticmethod
     def build_payload(raw_records, mappings, options, target_crm="salesforce"):
@@ -22,17 +24,62 @@ class PayloadBuilderService:
                 if not target_field: continue
 
                 source_field = mapping.get("sourceField") or mapping.get("csvField")
+                
+                # 1. Try fetching by the original CSV Header
                 csv_val = raw_row.get(source_field)
 
+                # 2. FALLBACK: If data was already transformed by the Validator
                 if csv_val is None and target_field in raw_row:
-                   csv_val = raw_row.get(target_field)
-                # -------------------------------------------------------------
+                    csv_val = raw_row.get(target_field)
+
+                # --- ULTIMATE TYPE ENFORCEMENT & SANITIZER ---
+                if csv_val is not None:
+                    # Catch Math NaNs
+                    if isinstance(csv_val, float) and math.isnan(csv_val):
+                        csv_val = None
+                    
+                    # Catch String "nulls" and trailing ".0"
+                    if isinstance(csv_val, str):
+                        csv_val = csv_val.strip()
+                        if csv_val.lower() in ["nan", "null", "none", "nat", "<na>", "undefined", ""]:
+                            csv_val = None
+                        elif csv_val.endswith(".0") and csv_val[:-2].isdigit():
+                            csv_val = csv_val[:-2]
+
+                # 3. Force exact JSON Types required by the CRM API
+                if csv_val is not None:
+                    expected_type = mapping.get("type", "string").lower()
+                    
+                    # Force strings for Phone, Email, Picklists, etc.
+                    if expected_type in ["string", "phone", "email", "text", "picklist", "textarea", "reference"]:
+                        if isinstance(csv_val, float) and csv_val.is_integer():
+                            csv_val = str(int(csv_val))
+                        else:
+                            csv_val = str(csv_val)
+                            
+                    # Force numbers (Handle Integer vs Float for Zoho strictness)
+                    elif expected_type in ["number", "integer", "double", "currency", "percent", "float"]:
+                        try:
+                            num_val = float(csv_val)
+                            # If it's a perfect whole number (like 400.0) or explicitly an integer, cast to int!
+                            if num_val.is_integer() or expected_type == "integer":
+                                csv_val = int(num_val)
+                            else:
+                                csv_val = num_val
+                        except (ValueError, TypeError):
+                            csv_val = None
+                            
+                    # Force true booleans for Checkboxes
+                    elif expected_type == "boolean":
+                        if str(csv_val).lower() in ["true", "1", "yes", "y"]: csv_val = True
+                        elif str(csv_val).lower() in ["false", "0", "no", "n"]: csv_val = False
+                        else: csv_val = bool(csv_val)
 
                 if is_patch_mode and target_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'created_at', 'updated_at']:
                     continue
 
-                # Prevent empty strings from wiping out data (unless it's the external ID)
-                if (csv_val is None or str(csv_val).strip() == "") and target_field != target_ext_id_field: 
+                # Prevent empty strings/None from wiping out data (unless it's the external ID)
+                if csv_val is None and target_field != target_ext_id_field: 
                     continue
 
                 is_self_ref = mapping.get("type") == "reference" and target_object in mapping.get("referenceTo", [])

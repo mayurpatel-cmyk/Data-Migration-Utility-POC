@@ -1166,11 +1166,10 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     
     if (!fieldName) return;
 
-    if (!this.customQuery) {
-      this.customQuery = fieldName;
-    } else {
-      this.customQuery += ` ${fieldName}`;
-    }
+    // Route the selected field through your Monaco cursor injector
+    this.injectFieldAtCursor(fieldName);
+
+    // Reset the dropdown back to the placeholder
     selectElement.value = '';
   }
 
