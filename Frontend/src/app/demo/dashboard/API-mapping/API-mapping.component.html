@@ -11,6 +11,17 @@
   .btn-hover-lift-primary {
     transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
   }
+
+  .sticky-header-card {
+    position: sticky;
+    top: 0; /* Or top: 15px; if you want a floating gap */
+    z-index: 1050;
+    background-color: rgba(255, 255, 255, 0.90) !important;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: box-shadow 0.3s ease;
+  }
+
   .btn-hover-lift-primary:hover:not(:disabled) {
     transform: translateY(-2px);
     box-shadow: 0 0.5rem 1rem rgba(13, 110, 253, 0.35) !important;
@@ -107,12 +118,20 @@
 .mapping-table-container::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
+html {
+  scroll-padding-top: 100px; /* Accounts for the height of your sticky header */
+}
 </style>
 
-<div class="card border-primary-subtle shadow-sm mb-3">
+<div class="card border-primary-subtle shadow-sm mb-3 sticky-header-card">
   <div class="card-body p-3 d-flex flex-wrap align-items-center gap-3">
 
     <div class="d-flex align-items-center gap-2 me-auto">
+      <button class="btn btn-sm btn-light border-secondary-subtle text-secondary me-2 btn-hover-lift d-flex align-items-center gap-1" 
+              (click)="goBackToConnection()" title="Back to Connections">
+        <i class="feather icon-arrow-left"></i> Back
+      </button>
+
       <div class="bg-primary-subtle text-primary p-2 rounded">
         <i class="feather icon-cpu fs-4"></i>
       </div>
@@ -150,6 +169,8 @@
             }
           </div>
         }
+
+
       </div>
     </div>
 
@@ -188,6 +209,12 @@
         }
       </div>
     </div>
+            <div class="border-start ps-3 ms-1 d-flex align-items-center">
+        <button class="btn btn-sm btn-outline-danger btn-hover-lift d-flex align-items-center gap-1" 
+                (click)="logout()" title="Secure Logout">
+          <i class="feather icon-log-out"></i> Logout
+        </button>
+      </div>
   </div>
 </div>
 

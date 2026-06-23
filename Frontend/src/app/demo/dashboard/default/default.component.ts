@@ -1131,6 +1131,8 @@ export class DefaultComponent implements OnInit {
             })
           };
 
+          console.log(">>>>>>>>>>>>>>",payload)
+
           ws.send(JSON.stringify(payload));
         };
 

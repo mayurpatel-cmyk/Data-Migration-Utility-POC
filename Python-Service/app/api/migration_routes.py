@@ -5,6 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
 from app.services.crm_service import CrmService
+import math
 
 # Import our Migrators!
 from app.services.migrators.salesforce_migrator import SalesforceMigrator
@@ -129,7 +130,7 @@ async def websocket_migration(websocket: WebSocket):
                 target_object = job.get("targetObject")
                 source_object = job.get("sourceObject", "")
                 extraction_query = job.get("extractionQuery", "").strip()
-                mappings = [m for m in job.get("mappings", []) if m.get("targetField")]
+                mappings = [m for m in job.get("mappings", []) if m.get("targetField") or m.get("sfField")]
                 op_mode = job.get("operationMode", "insert")
                 batch_size = int(job.get("batchSize", 5000))
                 ext_id_field = job.get("externalIdField", "")
@@ -183,12 +184,57 @@ async def websocket_migration(websocket: WebSocket):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
                     await execute_upload(p_load, op_mode, "Standard Sync")
 
-            await send_log(f"QUEUE COMPLETE! {len(all_success_data)} successes, {len(all_error_data)} rejections.", "Finished")
+            await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
+            
+            safe_success_data = []
+            for record in all_success_data:
+                safe_record = {}
+                for key, value in record.items():
+                    # Convert NaN (Not a Number) to None/null
+                    if isinstance(value, float) and math.isnan(value):
+                        safe_record[key] = None
+                    # Convert datetime or other objects to strings
+                    elif hasattr(value, "isoformat"):
+                        safe_record[key] = value.isoformat()
+                    else:
+                        safe_record[key] = str(value) if value is not None else ""
+                safe_success_data.append(safe_record)
+            
+            formatted_errors = []
+            for err in all_error_data:
+                # 1. Guarantee err is a dictionary to prevent JS crashes
+                if not isinstance(err, dict):
+                    err = {"Raw_Data": str(err), "Target_Error": "Unknown error format."}
+                
+                # 2. Extract the exact error message
+                error_msg = err.get("Target_Error", "API rejected this record.")
+                
+                # 3. Clean and Sanitize the record object
+                safe_record = {}
+                for k, v in err.items():
+                    if k == "Target_Error":
+                        continue
+                    
+                    # Prevent JSON crashes from NaN or datetime objects
+                    if isinstance(v, float) and math.isnan(v):
+                        safe_record[k] = None
+                    elif hasattr(v, "isoformat"):
+                        safe_record[k] = v.isoformat()
+                    else:
+                        safe_record[k] = str(v) if v is not None else ""
+                
+                # 4. Append in the exact format Angular needs
+                formatted_errors.append({
+                    "record": safe_record,
+                    "error": error_msg
+                })
+
+            # Send the final safe payload to the frontend
             await websocket.send_json({
-                "log": "System: Generating downloadable execution logs...",
                 "status": "Finished",
-                "successData": all_success_data,
-                "errorData": all_error_data
+                "log": f"Migration completed! {len(safe_success_data)} records successful, {len(formatted_errors)} failed.",
+                "successData": safe_success_data,
+                "errorData": formatted_errors
             })
         await websocket.close()
         

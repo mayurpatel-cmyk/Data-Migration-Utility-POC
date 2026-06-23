@@ -23,6 +23,9 @@ class PayloadBuilderService:
 
                 source_field = mapping.get("sourceField") or mapping.get("csvField")
                 csv_val = raw_row.get(source_field)
+
+                if csv_val is None and target_field in raw_row:
+                   csv_val = raw_row.get(target_field)
                 # -------------------------------------------------------------
 
                 if is_patch_mode and target_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'created_at', 'updated_at']:

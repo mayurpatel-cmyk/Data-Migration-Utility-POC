@@ -1551,6 +1551,44 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     await this.validateData(true, recordsToTest); 
   }
 
+  goBackToConnection(): void {
+    // You can also add validation or warning prompts here if the user has unsaved mappings
+    this.router.navigate(['/connection']);
+  }
+
+  logout(): void {
+    Swal.fire({
+      title: 'Ready to Leave?',
+      text: 'Are you sure you want to log out? Any unsaved mapping progress will be lost.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc3545',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, Logout',
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        // 1. Wipe secure tokens and session memory
+        localStorage.removeItem('supabase_token');
+        localStorage.removeItem('source_crm_slot');
+        localStorage.removeItem('target_crm_slot');
+        // Or use localStorage.clear(); if you want to wipe absolutely everything
+
+        // 2. Disconnect active websockets
+        if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
+          this.validationSocket.close();
+        }
+        if (this.migrationSocket && this.migrationSocket.readyState === WebSocket.OPEN) {
+          this.migrationSocket.close();
+        }
+
+        // 3. Notify and Redirect
+        this.toastr.success('You have been securely logged out.', 'Goodbye!');
+        this.router.navigate(['/login']); // Change '/login' to your actual auth route if different
+      }
+    });
+  }
+
   downloadCSV(data: any[], filename: string) {
     if (!data || data.length === 0) return;
 
