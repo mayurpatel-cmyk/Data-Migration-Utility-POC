@@ -112,6 +112,8 @@ export class DefaultComponent implements OnInit {
     localStorage.setItem('target_crm_slot', this.targetCrmId);
     localStorage.setItem('source_crm_slot', this.sourceCrmId);
 
+    this.batchSize = this.batchConfig.default;
+
     const transferred = this.dataTransfer.getValidatedData();
 
     // Check if we have an array of jobs transferred from Validation
@@ -219,6 +221,31 @@ export class DefaultComponent implements OnInit {
 
   get hasDeleteInBatch(): boolean {
     return this.migrationQueue.some(job => job.operationMode === 'delete');
+  }
+
+  get batchConfig() {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'HubSpot max limit: 100' };
+      case 'zendesk':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zendesk max limit: 100' };
+      case 'zoho':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zoho max limit: 100' };
+      case 'salesforce':
+      default:
+        return { min: 100, max: 10000, step: 1000, default: 5000, tooltip: 'Salesforce max limit: 10,000' };
+    }
+  }
+
+  validateBatchSize() {
+    const config = this.batchConfig;
+    if (this.batchSize > config.max) {
+      this.batchSize = config.max;
+      this.toastr.info(`Batch size reduced to ${config.max} to comply with ${this.targetCrmId.toUpperCase()} API limits.`);
+    } else if (this.batchSize < config.min) {
+      this.batchSize = config.min;
+    }
   }
 
   onFileSelected(event: any) {
@@ -1130,8 +1157,6 @@ export class DefaultComponent implements OnInit {
                 };
             })
           };
-
-          console.log(">>>>>>>>>>>>>>",payload)
 
           ws.send(JSON.stringify(payload));
         };

@@ -461,11 +461,20 @@ html {
               </div>
             }
             <div class="col-auto">
-              <div class="input-group input-group-sm shadow-sm" style="width: 160px;">
-                <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold">Batch</span>
-                <input type="number" class="form-control border-secondary-subtle text-center fw-bold text-primary" [(ngModel)]="batchSize" min="10" max="10000" step="1000">
-              </div>
-            </div>
+  <div class="input-group input-group-sm shadow-sm" style="width: 170px;" [title]="batchConfig.tooltip">
+    <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold" style="cursor: help;">
+      Batch <i class="feather icon-info ms-1" style="font-size: 0.7rem;"></i>
+    </span>
+    <input type="number" 
+           class="form-control border-secondary-subtle text-center fw-bold text-primary" 
+           [(ngModel)]="batchSize" 
+           [min]="batchConfig.min" 
+           [max]="batchConfig.max" 
+           [step]="batchConfig.step"
+           (change)="validateBatchSize()"
+           (blur)="validateBatchSize()">
+  </div>
+</div>
           </div>
         </div>
 
@@ -487,13 +496,39 @@ html {
           } @else {
           
           <table class="table table-hover table-borderless align-middle mb-0 w-100">
-            <thead class="bg-white">
-              <tr>
-                <th style="width: 45%;" class="text-muted small fw-bold">Source Field</th>
-                <th style="width: 10%;" class="text-center text-muted small fw-bold"><i class="feather icon-arrow-right"></i></th>
-                <th style="width: 40%;" class="text-muted small fw-bold">Target Field</th>
-              </tr>
-            </thead>
+            <thead class="bg-white position-sticky top-0 shadow-sm" style="z-index: 5;">
+  <tr>
+    <th style="width: 45%; padding: 0.5rem 0.5rem;" class="align-middle border-bottom">
+      <div class="d-flex justify-content-between align-items-center gap-2">
+        <span class="text-muted small fw-bold text-nowrap">Source Field</span>
+        
+        <!-- Column-Specific Search Bar -->
+        <div class="input-group shadow-sm transition-all" style="max-width: 180px;" [class.opacity-50]="!selectedSourceObject">
+          <span class="input-group-text bg-light border-secondary-subtle text-muted px-2 py-1">
+            <i class="feather icon-search" style="font-size: 0.75rem;"></i>
+          </span>
+          <input type="text" class="form-control border-secondary-subtle px-2 py-1 shadow-none" 
+                 style="font-size: 0.75rem;"
+                 placeholder="Filter source..." 
+                 [(ngModel)]="mappingSearchQuery" 
+                 [disabled]="!selectedSourceObject">
+          
+          <!-- Quick Clear Button -->
+          @if (mappingSearchQuery) {
+            <button class="btn btn-light border-secondary-subtle text-muted d-flex align-items-center px-1 py-1 btn-hover-lift" 
+                    (click)="mappingSearchQuery = ''" title="Clear Filter">
+              <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+            </button>
+          }
+        </div>
+      </div>
+    </th>
+    <th style="width: 10%;" class="text-center text-muted small fw-bold align-middle border-bottom">
+      <i class="feather icon-arrow-right"></i>
+    </th>
+    <th style="width: 40%;" class="text-muted small fw-bold align-middle border-bottom">Target Field</th>
+  </tr>
+</thead>
             <tbody>
               @for (mapping of visibleMappings; track mapping.sourceField; let i = $index) {
               <tr class="animate__animated animate__fadeIn">
