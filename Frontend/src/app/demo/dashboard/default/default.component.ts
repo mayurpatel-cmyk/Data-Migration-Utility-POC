@@ -219,6 +219,21 @@ export class DefaultComponent implements OnInit {
     return this.migrationQueue.length > 0 && this.migrationQueue.every(job => job.operationMode === 'delete');
   }
 
+  // Dynamically returns which operation modes the selected CRM supports
+  get availableOpModes(): string[] {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot':
+        return ['insert', 'update', 'upsert']; // HubSpot Bulk Delete not natively supported here
+      case 'zendesk':
+        return ['insert', 'update', 'upsert']; // Zendesk Bulk Delete not natively supported here
+      case 'zoho':
+      case 'salesforce':
+      default:
+        return ['insert', 'update', 'upsert', 'delete']; // SF & Zoho support all 4
+    }
+  }
+
   get hasDeleteInBatch(): boolean {
     return this.migrationQueue.some(job => job.operationMode === 'delete');
   }
@@ -412,11 +427,46 @@ export class DefaultComponent implements OnInit {
 
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
-
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
-    const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
-    return requiredSfFields.filter((reqField) => !currentlyMappedSfFields.includes(reqField));
+
+    const crm = (this.targetCrmId || '').toLowerCase();
+    const objLower = (this.selectedObject || '').toLowerCase();
+
+    // 1. Get API-defined required fields (Works perfectly for Salesforce)
+    let requiredFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
+
+    // Helper to safely suggest a field only if it actually exists in their schema
+    const addIfInSchema = (fieldName: string) => {
+      if (this.sfFields.some(f => f.name === fieldName) && !requiredFields.includes(fieldName)) {
+        requiredFields.push(fieldName);
+      }
+    };
+
+    const currentlyMappedFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
+
+    // 2. Inject CRM-Specific Smart Fallbacks
+    if (crm === 'hubspot') {
+      if (objLower === 'contacts') addIfInSchema('email');
+      if (objLower === 'deals') addIfInSchema('dealname');
+      if (objLower === 'tickets') {
+        addIfInSchema('hs_pipeline');
+        addIfInSchema('hs_pipeline_stage');
+      }
+      
+      // HubSpot Companies Special Rule: Requires EITHER domain OR name
+      if (objLower === 'companies') {
+        if (!currentlyMappedFields.includes('domain') && !currentlyMappedFields.includes('name')) {
+          addIfInSchema('domain'); // Suggest domain as the primary identifier
+        }
+      }
+    } else if (crm === 'zoho') {
+      if (objLower === 'leads' || objLower === 'contacts') addIfInSchema('Last_Name');
+      if (objLower === 'accounts') addIfInSchema('Account_Name');
+      if (objLower === 'deals') addIfInSchema('Deal_Name');
+    }
+
+    // 3. Return what's required but hasn't been mapped yet
+    return requiredFields.filter((reqField) => !currentlyMappedFields.includes(reqField));
   }
 
   onStep2ObjectChange(newObject: string) {
@@ -456,15 +506,64 @@ export class DefaultComponent implements OnInit {
   }
 
   onOperationModeChange() {
-    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
+    const crm = (this.targetCrmId || '').toLowerCase();
+    const objLower = (this.selectedObject || '').toLowerCase();
 
-      if (extIds.length === 1) {
-        this.selectUpsertKey(extIds[0].name);
+    if (this.operationMode === 'upsert' && !this.targetExtIdField) {
+      
+      // CRM-SPECIFIC UPSERT LOGIC
+      if (crm === 'hubspot' && objLower === 'contacts') {
+        this.selectUpsertKey('email');
+      } else if (crm === 'hubspot' && objLower === 'companies') {
+        this.selectUpsertKey('domain');
+      } else if (crm === 'zendesk') {
+        // Zendesk commonly upserts via external_id
+        const hasExtId = this.sfFields.find(f => f.name === 'external_id');
+        if (hasExtId) this.selectUpsertKey('external_id');
+      } else {
+        // Default Salesforce/Zoho Logic: Auto-select if there's only 1 external ID field
+        const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
+        if (extIds.length === 1) {
+          this.selectUpsertKey(extIds[0].name);
+        }
       }
+
     } else if (this.operationMode === 'delete') {
       this.targetExtIdField = '';
     }
+  }
+
+  // Dynamically returns the naming convention for fields/properties
+  get targetFieldLabel(): string {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot': return 'HubSpot Property';
+      case 'zoho': return 'Zoho Module Field';
+      case 'zendesk': return 'Zendesk Ticket Field';
+      case 'salesforce':
+      default: return 'Salesforce Field';
+    }
+  }
+
+  // Dynamically returns the naming convention for records/objects
+  get targetObjectLabel(): string {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'zoho': return 'Zoho Module';
+      case 'hubspot':
+      case 'zendesk':
+        return 'Target Object';
+      case 'salesforce':
+      default: return 'Salesforce Object';
+    }
+  }
+
+  // Dynamically determines if the CRM supports complex nested External ID lookups
+  get supportsRelationalLookups(): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    // Currently, only Salesforce natively supports mapping parent relationships 
+    // via dynamic External IDs inside a standard bulk payload.
+    return crm === 'salesforce';
   }
 
   moveQueueItemUp(index: number) {
@@ -758,7 +857,7 @@ export class DefaultComponent implements OnInit {
   onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-    if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
+    if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
       const parentObj = fieldMeta.referenceTo[0];
       mapping.parentObjectName = parentObj;
 

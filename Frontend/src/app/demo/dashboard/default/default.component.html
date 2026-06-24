@@ -108,38 +108,41 @@
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i>Migration Mode</h6>
 
         <div class="d-flex flex-wrap gap-4 mb-3">
+          @if (availableOpModes.includes('insert')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert"
               [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
-              Insert
-            </label>
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">Insert</label>
             <div class="text-muted small">Creates new records.</div>
           </div>
+          }
+          
+          @if (availableOpModes.includes('update')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpdate" value="update"
-              [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">
-              Update
-            </label>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">Update</label>
             <div class="text-muted small">Updates via CRM Id or mapped Ext ID.</div>
           </div>
+          }
+
+          @if (availableOpModes.includes('upsert')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert"
-              [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
-              Upsert
-            </label>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">Upsert</label>
             <div class="text-muted small">Prevents duplicates. Requires Ext ID.</div>
           </div>
+          }
+
+          @if (availableOpModes.includes('delete')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opDelete" value="delete"
-              [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
-            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">
-              Delete
-            </label>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">Delete</label>
             <div class="text-muted small">Removes mapped CRM Id records.</div>
           </div>
+          }
         </div>
 
         @if (['insert', 'update', 'upsert'].includes(operationMode)) {
@@ -211,85 +214,38 @@
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Migration Mode</h6>
 
         <div class="d-flex flex-wrap gap-4 align-items-start">
+          @if (availableOpModes.includes('insert')) {
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opInsertStep3"
-              value="insert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">
-              Insert
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpdateStep3"
-              value="update" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpdateStep3">
-              Update
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3"
-              value="upsert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">
-              Upsert
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opDeleteStep3"
-              value="delete" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
-            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDeleteStep3">
-              Delete
-            </label>
-          </div>
-
-          @if (['insert', 'update', 'upsert'].includes(operationMode)) {
-
-          <div
-            class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative"
-            [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
-            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID
-              Key:</label>
-
-            @if (isLoadingFields) {
-            <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
-            } @else {
-
-            <div class="position-relative" style="min-width: 220px;" (click)="$event.stopPropagation()">
-              <div class="form-select form-select-sm cursor-pointer bg-white border-primary-subtle"
-                (click)="!isLoadingFields && toggleUpsertKeyDropdown($event)" [class.text-muted]="!targetExtIdField">
-                {{ getSfFieldLabel(targetExtIdField) || '-- Select External ID --' }}
-              </div>
-
-              @if (isUpsertKeyDropdownOpen) {
-              <div
-                class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute end-0 mt-1 bg-white"
-                style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
-                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                  <div class="input-group input-group-sm">
-                    <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                    <input type="text" class="form-control" placeholder="Search ID fields..."
-                      [(ngModel)]="upsertKeySearchQuery" autofocus>
-                  </div>
-                </div>
-                <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1"
-                  (click)="selectUpsertKey('')">
-                  <i class="feather icon-x-circle me-1"></i> -- No External ID --
-                </div>
-                @for (field of getFilteredUpsertKeys(); track field.name) {
-                <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
-                  [class.bg-light]="targetExtIdField === field.name">
-                  {{ field.label }}
-                  <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
-                </div>
-                }
-              </div>
-              }
-            </div>
-            }
+              value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">Insert</label>
           </div>
           }
-        </div>
+
+          @if (availableOpModes.includes('update')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpdateStep3"
+              value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdateStep3">Update</label>
+          </div>
+          }
+
+          @if (availableOpModes.includes('upsert')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3"
+              value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">Upsert</label>
+          </div>
+          }
+
+          @if (availableOpModes.includes('delete')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opDeleteStep3"
+              value="delete" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDeleteStep3">Delete</label>
+          </div>
+          }
+          </div>
       </div>
 
       <div class="row mb-4 bg-light p-3 rounded border mx-0 g-3">
@@ -383,10 +339,10 @@
       }
 
       @if (sfFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
-      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle">
-        <i class="feather icon-alert-triangle text-warning fs-5"></i>
+      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle shadow-sm animate__animated animate__fadeIn">
+        <i class="feather icon-alert-triangle text-warning fs-4"></i>
         <div>
-          <strong class="text-dark">Missing Required Fields:</strong> You must map columns to the following fields:
+          <strong class="text-dark">Missing Required {{ targetFieldLabel }}s:</strong> {{ targetCrmId | titlecase }} strictly requires the following to be mapped:
           <span class="text-danger fw-bold ms-1">{{ getMissingRequiredFields().join(', ') }}</span>
         </div>
       </div>
@@ -488,8 +444,7 @@
                   }
                 </div>
 
-                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' &&
-                mapping.parentObjectName) {
+                @if (supportsRelationalLookups && mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
                 <div
                   class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
                   <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
@@ -843,7 +798,7 @@
                   <td class="text-center text-primary fw-bold fs-5">➔</td>
                   <td>
                     <span class="fw-bold text-success">{{ m.sfField }}</span>
-                    @if (m.type === 'reference' && m.relationalExtIdField) {
+                    @if (supportsRelationalLookups && m.type === 'reference' && m.relationalExtIdField) {
                     <div class="small text-muted mt-1"><i class="feather icon-link"></i> Linked via
                       <code>{{ m.relationalExtIdField }}</code>
                     </div>
