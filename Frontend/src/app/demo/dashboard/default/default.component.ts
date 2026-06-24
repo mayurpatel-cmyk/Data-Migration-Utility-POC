@@ -563,7 +563,7 @@ export class DefaultComponent implements OnInit {
     const crm = (this.targetCrmId || '').toLowerCase();
     // Currently, only Salesforce natively supports mapping parent relationships 
     // via dynamic External IDs inside a standard bulk payload.
-    return crm === 'salesforce';
+    return crm === 'salesforce' || crm === 'zoho';
   }
 
   moveQueueItemUp(index: number) {
@@ -854,40 +854,72 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
-  onSfFieldChange(mapping: MappingMeta) {
+ onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-    if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
-      const parentObj = fieldMeta.referenceTo[0];
-      mapping.parentObjectName = parentObj;
+    // Check if it's a lookup field (reference)
+    if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
+      
+      // 1. Try to get parent object from standard metadata (Works perfectly for Salesforce)
+      let parentObj = (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) ? fieldMeta.referenceTo[0] : null;
 
-      if (!this.parentObjectFieldsCache[parentObj]) {
-        setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
+      // 2. FULLY DYNAMIC SMART FALLBACK: Guess parent module by scanning all loaded CRM objects!
+      // (Change 'this.sfObjects' to 'this.targetObjects' if that's what your array is named)
+      if (!parentObj && this.sfObjects && this.sfObjects.length > 0) {
+        const fieldLower = mapping.sfField.toLowerCase().replace(/[^a-z0-9]/g, ''); // Clean field name
 
-        this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
-          next: (response: any) => {
-            setTimeout(() => {
-              const fieldsArray = response.fields ? response.fields : response;
-              this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
-              mapping.isLoadingParentFields = false;
-              this.cdr.detectChanges();
-            });
-          },
-          error: (err) => {
-            setTimeout(() => {
-              mapping.isLoadingParentFields = false;
-              this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
-              this.cdr.detectChanges();
-            });
-          }
+        const matchedObj = this.sfObjects.find(obj => {
+          const objNameLower = (obj.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!objNameLower) return false;
+          
+          // Create a singular version for matching (e.g., 'accounts' -> 'account')
+          const singularName = objNameLower.endsWith('s') ? objNameLower.slice(0, -1) : objNameLower;
+          
+          // Match if the field name contains the object name or its singular form
+          return fieldLower.includes(singularName) || fieldLower.includes(objNameLower);
         });
+
+        if (matchedObj) {
+          parentObj = matchedObj.name; // Use the exact API name from the CRM
+        }
+      }
+
+      // 3. Load the fields for the dropdown
+      if (parentObj) {
+        mapping.parentObjectName = parentObj;
+
+        if (!this.parentObjectFieldsCache[parentObj]) {
+          setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
+          
+          this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
+            next: (response: any) => {
+              setTimeout(() => {
+                const fieldsArray = response.fields ? response.fields : response;
+                this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
+                mapping.isLoadingParentFields = false;
+                this.cdr.detectChanges();
+              });
+            },
+            error: (err) => {
+              setTimeout(() => {
+                mapping.isLoadingParentFields = false;
+                // Failsafe: Let them type it manually if the API fails
+                mapping.parentObjectName = 'Manual_Entry';
+                this.cdr.detectChanges();
+              });
+            }
+          });
+        }
+      } else {
+        // If we couldn't guess it from any module, trigger the manual entry fallback
+        mapping.parentObjectName = 'Manual_Entry';
       }
     } else {
+      // Not a lookup field, wipe data cleanly
       mapping.parentObjectName = undefined;
       mapping.relationalExtIdField = '';
     }
   }
-
   queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {
@@ -1252,6 +1284,7 @@ export class DefaultComponent implements OnInit {
                     sourceCrmId: this.sourceCrmId, 
                     targetCrmId: this.targetCrmId, 
                     batchSize: this.batchSize,
+                    externalIdField: job.targetExtIdField,
                     sourceRecords: parsedSourceRecords
                 };
             })
