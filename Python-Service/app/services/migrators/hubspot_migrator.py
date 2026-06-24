@@ -38,7 +38,7 @@ class HubspotMigrator:
                     if "filterGroups" in query_dict: payload["filterGroups"] = query_dict["filterGroups"]
                     if "sorts" in query_dict: payload["sorts"] = query_dict["sorts"]
                 except json.JSONDecodeError:
-                    await send_log(f"⚠️ [HubSpot Extraction] Invalid query format. Ignoring.")
+                    await send_log(f" [HubSpot Extraction] Invalid query format. Ignoring.")
 
             while True:
                 # --- FIX: Silent Retry Loop for Extraction ---
@@ -46,14 +46,14 @@ class HubspotMigrator:
                     res = await client.post(url, headers=headers, json=payload)
                     
                     if res.status_code == 401:
-                        await send_log(f"⚠️ HubSpot token expired. Silently refreshing...")
+                        await send_log(f" HubSpot token expired. Silently refreshing...")
                         token = await CrmService.refresh_crm_token(user_id, "hubspot", "source")
                         headers["Authorization"] = f"Bearer {token}"
                         continue
 
                     if res.status_code == 429:
                         retry_after = int(res.headers.get("Retry-After", 10))
-                        await send_log(f"⚠️ [HubSpot Rate Limit] Pausing extraction for {retry_after}s...")
+                        await send_log(f" [HubSpot Rate Limit] Pausing extraction for {retry_after}s...")
                         await asyncio.sleep(retry_after)
                         continue
                         
@@ -138,14 +138,14 @@ class HubspotMigrator:
                         
                         # Catch Expiration Mid-Upload
                         if res.status_code == 401:
-                            await send_log(f"⚠️ HubSpot token expired mid-migration. Silently refreshing...")
+                            await send_log(f" HubSpot token expired mid-migration. Silently refreshing...")
                             token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
                             headers["Authorization"] = f"Bearer {token}"
                             continue # Retry exact chunk
 
                         if res.status_code == 429:
                             retry_after = int(res.headers.get("Retry-After", 10))
-                            await send_log(f"⚠️ [HubSpot Rate Limit] Pausing batch for {retry_after}s...")
+                            await send_log(f" [HubSpot Rate Limit] Pausing batch for {retry_after}s...")
                             await asyncio.sleep(retry_after)
                             continue
                             

@@ -444,65 +444,71 @@
                   }
                 </div>
 
-                @if (supportsRelationalLookups && mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
-                <div
-                  class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
+                <!-- LOOKUP EXTERNAL ID MAPPING -->
+                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
+                <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2 animate__animated animate__fadeIn">
                   <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
                     <i class="feather icon-link"></i> Parent Ext ID ({{ mapping.parentObjectName }}):
                   </label>
 
                   @if (mapping.isLoadingParentFields) {
-                  <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
-                  } @else {
+                    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                  } @else if (mapping.parentObjectName !== 'Manual_Entry' && parentObjectFieldsCache[mapping.parentObjectName]) {
+                    
+                    <!-- DYNAMIC DROPDOWN (If we know the parent module) -->
+                    <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                      <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
+                        (click)="toggleParentDropdown(mapping, $event)"
+                        [class.text-muted]="!mapping.relationalExtIdField">
+                        {{ getParentFieldLabel(mapping, mapping.relationalExtIdField) || '-- Select External ID --' }}
+                      </div>
 
-                  <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                      @if (mapping.isParentDropdownOpen) {
+                      <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                        style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
 
-                    <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
-                      (click)="toggleParentDropdown(mapping, $event)"
-                      [class.text-muted]="!mapping.relationalExtIdField">
-                      {{ getParentFieldLabel(mapping, mapping.relationalExtIdField) || '-- Select External ID --' }}
-                    </div>
-
-                    @if (mapping.isParentDropdownOpen) {
-                    <div
-                      class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
-                      style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
-
-                      <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                        <div class="input-group input-group-sm">
-                          <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                          <input type="text" class="form-control" placeholder="Search parent ID fields..."
-                            [(ngModel)]="mapping.parentSearchQuery" autofocus>
+                        <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Search parent ID fields..."
+                              [(ngModel)]="mapping.parentSearchQuery" autofocus>
+                          </div>
                         </div>
-                      </div>
 
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap"
-                        (click)="selectParentField(mapping, 'Id')"
-                        [class.bg-light]="mapping.relationalExtIdField === 'Id'">
-                        <span class="fw-bold">Id</span>
-                        <div class="small text-muted" style="font-family: monospace;">Standard {{ targetCrmId | titlecase }} ID</div>
-                      </div>
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                          (click)="selectParentField(mapping, 'Id')"
+                          [class.bg-light]="mapping.relationalExtIdField === 'Id'">
+                          <span class="fw-bold">Id</span>
+                          <div class="small text-muted" style="font-family: monospace;">Standard ID</div>
+                        </div>
 
-                      <hr class="my-1">
+                        <hr class="my-1">
 
-                      @for (pField of getFilteredParentFields(mapping); track pField.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap"
-                        (click)="selectParentField(mapping, pField.name)"
-                        [class.bg-light]="mapping.relationalExtIdField === pField.name">
-                        {{ pField.label }}
-                        <div class="small text-muted" style="font-family: monospace;">{{ pField.name }}</div>
-                      </div>
-                      }
+                        @for (pField of getFilteredParentFields(mapping); track pField.name) {
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                          (click)="selectParentField(mapping, pField.name)"
+                          [class.bg-light]="mapping.relationalExtIdField === pField.name">
+                          {{ pField.label }}
+                          <div class="small text-muted" style="font-family: monospace;">{{ pField.name }}</div>
+                        </div>
+                        }
 
-                      @if (getFilteredParentFields(mapping).length === 0) {
-                      <div class="text-center p-3 text-muted small">
-                        No fields found matching "{{ mapping.parentSearchQuery }}"
+                        @if (getFilteredParentFields(mapping).length === 0) {
+                        <div class="text-center p-3 text-muted small">
+                          No fields found matching "{{ mapping.parentSearchQuery }}"
+                        </div>
+                        }
                       </div>
                       }
                     </div>
-                    }
-                  </div>
 
+                  } @else {
+                    
+                    <!-- BULLETPROOF FALLBACK (Let user type 'Legacy_ID' manually if module couldn't be guessed) -->
+                    <input type="text" class="form-control form-control-sm border-primary" 
+                           [(ngModel)]="mapping.relationalExtIdField" 
+                           placeholder="Type Ext ID (e.g., Legacy_ID)" 
+                           [disabled]="isMigrating">
                   }
                 </div>
                 }

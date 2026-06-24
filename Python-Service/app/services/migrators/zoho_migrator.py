@@ -50,13 +50,13 @@ class ZohoMigrator:
                 
                 # Catch Expiration Mid-Extract
                 if res.status_code == 401:
-                    await send_log("⚠️ Zoho token expired during extraction. Silently refreshing...")
+                    await send_log(" Zoho token expired during extraction. Silently refreshing...")
                     token = await CrmService.refresh_crm_token(user_id, "zoho", "source")
                     headers["Authorization"] = f"Zoho-oauthtoken {token}"
                     continue # Retry the request with the new token
                 
                 if res.status_code == 429:
-                    await send_log("⚠️ Zoho Rate Limit. Pausing 30s...")
+                    await send_log(" Zoho Rate Limit. Pausing 30s...")
                     await asyncio.sleep(30)
                     continue
                 
@@ -117,7 +117,7 @@ class ZohoMigrator:
             try:
                 req_payload = {"data": zoho_data_rows}
                 if op_mode == "upsert" and options.get("targetExtIdField"):
-                    req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
+                   req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
                 # --- FIX: Silent Retry Loop for Uploads ---
                 while True:
@@ -125,7 +125,7 @@ class ZohoMigrator:
                     
                     # Catch Expiration Mid-Upload
                     if res.status_code == 401:
-                        await send_log("⚠️ Zoho token expired mid-migration. Silently refreshing...")
+                        await send_log(" Zoho token expired mid-migration. Silently refreshing...")
                         token = await CrmService.refresh_crm_token(user_id, "zoho", "target")
                         headers["Authorization"] = f"Zoho-oauthtoken {token}"
                         continue # Retry the exact same chunk
@@ -148,7 +148,7 @@ class ZohoMigrator:
                     try: error_text = res.json().get("message", res.json().get("errors", [{}])[0].get("message", res.text))
                     except: pass
                     
-                    await send_log(f"⚠️ Zoho API Rejected Batch ({res.status_code}): {error_text}")
+                    await send_log(f" Zoho API Rejected Batch ({res.status_code}): {error_text}")
                     for item in chunk:
                         orig_record = source_records[item["originalIndex"]]
                         orig_record["Target_Error"] = f"Zoho API Error: {error_text}"

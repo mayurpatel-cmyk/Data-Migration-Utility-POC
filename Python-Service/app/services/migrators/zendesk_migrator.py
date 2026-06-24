@@ -28,7 +28,7 @@ class ZendeskMigrator:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 429:
                     retry_after = int(res.headers.get("Retry-After", 60))
-                    await send_log(f"⚠️ [Zendesk Rate Limit] Pausing for {retry_after}s...")
+                    await send_log(f" [Zendesk Rate Limit] Pausing for {retry_after}s...")
                     await asyncio.sleep(retry_after)
                     continue
                     

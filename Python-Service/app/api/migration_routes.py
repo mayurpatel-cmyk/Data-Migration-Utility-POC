@@ -133,7 +133,7 @@ async def websocket_migration(websocket: WebSocket):
                 mappings = [m for m in job.get("mappings", []) if m.get("targetField") or m.get("sfField")]
                 op_mode = job.get("operationMode", "insert")
                 batch_size = int(job.get("batchSize", 5000))
-                ext_id_field = job.get("externalIdField", "")
+                ext_id_field = job.get("externalIdField") or job.get("targetExtIdField", "")
                 
                 if not mappings: continue
                 source_records = []
