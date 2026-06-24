@@ -103,6 +103,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   isValidating = false;
   errorCurrentPage: number = 1;
   errorPageSize: number = 10;
+  mappingSearchQuery = '';
   
   isSourceDropdownOpen = false;
   sourceSearchQuery = '';
@@ -152,6 +153,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
 
     this.sourceSystem = this.sourceCrmId;
     this.targetSystem = this.targetCrmId;
+    this.batchSize = this.batchConfig.default;
     
     // Save them so a page refresh doesn't break the app
     localStorage.setItem('source_crm_slot', this.sourceCrmId);
@@ -205,8 +207,49 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     this.validateData(true, []);
   }
 
+  validateBatchSize() {
+    const config = this.batchConfig;
+    if (this.batchSize > config.max) {
+      this.batchSize = config.max;
+      this.toastr.info(`Batch size reduced to ${config.max} to comply with ${this.targetSystem} API limits.`);
+    } else if (this.batchSize < config.min) {
+      this.batchSize = config.min;
+    }
+  }
+
+  get batchConfig() {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'HubSpot max limit: 100' };
+      case 'zendesk':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zendesk max limit: 100' };
+      case 'zoho':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zoho max limit: 100' };
+      case 'salesforce':
+      default:
+        return { min: 100, max: 10000, step: 1000, default: 5000, tooltip: 'Salesforce max limit: 10,000' };
+    }
+  }
+
   get visibleMappings() {
-    return this.hideMappedFields ? this.mappings.filter(m => !m.targetField) : this.mappings;
+    let filtered = this.mappings;
+
+    // 1. Filter out already mapped fields if toggled
+    if (this.hideMappedFields) {
+      filtered = filtered.filter(m => !m.targetField);
+    }
+
+    // 2. Filter by the user's search query (matches field name or label)
+    if (this.mappingSearchQuery) {
+      const query = this.mappingSearchQuery.toLowerCase().trim();
+      filtered = filtered.filter(m => 
+        (m.sourceLabel && m.sourceLabel.toLowerCase().includes(query)) || 
+        (m.sourceField && m.sourceField.toLowerCase().includes(query))
+      );
+    }
+
+    return filtered;
   }
 
   changePreviewLimit(newLimit: number) {

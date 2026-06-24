@@ -9,7 +9,10 @@ class ZendeskValidator:
         self.ZD_TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent']
         self.ZD_TICKET_TYPES = ['question', 'incident', 'problem', 'task']
 
-    def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "") -> dict:
+    def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "", strict_mode: bool = True) -> dict:
+        # ... (skip to dropdown section) ...
+
+            # --- DROPDOWNS (TAGGER) ---
         zd_rules = target_rules
         if not records:
             return {"stats": {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}, "validRecords": [], "invalidRecords": []}
