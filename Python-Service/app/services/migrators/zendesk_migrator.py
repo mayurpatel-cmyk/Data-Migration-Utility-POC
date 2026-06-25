@@ -1,6 +1,7 @@
 import urllib.parse
 import re
 import asyncio
+import json
 
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
@@ -11,131 +12,143 @@ class ZendeskMigrator:
     async def extract(self, client, creds, obj_name, query, mappings, send_log):
         token = creds.get("access_token")
         subdomain = creds.get("subdomain")
+        if not subdomain and creds.get("api_domain"):
+            subdomain = creds.get("api_domain").replace(".zendesk.com", "").replace("https://", "")
+        
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        safe_obj = obj_name.lower()
+        # 1. PURE DYNAMIC NAME HANDLING
+        safe_obj = obj_name.strip().lower()
         source_records = []
         
         try:
-            safe_obj_singular = safe_obj.rstrip('s')
-            clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip()
+            # Drop the plural 's' dynamically for the Zendesk search filter 
+            safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
+            
+            clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip() if query else ""
             final_query = f"{clean_query} type:{safe_obj_singular}".strip()
             safe_query = urllib.parse.quote(final_query)
             
             url = f"https://{subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
             
             while url:
-                res = await client.get(url, headers=headers)
-                if res.status_code == 429:
-                    retry_after = int(res.headers.get("Retry-After", 60))
-                    await send_log(f" [Zendesk Rate Limit] Pausing for {retry_after}s...")
-                    await asyncio.sleep(retry_after)
-                    continue
+                while True:
+                    res = await client.get(url, headers=headers)
+                    if res.status_code == 429:
+                        await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
+                        await asyncio.sleep(30)
+                        continue
+                    break
                     
                 res.raise_for_status()
                 data = res.json()
-                records = data.get("results", [])
                 
-                if not records: break
+                results = data.get("results", [])
+                if not results: break
                 
-                for rec in records:
+                for r in results:
                     flat_rec = {}
-                    for k, v in rec.items():
-                        if k == "custom_fields" and isinstance(v, list):
-                            for cf in v: 
-                                val = cf.get("value")
-                                if isinstance(val, list): val = ";".join([str(i) for i in val])
-                                flat_rec[f"custom_field_{cf['id']}"] = val
-                        elif not isinstance(v, (dict, list)): flat_rec[k] = v
-                        elif isinstance(v, list): flat_rec[k] = ";".join([str(i) for i in v])
+                    for k, v in r.items():
+                        if isinstance(v, dict):
+                            flat_rec[k] = v.get("id", v.get("name", str(v)))
+                        elif isinstance(v, list):
+                            flat_rec[k] = ";".join([str(i.get("id", i.get("name", i))) if isinstance(i, dict) else str(i) for i in v])
+                        else:
+                            flat_rec[k] = v
                     source_records.append(flat_rec)
-                
-                if len(source_records) % 1000 == 0:
-                    await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
-                
-                url = data.get("links", {}).get("next") if data.get("meta", {}).get("has_more") else None
-                
-            await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
-            return source_records
+                    
+                if len(source_records) % 500 == 0:
+                    await send_log(f"[{safe_obj}] Extracted {len(source_records)} records...")
+                    
+                url = data.get("links", {}).get("next")
+                if not data.get("meta", {}).get("has_more"):
+                    break
+
         except Exception as e:
-            await send_log(f"[{obj_name}] Extract Failed: {str(e)}")
-            raise e
+            await send_log(f" Zendesk Extraction Error: {str(e)}")
+            
+        await send_log(f"[{safe_obj}] Extraction Complete! Total: {len(source_records)}")
+        return source_records
+
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, [], []
 
-        target_object = options["targetObject"]
+        # 2. NO HARDCODING: Uses exactly what the frontend passes (e.g., "users", "tickets")
+        target_object = options["targetObject"].strip().lower()
+        
         token = options["token"]
-        subdomain = options["instance_url"] 
+        domain = options.get("instance_url", "").replace(".zendesk.com", "").replace("https://", "").strip('/')
         source_records = options["sourceRecords"]
 
+        await send_log(f"[{target_object}] {pass_name}: Injecting data stream into Zendesk...")
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        
         total_success, total_error = 0, 0
         all_success_data, all_error_data = [], []
 
-        await send_log(f"[{target_object}] {pass_name}: Pushing data to Zendesk (Concurrent Mode)...")
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        safe_obj = target_object.lower()
-        if not safe_obj.endswith('s'): safe_obj += 's'
-
         chunks = list(chunk_dataset(payload, 100))
-        
-        if op_mode in ["update", "upsert"]:
-            endpoint = f"https://{subdomain}.zendesk.com/api/v2/{safe_obj}/update_many.json"
-        else:
-            endpoint = f"https://{subdomain}.zendesk.com/api/v2/{safe_obj}/create_many.json"
 
-        # --- CONCURRENCY UPGRADE: Process 10 chunks at a time ---
-        # 10 concurrent requests * 100 records = 1,000 records processed dynamically
-        semaphore = asyncio.Semaphore(10) 
+        # 3. DYNAMIC URL BUILDER 
+        if op_mode == "upsert":
+            endpoint = "create_or_update_many.json"
+        elif op_mode == "update":
+            endpoint = "update_many.json"
+        else:
+            endpoint = "create_many.json"
+            
+        api_path = f"https://{domain}.zendesk.com/api/v2/{target_object}/{endpoint}"
 
         async def process_chunk(chunk):
-            async with semaphore:
-                zd_records = [c["targetRecord"] for c in chunk]
-                req_payload = {safe_obj: zd_records}
+            # 4. DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
+            zendesk_data_rows = [c["targetRecord"] for c in chunk]
+            req_payload = {target_object: zendesk_data_rows}
+
+            while True:
+                if op_mode == "update":
+                    res = await client.put(api_path, json=req_payload, headers=headers)
+                else:
+                    res = await client.post(api_path, json=req_payload, headers=headers)
+
+                if res.status_code == 429:
+                    await send_log(" ⏳ Zendesk API Rate Limit reached. Pausing 30s...")
+                    await asyncio.sleep(30)
+                    continue
+                break
+
+            if res.status_code in [200, 201, 202]:
+                data = res.json()
                 
-                try:
-                    # 1. Submit the batch (With Rate Limit Protection)
-                    while True:
-                        res = await client.post(endpoint, json=req_payload, headers=headers)
-                        if res.status_code == 429:
-                            retry_after = int(res.headers.get("Retry-After", 60))
-                            await send_log(f"⚠️ [Zendesk Rate Limit] Pausing batch for {retry_after}s...")
-                            await asyncio.sleep(retry_after)
-                            continue
-                        break
-                        
-                    if res.status_code not in [200, 201]:
-                        return {"chunk": chunk, "status": "error", "message": res.text}
-                        
-                    data = res.json()
-                    job_status_id = data.get("job_status", {}).get("id")
+                # ASYNC JOB POLLING: Bulk API endpoints return a Job Status ID
+                if "job_status" in data:
+                    job_id = data["job_status"]["id"]
+                    await send_log(f" 🔄 Batch accepted. Waiting for Zendesk Background Job: {job_id}...")
                     
-                    # 2. Wait for this specific batch to finish processing in the background
-                    if job_status_id:
-                        poll_url = f"https://{subdomain}.zendesk.com/api/v2/job_statuses/{job_status_id}.json"
-                        while True:
-                            await asyncio.sleep(2)
-                            status_res = await client.get(poll_url, headers=headers)
+                    while True:
+                        job_res = await client.get(f"https://{domain}.zendesk.com/api/v2/job_statuses/{job_id}.json", headers=headers)
+                        if job_res.status_code == 429:
+                            await asyncio.sleep(30)
+                            continue
                             
-                            if status_res.status_code == 429:
-                                await asyncio.sleep(int(status_res.headers.get("Retry-After", 10)))
-                                continue
-                                
-                            status_data = status_res.json().get("job_status", {})
-                            if status_data.get("status") in ["completed", "failed", "killed"]:
-                                return {"chunk": chunk, "status": status_data.get("status"), "results": status_data.get("results", [])}
-                    else:
-                        # Fallback for instant success
-                        return {"chunk": chunk, "status": "completed", "results": [{"success": True, "id": "Success"} for _ in chunk]}
+                        job_data = job_res.json().get("job_status", {})
+                        if job_data.get("status") in ["completed", "failed", "killed"]:
+                            return {"chunk": chunk, "status": "completed", "results": job_data.get("results", [])}
                         
-                except Exception as exc:
-                    return {"chunk": chunk, "status": "error", "message": str(exc)}
+                        await asyncio.sleep(3) # Poll every 3 seconds
+                else:
+                    # Synchronous response (fallback)
+                    return {"chunk": chunk, "status": "completed", "results": data.get(target_object, [])}
+            else:
+                return {"chunk": chunk, "status": "error", "message": res.text}
 
-        # Execute all batches concurrently
-        batch_results = await asyncio.gather(*[process_chunk(chunk) for chunk in chunks])
+        # Fire off batches concurrently (5 chunks at a time to respect limits)
+        batch_results = []
+        for i in range(0, len(chunks), 5):
+            concurrent_batch = chunks[i:i+5]
+            results = await asyncio.gather(*[process_chunk(chunk) for chunk in concurrent_batch])
+            batch_results.extend(results)
 
-        # Loop through the completed results and map them back to the source records
+        # Map Results back to original UI rows
         for batch_res in batch_results:
             chunk = batch_res["chunk"]
             
@@ -148,13 +161,19 @@ class ZendeskMigrator:
             else:
                 for item, z_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
-                    if z_res.get("success") or batch_res["status"] == "completed":
+                    
+                    # Zendesk async results yield 'success', sync results usually just yield an 'id'
+                    if z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]:
+                        orig_record["Target_Id"] = z_res.get("id")
+                        all_success_data.append(orig_record)
+                        total_success += 1
+                    elif z_res.get("error"):
+                        orig_record["Target_Error"] = str(z_res.get("details") or z_res.get("error"))
+                        all_error_data.append(orig_record)
+                        total_error += 1
+                    else: 
                         orig_record["Target_Id"] = z_res.get("id", "Success")
                         all_success_data.append(orig_record)
                         total_success += 1
-                    else:
-                        orig_record["Target_Error"] = z_res.get("details", "Failed")
-                        all_error_data.append(orig_record)
-                        total_error += 1
 
         return total_success, total_error, all_success_data, all_error_data

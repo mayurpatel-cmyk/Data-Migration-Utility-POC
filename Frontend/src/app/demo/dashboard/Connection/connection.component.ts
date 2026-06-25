@@ -28,7 +28,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     { id: 'zendesk', name: 'Zendesk', icon: 'icon-headphones' },
     { id: 'salesforce', name: 'Salesforce', icon: 'icon-cloud' },
     { id: 'hubspot', name: 'HubSpot', icon: 'icon-share-2' },
-    { id: 'msdynamics', name: 'MS Dynamics 365', icon: 'icon-cpu' },
+   // { id: 'msdynamics', name: 'MS Dynamics 365', icon: 'icon-cpu' },
     { id: 'zoho', name: 'Zoho CRM', icon: 'icon-layout' }
   ];
 
