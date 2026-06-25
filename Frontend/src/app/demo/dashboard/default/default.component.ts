@@ -96,6 +96,8 @@ export class DefaultComponent implements OnInit {
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
   displayName = signal('CRM User');
+  isUpsertDropdownOpen: boolean = false;
+  upsertSearchQuery: string = '';
 
   // --- Real-Time UI State Trackers ---
   activeJobStatus: string = '';
@@ -234,6 +236,37 @@ export class DefaultComponent implements OnInit {
     }
   }
 
+  toggleUpsertDropdown(event: Event) {
+    event.stopPropagation();
+    this.isUpsertDropdownOpen = !this.isUpsertDropdownOpen;
+    if (this.isUpsertDropdownOpen) {
+      this.upsertSearchQuery = ''; // Clear search when opening
+    }
+  }
+
+  // Handles the selection
+  selectUpsertKeyOption(fieldName: string) {
+    this.targetExtIdField = fieldName;
+    this.isUpsertDropdownOpen = false;
+    this.onOperationModeChange(); // Fire your existing logic to save it
+  }
+
+  // Filters the list based on what the user types
+  get filteredUpsertKeys(): any[] {
+    if (!this.upsertSearchQuery) return this.validUpsertKeys;
+    const query = this.upsertSearchQuery.toLowerCase();
+    return this.validUpsertKeys.filter(f => 
+      (f.label || '').toLowerCase().includes(query) || 
+      (f.name || '').toLowerCase().includes(query)
+    );
+  }
+
+  getUpsertKeyLabel(fieldName: string): string {
+    if (!fieldName) return '';
+    const field = this.validUpsertKeys.find(f => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
   get hasDeleteInBatch(): boolean {
     return this.migrationQueue.some(job => job.operationMode === 'delete');
   }
@@ -324,6 +357,22 @@ export class DefaultComponent implements OnInit {
     if (!fieldName) return '';
     const field = this.getSfFieldMeta(fieldName);
     return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  // Dynamically gets valid fields for the Upsert Key dropdown
+  get validUpsertKeys(): any[] {
+    if (!this.sfFields || this.sfFields.length === 0) return [];
+    
+    const crm = (this.targetCrmId || '').toLowerCase();
+
+    if (crm === 'salesforce') {
+      // Salesforce explicitly flags External IDs
+      return this.sfFields.filter(f => f.externalId || f.unique || f.idLookup || f.name === 'Id');
+    } else {
+      // Zoho, HubSpot, and Zendesk do not reliably send unique flags via standard metadata.
+      // Return ALL fields so the user can manually select their custom ID (e.g., Legacy_ID).
+      return this.sfFields;
+    }
   }
 
   getFilteredSfFields(query?: string): any[] {

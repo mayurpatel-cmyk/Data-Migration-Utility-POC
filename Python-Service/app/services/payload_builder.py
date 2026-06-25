@@ -75,6 +75,18 @@ class PayloadBuilderService:
                         elif str(csv_val).lower() in ["false", "0", "no", "n"]: csv_val = False
                         else: csv_val = bool(csv_val)
 
+                    elif expected_type in ["date", "datetime"]:
+                        try:
+                            import pandas as pd
+                            parsed_date = pd.to_datetime(csv_val, errors='coerce')
+                            if pd.notna(parsed_date):
+                                if expected_type == "date":
+                                    csv_val = parsed_date.strftime('%Y-%m-%d')
+                                else:
+                                    csv_val = parsed_date.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                        except Exception:
+                            pass
+
                 if is_patch_mode and target_field in ['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'created_at', 'updated_at']:
                     continue
 
@@ -104,7 +116,7 @@ class PayloadBuilderService:
 
                     rel_ext_id = mapping.get("relationalExtIdField")
                     
-                    if mapping.get("type") == "reference" and rel_ext_id:
+                    if rel_ext_id:
                         if rel_ext_id.lower() == "id":
                             target_record[target_field] = csv_val
                         else:
@@ -115,7 +127,20 @@ class PayloadBuilderService:
                         target_record[target_field] = csv_val
                 
                 elif target_crm == "zoho":
-                    target_record[target_field] = csv_val
+                    rel_ext_id = mapping.get("relationalExtIdField")
+                    
+                    # BULLETPROOF FIX: If rel_ext_id exists, always treat it as a lookup dictionary
+                    if rel_ext_id:
+                        if rel_ext_id.lower() == "id":
+                            target_record[target_field] = csv_val
+                        else:
+                            # Safely wrap it in the Zoho External ID dictionary
+                            target_record[target_field] = {rel_ext_id: csv_val}
+                            
+                        if is_patch_mode: has_patch_data = True
+                    else:
+                        target_record[target_field] = csv_val
+                        
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
                 
                 elif target_crm == "zendesk":
