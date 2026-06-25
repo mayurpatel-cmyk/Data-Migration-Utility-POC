@@ -210,6 +210,7 @@ def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_curren
     
     # Zendesk isolates accounts dynamically by the {subdomain} injected into this URL
     auth_url = f"https://{subdomain}.zendesk.com/oauth/authorizations/new?{urllib.parse.urlencode(params)}"
+    
     return {"url": auth_url}
 
 @router.get("/auth/zendesk/callback")

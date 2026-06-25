@@ -19,11 +19,13 @@ class HubspotMigrator:
         safe_obj = obj_name.lower()
         source_records = []
         
+        # --- THE FIX: Support both UI mapping formats ---
         properties = ["hs_object_id"]
         for mapping in mappings:
-            source_field = mapping.get("sourceField")
+            source_field = mapping.get("sourceField") or mapping.get("csvField")
             if source_field and source_field not in properties:
                 properties.append(source_field)
+        # ------------------------------------------------
 
         try:
             url = f"{domain}/crm/v3/objects/{safe_obj}/search"
@@ -41,7 +43,7 @@ class HubspotMigrator:
                     await send_log(f" [HubSpot Extraction] Invalid query format. Ignoring.")
 
             while True:
-                # --- FIX: Silent Retry Loop for Extraction ---
+                # Silent Retry Loop for Extraction
                 while True:
                     res = await client.post(url, headers=headers, json=payload)
                     
@@ -57,7 +59,7 @@ class HubspotMigrator:
                         await asyncio.sleep(retry_after)
                         continue
                         
-                    break # Break retry loop
+                    break 
                     
                 res.raise_for_status()
                 data = res.json()
@@ -87,7 +89,7 @@ class HubspotMigrator:
         except Exception as e:
             await send_log(f"[{obj_name}] Extract Failed: {str(e)}")
             raise e
-
+            
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, [], []
 
