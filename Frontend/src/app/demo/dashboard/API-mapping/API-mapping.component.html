@@ -200,6 +200,33 @@ html {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* --- LIVE SONAR PULSE DOT --- */
+.live-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #198754; /* Success Green */
+  margin-left: 10px;
+  box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+  animation: livePulse 2s infinite;
+}
+
+@keyframes livePulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(25, 135, 84, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(25, 135, 84, 0);
+  }
+}
 </style>
 @if (isGlobalLoading) {
   <div class="global-loader-overlay animate__animated animate__fadeIn">
@@ -227,7 +254,9 @@ html {
         <i class="feather icon-cpu fs-4"></i>
       </div>
       <div>
-        <h5 class="mb-0 fw-bold">Live API Integration</h5>
+        <h5 class="mb-0 fw-bold d-flex align-items-center">
+          Live API Integration <span class="live-dot" title="Connection Active"></span>
+        </h5>
         <span class="text-muted small text-uppercase">{{ sourceSystem }} ➔ {{ targetSystem }}</span>
       </div>
     </div>
