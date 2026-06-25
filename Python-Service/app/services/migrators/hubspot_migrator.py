@@ -89,7 +89,7 @@ class HubspotMigrator:
         except Exception as e:
             await send_log(f"[{obj_name}] Extract Failed: {str(e)}")
             raise e
-            
+
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, [], []
 
@@ -97,7 +97,7 @@ class HubspotMigrator:
         token = options["token"]
         domain = (options.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         source_records = options["sourceRecords"]
-        dedupe_key = options.get("dedupeKey", "email")
+        dedupe_key = options.get("targetExtIdField") or options.get("dedupeKey") or "email"
         
         user_id = options.get("userId") # <-- Needed for refresh
 
@@ -113,7 +113,8 @@ class HubspotMigrator:
         if op_mode == "update":
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/update"
         elif op_mode == "upsert":
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert?idProperty={dedupe_key}"
+            # FIXED: Removed the query string. HubSpot v3 requires this in the body.
+            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert" 
         else:
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
 
@@ -124,7 +125,15 @@ class HubspotMigrator:
                 if op_mode == "update":
                     hs_records = [{"id": c["targetRecord"].pop("id"), "properties": c["targetRecord"]} for c in chunk if "id" in c["targetRecord"]]
                 elif op_mode == "upsert":
-                    hs_records = [{"id": str(c["targetRecord"].pop(dedupe_key)), "properties": c["targetRecord"]} for c in chunk if dedupe_key in c["targetRecord"]]
+                    hs_records = [
+                        {
+                            # Use .get() instead of .pop() to keep the email in the properties body!
+                            "id": str(c["targetRecord"].get(dedupe_key)), 
+                            "idProperty": dedupe_key,
+                            "properties": c["targetRecord"]
+                        } 
+                        for c in chunk if c["targetRecord"].get(dedupe_key)
+                    ]
                 else:
                     hs_records = [{"properties": c["targetRecord"]} for c in chunk]
 

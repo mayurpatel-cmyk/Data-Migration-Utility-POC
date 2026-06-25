@@ -61,6 +61,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     return std.includes(safeName) || std.includes(safeName + 's');
   }
 
+  isGlobalLoading: boolean = false;
+  globalLoadingText: string = 'Loading...';
+  globalLoadingSubText: string = 'Please wait...';
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
   targetCrmId: string = '';
@@ -1169,6 +1172,9 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
   preloadEntirePage() {
     this.isLoading = true;
+    this.isGlobalLoading = true;
+    this.globalLoadingText = 'Fetching Live Schemas...';
+    this.globalLoadingSubText = 'Please wait while we sync the CRM engines';
     this.cdr.detectChanges(); 
 
     forkJoin({
@@ -1198,11 +1204,16 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
         this.cdr.detectChanges();
         this.loadMetadata();
+        
+        // 2. Turn it off when finished!
+        this.isGlobalLoading = false;
+        this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('Failed to preload base entity dropdowns:', err);
         this.logMessages.unshift(`Configuration Error: Could not fetch core CRM schemas.`);
         this.isLoading = false;
+        this.isGlobalLoading = false;
         this.cdr.detectChanges();
       }
     });
@@ -1772,6 +1783,9 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     this.errorData = [];
     this.jobStatus = 'Initializing...';
     this.logMessages = [];
+    this.isGlobalLoading = true;
+    this.globalLoadingText = `Migrating to ${this.targetSystem}...`;
+    this.globalLoadingSubText = `Pushing data into ${this.selectedTargetObject}. Please do not close this window.`;
     this.cdr.detectChanges();
     this.toastr.info('Connecting to Migration Engine...', 'Job Started');
 
@@ -1852,6 +1866,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
           
           // --- THE NEW POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
+            this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
             const errorCount = data.errorData ? data.errorData.length : 0;
             
@@ -1905,6 +1920,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
     ws.onerror = () => {
       this.zone.run(() => {
+        this.isGlobalLoading = false;
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
         this.toastr.error('WebSocket connection failed.', 'Engine Error');
@@ -1921,6 +1937,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
     ws.onclose = () => {
       this.zone.run(() => {
+        this.isGlobalLoading = false;
         if (this.jobStatus === 'Running' || this.jobStatus === 'Initializing...') {
           this.jobStatus = 'Disconnected';
         }

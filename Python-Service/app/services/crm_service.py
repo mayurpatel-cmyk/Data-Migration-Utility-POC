@@ -70,7 +70,7 @@ class CrmService:
                     
             elif crm == "zoho":
                 accounts_server = creds.get("accounts_server", "https://accounts.zoho.com")
-                res = await client.post(f"{accounts_server}/oauth/v2/token", data={
+                res = await client.post(f"{accounts_server}/oauth/v2/token", params={
                     "grant_type": "refresh_token",
                     "client_id": os.getenv("ZOHO_CLIENT_ID"),
                     "client_secret": os.getenv("ZOHO_CLIENT_SECRET"),
