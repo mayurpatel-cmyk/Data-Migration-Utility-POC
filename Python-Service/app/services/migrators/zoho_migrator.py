@@ -23,21 +23,43 @@ class ZohoMigrator:
         source_records = []
         page, page_token, more_records = 1, None, True
         
+        # --- NEW SMART QUERY PARSER ---
+        user_limit = None
+        base_coql = ""
+        if query:
+            base_coql = query.strip()
+            if base_coql.lower().startswith("select "):
+                if "*" in base_coql: 
+                    base_coql = base_coql.replace("*", fields_str, 1)
+                
+                # Safely extract the user's limit before Zoho pagination overrides it
+                limit_match = re.search(r'(?i)\s+limit\s+(\d+)', base_coql)
+                if limit_match:
+                    user_limit = int(limit_match.group(1))
+                    base_coql = re.sub(r'(?i)\s+limit\s+\d+', '', base_coql)
+                
+                # Fix spacing issues if any exist in the SELECT clause
+                match = re.match(r'(?i)select\s+(.*?)\s+from\s+', base_coql)
+                if match:
+                    clean_select = match.group(1).replace(" ", "")
+                    base_coql = base_coql.replace(match.group(1), clean_select, 1)
+
+                if " where " not in base_coql.lower(): 
+                    base_coql += " where id is not null"
+            else:
+                base_coql = f"select {fields_str} from {obj_name} where {base_coql}"
+        # ------------------------------
+
         while more_records:
             if query:
-                coql_query = query.strip()
-                if coql_query.lower().startswith("select "):
-                    if "*" in coql_query: coql_query = coql_query.replace("*", fields_str, 1)
-                    match = re.match(r'(?i)select\s+(.*?)\s+from\s+', coql_query)
-                    if match:
-                        clean_select = match.group(1).replace(" ", "")
-                        coql_query = coql_query.replace(match.group(1), clean_select, 1)
-                    if " where " not in coql_query.lower(): coql_query += " where id is not null"
-                    coql_query = re.sub(r'(?i)\s+limit\s+\d+', '', coql_query)
-                else:
-                    coql_query = f"select {fields_str} from {obj_name} where {coql_query}"
-                    
-                paginated_coql = f"{coql_query} limit 200 offset {(page - 1) * 200}"
+                fetch_limit = 200
+                if user_limit is not None:
+                    remaining = user_limit - len(source_records)
+                    if remaining <= 0:
+                        break # Stop extracting if we hit the user's exact limit!
+                    fetch_limit = min(200, remaining)
+
+                paginated_coql = f"{base_coql} limit {fetch_limit} offset {(page - 1) * 200}"
                 
             # --- Silent Retry Loop for Extraction ---
             while True:

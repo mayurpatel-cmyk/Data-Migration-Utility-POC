@@ -1,5 +1,6 @@
 import urllib.parse
 import asyncio
+import re
 from app.services.crm_service import CrmService
 
 def chunk_dataset(data: list, chunk_size: int = 5000):
@@ -17,8 +18,20 @@ class SalesforceMigrator:
         
         headers_list = [m["sourceField"] if "sourceField" in m else m["csvField"] for m in mappings if m.get("sourceField") or m.get("csvField")]
         fields_str = ", ".join(headers_list) if headers_list else "Id"
-        where_clause = f" WHERE {query}" if query else ""
-        soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
+        
+        clean_query = (query or "").strip()
+
+        # --- NEW SMART QUERY BUILDER ---
+        if clean_query.lower().startswith("select "):
+            soql = clean_query
+            # Intelligently swap out the '*' for the actual mapped fields so the migration doesn't miss data
+            if " * " in soql.lower() or soql.lower().startswith("select *"):
+                soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
+        else:
+            # Fallback for when the user only types a standard condition (e.g., "Industry = 'Tech'")
+            where_clause = f" WHERE {clean_query}" if clean_query else ""
+            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
+        # --------------------------------
         
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         safe_soql = urllib.parse.quote(soql)
@@ -27,7 +40,12 @@ class SalesforceMigrator:
         source_records = []
         while url:
             res = await client.get(url, headers=headers)
-            res.raise_for_status()
+            
+            # Catch 400 Bad Request errors gracefully and send them to the UI logs
+            if res.status_code != 200:
+                await send_log(f"Salesforce Extraction Failed: {res.text}")
+                res.raise_for_status()
+                
             data = res.json()
             
             for r in data.get("records", []):

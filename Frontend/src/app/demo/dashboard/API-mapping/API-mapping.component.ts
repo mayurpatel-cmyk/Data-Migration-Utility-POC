@@ -589,9 +589,8 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     } else if (crm === 'salesforce') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
     } else if (crm === 'zoho') {
-      // FIX: Default to a safe WHERE condition for Zoho instead of SELECT *
-      this.customQuery = `id is not null`; 
-    } else {
+      this.customQuery = `SELECT * FROM ${entityName}`; 
+    } else  {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
   }
@@ -828,21 +827,21 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
-    } else if (crm === 'salesforce') {
+    }  else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
-        placeholder: "e.g., StageName = 'Closed Won' AND Amount > 5000",
-        helpText: "Enter the WHERE clause for your Salesforce SOQL query (omit 'SELECT' and 'WHERE').",
+        placeholder: "e.g., SELECT * FROM Account WHERE Amount > 5000 LIMIT 100",
+        helpText: "Write your full SOQL query to filter data, or append LIMIT to restrict the migration size.",
         icon: 'icon-database',
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
     } else if (crm === 'zoho') {
       return {
-        title: 'Zoho COQL Filter',
-        placeholder: "e.g., Account_Name != null and Industry = 'Technology'",
-        helpText: "Enter Zoho criteria or a COQL condition to filter your records.",
-        icon: 'icon-filter',
+        title: 'Zoho COQL Editor',
+        placeholder: "e.g., SELECT * FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
+        helpText: "Write your full COQL query. The engine automatically handles Zoho's strict ID rules behind the scenes.",
+        icon: 'icon-database',
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
@@ -902,11 +901,6 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-
-    if ((this.sourceCrmId.toLowerCase() === 'salesforce' || this.sourceCrmId.toLowerCase() === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
 
     const payload = {
       crmId: this.sourceCrmId,
@@ -1087,9 +1081,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         return applySquiggle("Salesforce strictly requires single quotes (') for text values. Do not use double quotes (\").", '"');
       }
       
-      if (queryLower.includes('limit ')) {
-        return applySquiggle("Do not use LIMIT. The engine handles pagination automatically.", "limit");
-      } else if (queryLower.includes('order by ')) {
+     if (queryLower.includes('order by ')) {
         return applySquiggle("Do not use ORDER BY.", "order by");
       } else if (queryLower.endsWith(';')) {
         return applySquiggle("Do not end your query with a semicolon (;).", ";");
@@ -1463,10 +1455,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-    if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
+
 
     // Inject the Revalidation flags into the payload
     const payload = {
@@ -1823,10 +1812,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
+    
 
     const fixedRecords = this.validationResults?.invalidRecords
       ?.filter((rec: any) => rec._editedFields)
