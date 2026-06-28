@@ -155,6 +155,15 @@ class PayloadBuilderService:
                         
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
 
+                elif target_crm == "hubspot":
+                    if mapping.get("type") == "reference":
+                        pass 
+                    else:
+                        target_record[target_field] = csv_val
+                    
+                    if is_patch_mode and mapping.get("type") == "reference": 
+                        has_patch_data = True
+
             # Ensure External ID is present for Upserts
             if target_ext_id_field and target_ext_id_field not in target_record:
                 target_record[target_ext_id_field] = None

@@ -61,6 +61,9 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     return std.includes(safeName) || std.includes(safeName + 's');
   }
 
+  isGlobalLoading: boolean = false;
+  globalLoadingText: string = 'Loading...';
+  globalLoadingSubText: string = 'Please wait...';
   // CRM Identifiers from previous step
   sourceCrmId: string = '';
   targetCrmId: string = '';
@@ -586,9 +589,8 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     } else if (crm === 'salesforce') {
       this.customQuery = `SELECT * FROM ${entityName}`; 
     } else if (crm === 'zoho') {
-      // FIX: Default to a safe WHERE condition for Zoho instead of SELECT *
-      this.customQuery = `id is not null`; 
-    } else {
+      this.customQuery = `SELECT * FROM ${entityName}`; 
+    } else  {
       this.customQuery = `SELECT * FROM ${entityName} WHERE `;
     }
   }
@@ -825,21 +827,21 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
-    } else if (crm === 'salesforce') {
+    }  else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
-        placeholder: "e.g., StageName = 'Closed Won' AND Amount > 5000",
-        helpText: "Enter the WHERE clause for your Salesforce SOQL query (omit 'SELECT' and 'WHERE').",
+        placeholder: "e.g., SELECT * FROM Account WHERE Amount > 5000 LIMIT 100",
+        helpText: "Write your full SOQL query to filter data, or append LIMIT to restrict the migration size.",
         icon: 'icon-database',
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
     } else if (crm === 'zoho') {
       return {
-        title: 'Zoho COQL Filter',
-        placeholder: "e.g., Account_Name != null and Industry = 'Technology'",
-        helpText: "Enter Zoho criteria or a COQL condition to filter your records.",
-        icon: 'icon-filter',
+        title: 'Zoho COQL Editor',
+        placeholder: "e.g., SELECT * FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
+        helpText: "Write your full COQL query. The engine automatically handles Zoho's strict ID rules behind the scenes.",
+        icon: 'icon-database',
         buttonText: 'Run Query',
         loadingText: 'Querying...'
       };
@@ -899,11 +901,6 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-
-    if ((this.sourceCrmId.toLowerCase() === 'salesforce' || this.sourceCrmId.toLowerCase() === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
 
     const payload = {
       crmId: this.sourceCrmId,
@@ -1084,9 +1081,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         return applySquiggle("Salesforce strictly requires single quotes (') for text values. Do not use double quotes (\").", '"');
       }
       
-      if (queryLower.includes('limit ')) {
-        return applySquiggle("Do not use LIMIT. The engine handles pagination automatically.", "limit");
-      } else if (queryLower.includes('order by ')) {
+     if (queryLower.includes('order by ')) {
         return applySquiggle("Do not use ORDER BY.", "order by");
       } else if (queryLower.endsWith(';')) {
         return applySquiggle("Do not end your query with a semicolon (;).", ";");
@@ -1169,6 +1164,9 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
   preloadEntirePage() {
     this.isLoading = true;
+    this.isGlobalLoading = true;
+    this.globalLoadingText = 'Fetching Live Schemas...';
+    this.globalLoadingSubText = 'Please wait while we sync the CRM engines';
     this.cdr.detectChanges(); 
 
     forkJoin({
@@ -1198,11 +1196,16 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
         this.cdr.detectChanges();
         this.loadMetadata();
+        
+        // 2. Turn it off when finished!
+        this.isGlobalLoading = false;
+        this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('Failed to preload base entity dropdowns:', err);
         this.logMessages.unshift(`Configuration Error: Could not fetch core CRM schemas.`);
         this.isLoading = false;
+        this.isGlobalLoading = false;
         this.cdr.detectChanges();
       }
     });
@@ -1452,10 +1455,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-    if ((crmContext === 'salesforce' || crmContext === 'zoho') && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
+
 
     // Inject the Revalidation flags into the payload
     const payload = {
@@ -1772,6 +1772,9 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     this.errorData = [];
     this.jobStatus = 'Initializing...';
     this.logMessages = [];
+    this.isGlobalLoading = true;
+    this.globalLoadingText = `Migrating to ${this.targetSystem}...`;
+    this.globalLoadingSubText = `Pushing data into ${this.selectedTargetObject}. Please do not close this window.`;
     this.cdr.detectChanges();
     this.toastr.info('Connecting to Migration Engine...', 'Job Started');
 
@@ -1809,10 +1812,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       }
     }
 
-    if (this.sourceCrmId.toLowerCase() === 'salesforce' && safeQuery.toLowerCase().startsWith('select ')) {
-      const whereMatch = safeQuery.match(/where\s+(.*)/i);
-      safeQuery = whereMatch ? whereMatch[1].trim() : '';
-    }
+    
 
     const fixedRecords = this.validationResults?.invalidRecords
       ?.filter((rec: any) => rec._editedFields)
@@ -1852,6 +1852,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
           
           // --- THE NEW POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
+            this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
             const errorCount = data.errorData ? data.errorData.length : 0;
             
@@ -1905,6 +1906,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
     ws.onerror = () => {
       this.zone.run(() => {
+        this.isGlobalLoading = false;
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
         this.toastr.error('WebSocket connection failed.', 'Engine Error');
@@ -1921,6 +1923,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
     ws.onclose = () => {
       this.zone.run(() => {
+        this.isGlobalLoading = false;
         if (this.jobStatus === 'Running' || this.jobStatus === 'Initializing...') {
           this.jobStatus = 'Disconnected';
         }
