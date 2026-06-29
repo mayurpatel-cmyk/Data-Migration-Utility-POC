@@ -1301,6 +1301,13 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
   autoMap() {
     let matchCount = 0;
 
+    const restrictedTargetFields = [
+      'id', 
+      'createddate', 'created_at', 'createdat',
+      'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
+      'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
+    ];
+
     this.mappings.forEach((m) => {
       if (m.targetField) return; 
 
@@ -1309,7 +1316,6 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
-      
       
       const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
@@ -1320,8 +1326,14 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
       // Grade this source field against EVERY target field
       this.targetFields.forEach(t => {
-        let score = 0;
         const tgtApiExact = t.name.toLowerCase();
+
+        // If the target field is in our restricted list, skip it instantly!
+        if (restrictedTargetFields.includes(tgtApiExact)) {
+          return; 
+        }
+
+        let score = 0;
         const tgtLabelExact = t.label.toLowerCase();
         
         // Clean target names exactly the same way
@@ -1341,7 +1353,6 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         if (this.isStrictMapping && !isCompatible) {
           return; // Instantly disqualify if strict mode is on and types clash
         }
-
         
         if (tgtApiExact === srcApiExact) {
           score += 100; // Perfect API Match (Guarantees same-CRM mapping works flawlessly)
