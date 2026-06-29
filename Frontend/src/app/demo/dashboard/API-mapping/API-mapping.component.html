@@ -567,11 +567,13 @@ html {
           <div class="row g-2 mt-1">
             @if (['insert', 'update', 'upsert'].includes(operationMode)) {
               <div class="col">
-                <div class="input-group input-group-sm shadow-sm">
-                  <span class="input-group-text bg-white border-secondary-subtle text-muted fw-bold">
-                    <i class="feather icon-key text-primary me-1"></i> Ext ID
+                <div class="input-group input-group-sm shadow-sm" title="External ID selection is currently disabled.">
+                  <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold opacity-75">
+                    <i class="feather icon-key text-secondary me-1"></i> Ext ID
                   </span>
-                  <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
+                  <select class="form-select border-secondary-subtle bg-light text-muted cursor-not-allowed opacity-75" 
+                          [(ngModel)]="externalIdField" 
+                          disabled>
                     <option value="" selected>-- Select Field --</option>
                     @for (field of targetFields; track field.name) {
                       <option [value]="field.name">{{ field.label }}</option>
