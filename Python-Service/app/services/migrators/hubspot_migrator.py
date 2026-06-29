@@ -71,7 +71,15 @@ class HubspotMigrator:
                     flat_rec = {"id": rec.get("id")}
                     props = rec.get("properties", {})
                     if props:
-                        for k, v in props.items(): flat_rec[k] = v
+                        for k, v in props.items(): 
+                            # --- FIX: Safeguard against nested objects in HubSpot ---
+                            if isinstance(v, dict):
+                                flat_rec[k] = str(v)
+                            elif isinstance(v, list):
+                                # Convert lists to semicolon-separated strings (standard for CSVs)
+                                flat_rec[k] = ";".join([str(i) for i in v])
+                            else:
+                                flat_rec[k] = v
                     source_records.append(flat_rec)
                 
                 if len(source_records) % 1000 == 0:
@@ -211,7 +219,10 @@ class HubspotMigrator:
                 for item, hs_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
                     if hs_res.get("success"):
-                        orig_record["Target_Id"] = hs_res.get("id", "Success")
+                        # --- FIX: Strict String Cast ---
+                        raw_id = hs_res.get("id")
+                        orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
+                        
                         all_success_data.append(orig_record)
                         total_success += 1
                     else:

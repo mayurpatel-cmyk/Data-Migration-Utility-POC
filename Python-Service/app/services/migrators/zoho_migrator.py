@@ -176,12 +176,29 @@ class ZohoMigrator:
                 if res.status_code in [200, 201, 202, 207]:
                     for item, z_res in zip(chunk, res.json().get("data", [])):
                         orig_record = source_records[item["originalIndex"]]
+                        
                         if z_res.get("status") == "success":
-                            orig_record["Target_Id"] = z_res.get("details", {}).get("id")
+                            # FIX: Force the ID into a string to protect it from JS precision limits
+                            raw_id = z_res.get("details", {}).get("id")
+                            orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
+                            
                             all_success_data.append(orig_record)
                             total_success += 1
                         else:
-                            orig_record["Target_Error"] = f"Zoho Error: {z_res.get('message') or z_res.get('code')}"
+                            # --- FIX: Deeply parse Zoho's error structure ---
+                            err_msg = z_res.get("message") or z_res.get("code", "Unknown Error")
+                            details = z_res.get("details", {})
+                            
+                            # Intelligently extract the field name if Zoho provides it
+                            if isinstance(details, dict):
+                                api_name = details.get("api_name")
+                                if api_name:
+                                    err_msg = f"[{api_name}] {err_msg}"
+                                elif details:
+                                    # Fallback for other nested details
+                                    err_msg = f"{err_msg} | Details: {str(details)}"
+                                    
+                            orig_record["Target_Error"] = f"Zoho Error: {err_msg}"
                             all_error_data.append(orig_record)
                             total_error += 1
                 else:
