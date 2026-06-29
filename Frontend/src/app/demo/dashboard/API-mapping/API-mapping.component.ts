@@ -1636,6 +1636,12 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     });
   }
 
+  formatCellValue(val: any): string {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
+  }
+
   downloadCSV(data: any[], filename: string) {
     if (!data || data.length === 0) return;
 
@@ -1646,8 +1652,20 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
     for (const row of data) {
       const values = headers.map(header => {
-        const val = row[header];
-        const escaped = ('' + (val || '')).replace(/"/g, '""');
+        let val = row[header];
+        
+        if (val !== null && typeof val === 'object') {
+          val = JSON.stringify(val);
+        }
+
+        const stringVal = String(val || '');
+        
+        // FIX: If the value is a massive ID (16+ digits), force Excel to read it as Text!
+        if (/^\d{16,}$/.test(stringVal)) {
+          return `="${stringVal}"`;
+        }
+
+        const escaped = stringVal.replace(/"/g, '""');
         return `"${escaped}"`;
       });
       csvRows.push(values.join(','));

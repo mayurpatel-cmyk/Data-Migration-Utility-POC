@@ -50,7 +50,16 @@ class SalesforceMigrator:
             
             for r in data.get("records", []):
                 r.pop("attributes", None)
-                source_records.append(r)
+                flat_rec = {}
+                for k, v in r.items():
+                    if isinstance(v, dict):
+                        # Extract the most useful identifier from the relationship dictionary
+                        flat_rec[k] = v.get("Name", v.get("Id", str(v)))
+                    elif isinstance(v, list):
+                        flat_rec[k] = str(v)
+                    else:
+                        flat_rec[k] = v
+                source_records.append(flat_rec)
                 
             if len(source_records) % 5000 == 0:
                 await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
@@ -130,12 +139,21 @@ class SalesforceMigrator:
 
             for row_data, sf_result in zip(original_chunk, results):
                 orig_record = source_records[row_data["originalIndex"]]
+                
                 if sf_result.get("success"):
                     orig_record["Target_Id"] = sf_result.get("id")
                     all_success_data.append(orig_record)
                     total_success += 1
                 else:
-                    err_msg = sf_result.get("errors", [{"message": "Unknown"}])[0].get("message")
+                    # --- FIX: Extract Exact Salesforce Field ---
+                    err_obj = sf_result.get("errors", [{}])[0]
+                    err_msg = err_obj.get("message", "Unknown Error")
+                    fields = err_obj.get("fields", [])
+                    
+                    # Inject the field name into the error log so it reads: "[Field_Name__c] Error Message"
+                    if fields and isinstance(fields, list) and len(fields) > 0:
+                        err_msg = f"[{', '.join(fields)}] {err_msg}"
+                        
                     orig_record["Target_Error"] = err_msg
                     all_error_data.append(orig_record)
                     total_error += 1

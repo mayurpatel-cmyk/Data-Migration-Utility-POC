@@ -500,9 +500,9 @@ html {
                 </td>
                 
                 @for (header of previewHeaders; track header) {
-                <td class="text-truncate px-3 align-middle text-secondary" style="max-width: 180px;" title="{{ row[header] }}">
-                  {{ row[header] !== null && row[header] !== undefined && row[header] !== '' ? row[header] : '' }}
-                </td>
+                <td class="text-truncate px-3 align-middle text-secondary" style="max-width: 180px;" title="{{ formatCellValue(row[header]) }}">
+  {{ formatCellValue(row[header]) }}
+</td>
                 }
               </tr>
 
@@ -886,19 +886,19 @@ html {
                     @for (mapping of mappings; track mapping.sourceField) {
                       @if (mapping.targetField) {
                         <td class="p-2 align-middle" style="min-width: 180px;">
-                          <div class="position-relative">
-                            <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
-                              [(ngModel)]="record.originalRow[mapping.sourceField]"
-                              (ngModelChange)="markAsEdited(record, mapping.sourceField)"
-                              [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
-                              [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
-                              [class.border-success]="record._editedFields?.[mapping.sourceField]"
-                              [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
-                              @if (hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]) {
-                                <i class="feather icon-alert-circle text-danger position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%);"></i>
-                              }
-                          </div>
-                        </td>
+  <div class="position-relative">
+    <input type="text" class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
+      [ngModel]="formatCellValue(record.originalRow[mapping.sourceField])"
+      (ngModelChange)="record.originalRow[mapping.sourceField] = $event; markAsEdited(record, mapping.sourceField)"
+      [class.is-invalid]="hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]"
+      [class.bg-success-subtle]="record._editedFields?.[mapping.sourceField]"
+      [class.border-success]="record._editedFields?.[mapping.sourceField]"
+      [class.text-success-emphasis]="record._editedFields?.[mapping.sourceField]">
+      @if (hasCellError(record, mapping.sourceField) && !record._editedFields?.[mapping.sourceField]) {
+        <i class="feather icon-alert-circle text-danger position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%);"></i>
+      }
+  </div>
+</td>
                       }
                     }
                   </tr>

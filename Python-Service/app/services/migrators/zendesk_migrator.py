@@ -16,53 +16,112 @@ class ZendeskMigrator:
             subdomain = creds.get("api_domain").replace(".zendesk.com", "").replace("https://", "")
         
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        # 1. PURE DYNAMIC NAME HANDLING
         safe_obj = obj_name.strip().lower()
         source_records = []
         
+        # 1. Determine if this is a standard object or a custom object
+        standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+        is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+        
         try:
-            # Drop the plural 's' dynamically for the Zendesk search filter 
-            safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
-            
-            clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip() if query else ""
-            final_query = f"{clean_query} type:{safe_obj_singular}".strip()
-            safe_query = urllib.parse.quote(final_query)
-            
-            url = f"https://{subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
-            
-            while url:
-                while True:
-                    res = await client.get(url, headers=headers)
-                    if res.status_code == 429:
-                        await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
-                        await asyncio.sleep(30)
-                        continue
-                    break
+            if is_standard:
+                # ==========================================
+                # STANDARD OBJECT EXTRACTION
+                # ==========================================
+                safe_obj_singular = safe_obj[:-1] if safe_obj.endswith('s') else safe_obj
+                
+                clean_query = re.sub(r'type:[a-zA-Z0-9_]+', '', query, flags=re.IGNORECASE).strip() if query else ""
+                final_query = f"{clean_query} type:{safe_obj_singular}".strip()
+                safe_query = urllib.parse.quote(final_query)
+                
+                url = f"https://{subdomain}.zendesk.com/api/v2/search/export.json?filter[type]={safe_obj_singular}&query={safe_query}&page[size]=1000"
+                
+                while url:
+                    while True:
+                        res = await client.get(url, headers=headers)
+                        if res.status_code == 429:
+                            await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
+                            await asyncio.sleep(30)
+                            continue
+                        break
+                        
+                    res.raise_for_status()
+                    data = res.json()
                     
-                res.raise_for_status()
-                data = res.json()
+                    results = data.get("results", [])
+                    if not results: break
+                    
+                    for r in results:
+                        flat_rec = {}
+                        for k, v in r.items():
+                            if isinstance(v, dict):
+                                flat_rec[k] = v.get("id", v.get("name", str(v)))
+                            elif isinstance(v, list):
+                                flat_rec[k] = ";".join([str(i.get("id", i.get("name", i))) if isinstance(i, dict) else str(i) for i in v])
+                            else:
+                                flat_rec[k] = v
+                        source_records.append(flat_rec)
+                        
+                    if len(source_records) % 500 == 0:
+                        await send_log(f"[{safe_obj}] Extracted {len(source_records)} records...")
+                        
+                    url = data.get("links", {}).get("next")
+                    if not data.get("meta", {}).get("has_more"):
+                        break
+
+            else:
+                # ==========================================
+                # CUSTOM OBJECT EXTRACTION
+                # ==========================================
+                is_search = bool(query and query.strip())
+                json_payload = {}
                 
-                results = data.get("results", [])
-                if not results: break
-                
-                for r in results:
-                    flat_rec = {}
-                    for k, v in r.items():
-                        if isinstance(v, dict):
-                            flat_rec[k] = v.get("id", v.get("name", str(v)))
-                        elif isinstance(v, list):
-                            flat_rec[k] = ";".join([str(i.get("id", i.get("name", i))) if isinstance(i, dict) else str(i) for i in v])
+                if is_search:
+                    try:
+                        json_payload = json.loads(query)
+                    except json.JSONDecodeError:
+                        raise Exception("Invalid JSON payload in Zendesk query for custom objects.")
+                    
+                    url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]=100"
+                else:
+                    url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]=100"
+
+                while url:
+                    while True:
+                        if is_search:
+                            res = await client.post(url, headers=headers, json=json_payload)
                         else:
-                            flat_rec[k] = v
-                    source_records.append(flat_rec)
-                    
-                if len(source_records) % 500 == 0:
-                    await send_log(f"[{safe_obj}] Extracted {len(source_records)} records...")
-                    
-                url = data.get("links", {}).get("next")
-                if not data.get("meta", {}).get("has_more"):
-                    break
+                            res = await client.get(url, headers=headers)
+
+                        if res.status_code == 429:
+                            await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
+                            await asyncio.sleep(30)
+                            continue
+                        break
+
+                    res.raise_for_status()
+                    data = res.json()
+
+                    results = data.get("custom_object_records", [])
+                    if not results: break
+
+                    for rec in results:
+                        flat_rec = {}
+                        for k, v in rec.items():
+                            if k == "custom_fields" and isinstance(v, list):
+                                for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
+                            elif k == "custom_object_fields" and isinstance(v, dict):
+                                for cf_key, cf_val in v.items(): flat_rec[cf_key] = cf_val
+                            elif not isinstance(v, (dict, list)): 
+                                flat_rec[k] = v
+                        source_records.append(flat_rec)
+
+                    if len(source_records) % 100 == 0:
+                        await send_log(f"[{safe_obj}] Extracted {len(source_records)} records...")
+
+                    url = data.get("links", {}).get("next")
+                    if not data.get("meta", {}).get("has_more"):
+                        break
 
         except Exception as e:
             await send_log(f" Zendesk Extraction Error: {str(e)}")
@@ -162,9 +221,11 @@ class ZendeskMigrator:
                 for item, z_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
                     
-                    # Zendesk async results yield 'success', sync results usually just yield an 'id'
                     if z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]:
-                        orig_record["Target_Id"] = z_res.get("id")
+                        # --- FIX: Strict String Cast ---
+                        raw_id = z_res.get("id")
+                        orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
+                        
                         all_success_data.append(orig_record)
                         total_success += 1
                     elif z_res.get("error"):
@@ -172,7 +233,10 @@ class ZendeskMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
                     else: 
-                        orig_record["Target_Id"] = z_res.get("id", "Success")
+                        # --- FIX: Strict String Cast ---
+                        raw_id = z_res.get("id")
+                        orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
+                        
                         all_success_data.append(orig_record)
                         total_success += 1
 
