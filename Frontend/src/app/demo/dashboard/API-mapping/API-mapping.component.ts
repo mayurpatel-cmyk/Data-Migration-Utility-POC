@@ -60,6 +60,25 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     const safeName = name.toLowerCase();
     return std.includes(safeName) || std.includes(safeName + 's');
   }
+  // --- ADD THIS HELPER METHOD ---
+  private flattenObject(ob: any): any {
+    const result: any = {};
+    for (const i in ob) {
+      if (!ob.hasOwnProperty(i)) continue;
+      
+      // If it's a nested object (like originalRow), flatten its keys into top-level columns
+      if (typeof ob[i] === 'object' && ob[i] !== null && !Array.isArray(ob[i])) {
+        const flatObject = this.flattenObject(ob[i]);
+        for (const x in flatObject) {
+          if (!flatObject.hasOwnProperty(x)) continue;
+          result[x] = flatObject[x];
+        }
+      } else {
+        result[i] = ob[i];
+      }
+    }
+    return result;
+  }
 
   isGlobalLoading: boolean = false;
   globalLoadingText: string = 'Loading...';
@@ -1642,27 +1661,35 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     return String(val);
   }
 
-  downloadCSV(data: any[], filename: string) {
-    if (!data || data.length === 0) return;
+  downloadCSV(raw_data: any[], filename: string) {
+    if (!raw_data || raw_data.length === 0) return;
 
-    const headers = Object.keys(data[0]);
+    // 1. Deeply flatten the data so NO JSON objects appear in your cells!
+    const data = raw_data.map(row => this.flattenObject(row));
+
+    // 2. Extract all unique headers to build the CSV columns
+    const headerSet = new Set<string>();
+    data.forEach(row => Object.keys(row).forEach(key => headerSet.add(key)));
+    const headers = Array.from(headerSet);
+
     const csvRows = [];
-    
-    csvRows.push(headers.join(','));
+    csvRows.push(headers.join(',')); // Add Header Row
 
     for (const row of data) {
       const values = headers.map(header => {
         let val = row[header];
         
+        // Catch any leftover arrays
         if (val !== null && typeof val === 'object') {
           val = JSON.stringify(val);
         }
 
-        const stringVal = String(val || '');
+        const stringVal = String(val !== undefined && val !== null ? val : '');
         
-        // FIX: If the value is a massive ID (16+ digits), force Excel to read it as Text!
+        // FIX: The Invisible Excel Text Hack!
+        // Adding a tab character (\t) forces Excel to read the ID as text without showing ugly formulas.
         if (/^\d{16,}$/.test(stringVal)) {
-          return `="${stringVal}"`;
+          return `"\t${stringVal}"`;
         }
 
         const escaped = stringVal.replace(/"/g, '""');
@@ -1777,11 +1804,16 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       return;
     }
     
-    this.toastr.info(`Generating ${type} audit report...`, 'Downloading');
-    
-    // Trigger the browser's native download behavior via the FastAPI route
-    const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
-    window.open(url, '_blank');
+    if (type === 'invalid' && this.validationResults?.invalidRecords) {
+      
+      this.toastr.info(`Generating error audit report...`, 'Downloading');
+      this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
+    } else {
+      // Valid records are handled by the backend because they are too massive for browser RAM
+      this.toastr.info(`Generating valid audit report...`, 'Downloading');
+      const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
+      window.open(url, '_blank');
+    }
   }
 
   // --- Separated execution logic for clean popup handling ---
