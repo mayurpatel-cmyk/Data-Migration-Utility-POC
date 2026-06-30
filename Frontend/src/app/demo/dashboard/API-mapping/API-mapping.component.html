@@ -490,34 +490,17 @@ html {
               }
               
               @for (row of previewRecords; track $index; let i = $index) {
-              <tr class="cursor-pointer btn-hover-lift" (click)="toggleRowExpand(i)" [class.bg-light]="expandedRowIndex === i">
+              <tr>
                 <td class="text-center text-muted fw-bold border-end align-middle" style="width: 40px; background-color: inherit;">
-                  @if (expandedRowIndex === i) {
-                    <i class="feather icon-chevron-down text-primary"></i>
-                  } @else {
-                    <i class="feather icon-chevron-right"></i>
-                  }
+                  {{ i + 1 }}
                 </td>
                 
                 @for (header of previewHeaders; track header) {
                 <td class="text-truncate px-3 align-middle text-secondary" style="max-width: 180px;" title="{{ formatCellValue(row[header]) }}">
-  {{ formatCellValue(row[header]) }}
-</td>
+                  {{ formatCellValue(row[header]) }}
+                </td>
                 }
               </tr>
-
-              @if (expandedRowIndex === i) {
-                <tr class="animate__animated animate__fadeIn">
-                  <td colspan="100%" class="p-0 border-bottom">
-                    <div class="bg-dark p-3 m-2 rounded shadow-inner position-relative" style="box-shadow: inset 0 3px 6px rgba(0,0,0,0.16);">
-                      <div class="position-absolute top-0 end-0 p-2">
-                        <span class="badge bg-primary">Raw Payload</span>
-                      </div>
-                      <pre class="text-light mb-0 font-monospace" style="font-size: 0.75rem; white-space: pre-wrap; word-break: break-word;">{{ row | json }}</pre>
-                    </div>
-                  </td>
-                </tr>
-              }
               }
             </tbody>
           </table>
