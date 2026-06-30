@@ -48,6 +48,14 @@ export const NavigationItems: NavigationItem[] = [
     url: '/api-mapping',
     icon: 'ti ti-arrows-exchange', 
     breadcrumbs: true
+  },
+  {
+    id: 'migration-docs',
+    title: 'Migration-Docs',
+    type: 'item',
+    url: '/migration-docs',
+    icon: 'ti ti-book', 
+    breadcrumbs: true
   }
 
 ];

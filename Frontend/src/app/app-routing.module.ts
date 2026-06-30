@@ -3,38 +3,38 @@ import { RouterModule, Routes } from '@angular/router';
 import { AdminComponent } from './theme/layout/admin/admin.component';
 import { GuestComponent } from './theme/layout/guest/guest.component';
 import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
-import { ConnectionComponent } from './demo/dashboard/Connection/connection.component';
 
 export const routes: Routes = [
-        {
-  path: 'api-mapping', 
-  loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
-},
+  {
+    path: 'api-mapping',
+    loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+  },
   {
     path: '',
     component: AdminComponent,
     canActivate: [authGuard],
     children: [
       {
-        // We removed the 'dashboard' nesting.
-        // Now it matches the URL from your navigation menu directly.
         path: 'data-import',
         loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
       },
       {
-        // Optional: Redirect the base admin path to your import page
         path: '',
         redirectTo: 'data-import',
         pathMatch: 'full'
       },
-{
+      {
         path: 'data-validation',
-        // Make sure this path exactly matches where you saved the validation component
-        loadComponent: () => import('./demo/dashboard/DataValidation/data-validation.component').then(c => c.DataValidationComponent)
+        loadComponent: () => import('./demo/dashboard/DataValidation/data-validation.component').then((c) => c.DataValidationComponent)
       },
-{
+      {
         path: 'connection',
-        loadComponent: () => import('./demo/dashboard/Connection/connection.component').then(c => c.ConnectionComponent)
+        loadComponent: () => import('./demo/dashboard/Connection/connection.component').then((c) => c.ConnectionComponent)
+      },
+
+      {
+        path: 'migration-docs',
+        loadComponent: () => import('./demo/dashboard/migration-docs/migration-docs.component').then((c) => c.MigrationDocsComponent)
       }
     ]
   },
@@ -53,7 +53,6 @@ export const routes: Routes = [
       }
     ]
   }
-
 ];
 
 @NgModule({

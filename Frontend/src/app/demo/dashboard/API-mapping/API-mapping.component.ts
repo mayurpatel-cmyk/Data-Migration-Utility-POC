@@ -133,8 +133,6 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   targetSearchQuery = '';
   isHistoryDropdownOpen = false;
   
-  expandedRowIndex: number | null = null;
-  
   operationMode: string = 'insert';
   batchSize: number = 5000;
   
@@ -288,9 +286,6 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
     return side === 'source' 
       ? this.sourceFields.find(f => f.name === fieldName)
       : this.targetFields.find(f => f.name === fieldName);
-  }
-  toggleRowExpand(index: number) {
-    this.expandedRowIndex = this.expandedRowIndex === index ? null : index;
   }
 
   getFieldTypeBadge(type: string | undefined): string {
