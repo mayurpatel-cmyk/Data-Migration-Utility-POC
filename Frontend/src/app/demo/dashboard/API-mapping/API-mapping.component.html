@@ -846,15 +846,22 @@ html {
                         </div>
 
                         @if (hasErrorsInColumn(mapping.sourceField)) {
-                          <div class="input-group input-group-sm mt-2 shadow-sm animate__animated animate__fadeIn">
-                            <input type="text" class="form-control border-danger-subtle" placeholder="Fix all {{mapping.sourceField}}..."
-                                   [(ngModel)]="mapping.massUpdateValue">
-                            <button class="btn btn-danger px-2" type="button" title="Apply to all error rows"
-                                    (click)="applyMassUpdate(mapping.sourceField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
-                              <i class="feather icon-check"></i>
-                            </button>
-                          </div>
-                        }
+  <div class="input-group input-group-sm mt-2 shadow-sm animate__animated animate__fadeIn">
+    <input type="text" class="form-control border-danger-subtle" 
+           placeholder="Fix all {{mapping.sourceField}}..."
+           [(ngModel)]="mapping.massUpdateValue"
+           (keyup.enter)="applyMassUpdate(mapping.sourceField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
+    
+    <button class="btn btn-danger px-2 fs-5 d-flex align-items-center justify-content-center" 
+            type="button" 
+            title="Apply to all error rows (Press Enter)"
+            (click)="applyMassUpdate(mapping.sourceField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
+      
+      <strong>&#8629;</strong>
+      
+    </button>
+  </div>
+}
 
                       </th>
                     }

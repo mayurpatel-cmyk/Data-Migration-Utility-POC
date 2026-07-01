@@ -185,7 +185,6 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // 🚨 NEW: Trigger the specific button spinner
     if (side === 'source') {
       this.isSourceConnecting = true;
     } else {
@@ -203,21 +202,27 @@ export class ConnectionComponent implements OnInit, OnDestroy {
   }
 
   disconnectCRM(side: 'source' | 'target') {
-    this.isPageLoading = true; // Show page loader while disconnecting
+    this.isPageLoading = true;
     
     this.crmAuthService.disconnectCrm(side).subscribe({
       next: () => {
-        this.toastr.success('Disconnected successfully.');
+        this.toastr.success(`${side.toUpperCase()} disconnected successfully.`);
         
         if (side === 'source') {
           this.isSourceConnected = false;
           this.selectedSource = '';
           this.sourceInstanceUrl = '';
+
+          localStorage.removeItem('source_crm_slot');
         } else {
           this.isTargetConnected = false;
           this.selectedTarget = '';
           this.targetInstanceUrl = '';
+          
+          localStorage.removeItem('target_crm_slot');
         }
+        
+        window.dispatchEvent(new Event('connections-updated'));
         
         this.isPageLoading = false;
         this.cdr.detectChanges();

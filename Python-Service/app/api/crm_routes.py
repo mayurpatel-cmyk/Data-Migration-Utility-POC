@@ -296,7 +296,7 @@ async def hubspot_callback(code: str, state: str):
             "code": code
         })
         if response.status_code != 200:
-            errorBody = await response.text()
+            errorBody =  response.text()
             print(f"HubSpot token error: {errorBody}")
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
