@@ -248,7 +248,7 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
         return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zoho max limit: 100' };
       case 'salesforce':
       default:
-        return { min: 100, max: 10000, step: 1000, default: 5000, tooltip: 'Salesforce max limit: 10,000' };
+        return { min: 100, max: 10000, step: 100, default: 5000, tooltip: 'Salesforce max limit: 10,000' };
     }
   }
 
