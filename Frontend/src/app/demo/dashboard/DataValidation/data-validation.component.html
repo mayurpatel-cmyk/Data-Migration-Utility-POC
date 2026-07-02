@@ -473,7 +473,8 @@
                                [(ngModel)]="mapping.massUpdateValue">
                         <button class="btn btn-danger px-2" type="button" title="Apply to all error rows"
                                 (click)="applyMassUpdate(selectedJob, mapping.csvField, mapping.massUpdateValue); mapping.massUpdateValue = ''">
-                          <i class="feather icon-check"></i>
+                          <strong>&#8629;</strong>
+
                         </button>
                       </div>
 
@@ -563,7 +564,7 @@
           <button class="btn btn-outline-secondary shadow-sm d-flex align-items-center gap-2" (click)="currentStep = 1">
             <i class="feather icon-arrow-left"></i> Back to Mapping
           </button>
-          
+
           @if (aggregateStats.invalid > 0) {
           <button class="btn btn-outline-danger shadow-sm d-flex align-items-center gap-2" (click)="downloadErrorLog()">
             <i class="feather icon-download"></i> Download Unfixed Errors
