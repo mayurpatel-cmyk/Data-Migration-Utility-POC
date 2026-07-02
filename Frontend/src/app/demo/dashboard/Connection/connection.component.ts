@@ -155,6 +155,18 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     this.sourceInstanceUrl = nextSourceUrl;
     this.targetInstanceUrl = nextTargetUrl;
 
+    if (this.selectedSource) {
+      localStorage.setItem('source_crm_slot', this.selectedSource);
+    } else {
+      localStorage.removeItem('source_crm_slot');
+    }
+
+    if (this.selectedTarget) {
+      localStorage.setItem('target_crm_slot', this.selectedTarget);
+    } else {
+      localStorage.removeItem('target_crm_slot');
+    }
+
     // Turn off connecting spinners if they came back from OAuth
     this.isSourceConnecting = false;
     this.isTargetConnecting = false;
