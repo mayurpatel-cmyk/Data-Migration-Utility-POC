@@ -12,6 +12,7 @@ export interface AuthResponse {
     id: string;
     email: string;
     full_name: string;
+    user_metadata?: Record<string, string>;
   };
 }
 
@@ -25,15 +26,59 @@ export class AuthService {
   private apiUrl = 'http://localhost:8000/api/auth';
 
   currentUser = signal<string | null>(localStorage.getItem('supabase_token'));
+  currentUserName = signal<string | null>(localStorage.getItem('current_user_name'));
+  currentUserEmail = signal<string | null>(localStorage.getItem('current_user_email'));
 
   login(credentials: any): Observable<AuthResponse> {
     return this.http.post<AuthResponse>(`${this.apiUrl}/login`, credentials).pipe(
       tap(res => {
         if (res.success && res.token && res.refresh_token) {
-          // Store both tokens securely
+          const userName = res.user?.['full_name'] || res.user?.user_metadata?.['full_name'] || res.user?.email || '';
+          const userEmail = res.user?.email || '';
+
+          // Store both tokens and profile metadata
           localStorage.setItem('supabase_token', res.token);
           localStorage.setItem('supabase_refresh', res.refresh_token);
+          localStorage.setItem('current_user_name', userName);
+          localStorage.setItem('current_user_email', userEmail);
+
           this.currentUser.set(res.token);
+          this.currentUserName.set(userName || null);
+          this.currentUserEmail.set(userEmail || null);
+        }
+      })
+    );
+  }
+
+  setCurrentUserProfile(profile: { full_name?: string; email?: string; company?: string; contact?: string; other_info?: string }): void {
+    const userName = profile.full_name || this.currentUserName();
+    const userEmail = profile.email || this.currentUserEmail();
+
+    if (userName !== null) {
+      localStorage.setItem('current_user_name', userName);
+      this.currentUserName.set(userName);
+    }
+    if (userEmail !== null) {
+      localStorage.setItem('current_user_email', userEmail);
+      this.currentUserEmail.set(userEmail);
+    }
+  }
+
+  getProfile(): Observable<any> {
+    return this.http.get<any>(`${this.apiUrl}/profile`);
+  }
+
+  updateProfile(payload: { full_name?: string; email?: string; company?: string; contact?: string; other_info?: string }): Observable<any> {
+    return this.http.put<any>(`${this.apiUrl}/profile`, payload).pipe(
+      tap((res: any) => {
+        if (res.success && res.user) {
+          this.setCurrentUserProfile({
+            full_name: res.user.full_name,
+            email: res.user.email,
+            company: res.user.user_metadata?.company,
+            contact: res.user.user_metadata?.contact,
+            other_info: res.user.user_metadata?.other_info
+          });
         }
       })
     );
@@ -68,7 +113,11 @@ export class AuthService {
   private clearLocalSession() {
     localStorage.removeItem('supabase_token');
     localStorage.removeItem('supabase_refresh');
+    localStorage.removeItem('current_user_name');
+    localStorage.removeItem('current_user_email');
     this.currentUser.set(null);
+    this.currentUserName.set(null);
+    this.currentUserEmail.set(null);
     this.router.navigate(['/login']);
   }
 

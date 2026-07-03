@@ -1,3 +1,31 @@
 .me-0 {
   margin: 0 0 0 16px !important;
 }
+
+.header-user-profile {
+  .dropdown-menu.dropdown-user-profile {
+    min-width: 220px !important;
+    max-width: 260px !important;
+    width: auto !important;
+    white-space: normal;
+  }
+
+  .dropdown-header {
+    padding: 0.75rem 1rem;
+  }
+
+  .dropdown-header h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .dropdown-header small {
+    font-size: 0.78rem;
+    word-break: break-word;
+  }
+
+  .dropdown-item {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}

@@ -14,22 +14,21 @@
           </span>
         </a>
         <div class="dropdown-menu dropdown-user-profile dropdown-menu-end pc-h-dropdown" ngbDropdownMenu>
-          <div class="dropdown-header">
-            <h4>
-              Hello,
-              <span class="small text-muted">{{ currentUser?.Name || 'Guest' }}</span>
-            </h4>
-            
-            <p class="text-muted">{{ currentUser?.CompanyName || 'User' }}</p>
-            
-            <hr />
-            <ng-scrollbar style="height: calc(70vh - 280px)" visibility="hover">
-              <a [routerLink]="['/login']" class="dropdown-item">
-                <i class="ti ti-logout"></i>
-                <span>Logout</span>
-              </a>
-            </ng-scrollbar>
+          <div class="dropdown-header text-center py-3">
+            <h4 class="mb-1">{{ getDisplayName(currentUserName) }}</h4>
+            <small class="text-muted d-block">{{ currentUserEmail || 'Signed in user' }}</small>
           </div>
+
+          <div class="dropdown-divider"></div>
+
+          <a class="dropdown-item" [routerLink]="['/profile']">
+            <i class="ti ti-user me-2"></i>
+            <span>My Profile</span>
+          </a>
+          <a class="dropdown-item" href="javascript:" (click)="onLogout()">
+            <i class="ti ti-logout me-2"></i>
+            <span>Logout</span>
+          </a>
         </div>
       </div>
     </li>

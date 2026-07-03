@@ -40,6 +40,14 @@ class AuthService:
             raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
 
     @staticmethod
+    def update_profile(user_id: str, attributes: dict):
+        try:
+            response = supabase.auth.admin.update_user_by_id(user_id, attributes)
+            return response
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @staticmethod
     def sign_out():
         try:
             # Tells Supabase to invalidate the current session on the server

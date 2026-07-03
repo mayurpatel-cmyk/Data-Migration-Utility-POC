@@ -45,6 +45,10 @@ export const routes: Routes = [
       {
         path: 'migration-docs',
         loadComponent: () => import('./demo/dashboard/migration-docs/migration-docs.component').then((c) => c.MigrationDocsComponent)
+      },
+      {
+        path: 'profile',
+        loadComponent: () => import('./demo/pages/authentication/profile/profile.component').then((c) => c.ProfileComponent)
       }
     ]
   },
