@@ -14,13 +14,10 @@ class CrmQueryService:
         if query.lower().startswith("select "):
             soql = query
             
-            
             if " * " in soql.lower() or soql.lower().startswith("select *"):
-                # Grab top 40 fields to prevent massive URL sizes
                 safe_fields = headers_list[:40] if headers_list else ["Id", "Name"]
                 fields_str = ", ".join(safe_fields)
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
-            
             
             if "limit " not in soql.lower():
                 soql += f" LIMIT {limit}"
@@ -41,7 +38,6 @@ class CrmQueryService:
             for r in records:
                 r.pop("attributes", None)
             return {"records": records}
-
 
     @staticmethod
     async def execute_zendesk_query(creds: dict, obj_name: str, query: str, limit: int):
@@ -67,7 +63,6 @@ class CrmQueryService:
                 return {"records": res.json().get("results", [])}
                 
             else:
-                # Custom Objects Logic
                 if query.strip():
                     try:
                         json_payload = json.loads(query)
@@ -83,7 +78,6 @@ class CrmQueryService:
                 if res.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Zendesk Custom Object Error: {res.text}")
                 
-                # Flatten the payload
                 flattened_records = []
                 for rec in res.json().get("custom_object_records", []):
                     flat_rec = {}
@@ -97,7 +91,6 @@ class CrmQueryService:
                     flattened_records.append(flat_rec)
                 return {"records": flattened_records}
 
-
     @staticmethod
     async def execute_zoho_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):
         zoho_token = creds.get("access_token")
@@ -106,6 +99,10 @@ class CrmQueryService:
         
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
+        # FIX: Zoho strictly rejects COQL queries over 200 records.
+        if limit > 200:
+            limit = 200
+            
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             if query:
                 coql_query = query.strip()
@@ -115,9 +112,13 @@ class CrmQueryService:
                         fields_str = ",".join(safe_fields)
                         coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
                         
-                    # Auto-inject ID if limit is required by Zoho
+                    # FIX: Inject WHERE clause properly so it doesn't break ORDER BY
                     if " where " not in coql_query.lower():
-                        coql_query += " where id is not null"
+                        if " order by " in coql_query.lower():
+                            coql_query = re.sub(r'(?i)(\border\s+by\b)', r'where id is not null \1', coql_query, count=1)
+                        else:
+                            coql_query += " where id is not null"
+                            
                     if " limit " not in coql_query.lower():
                         coql_query += f" limit {limit}"
                 else:
@@ -134,7 +135,6 @@ class CrmQueryService:
             
             raw_records = [] if res.status_code == 204 else res.json().get("data", [])
             
-            # Flatten Zoho Lookups
             sample_records = []
             for r in raw_records:
                 flat_rec = {}
@@ -159,13 +159,7 @@ class CrmQueryService:
         }
         
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            # 1. Define properties to return
-            # HubSpot requires explicit properties. If headers_list is empty, we must fetch schema first or request standard fields.
-            # For safety, we request top 50 fields if headers_list exists, otherwise basic fields.
             properties = headers_list[:50] if headers_list else ["hs_object_id", "createdate", "lastmodifieddate"]
-            
-            # 2. Build the request payload
-            # The Search API requires a POST request
             url = f"{domain}/crm/v3/objects/{obj_name}/search"
             
             payload = {
@@ -173,23 +167,16 @@ class CrmQueryService:
                 "properties": properties
             }
             
-            # 3. Handle Filtering
             if query and query.strip():
                 try:
-                    # Expect the frontend to pass a valid HubSpot Search JSON payload for the query
-                    # Example frontend query: {"filterGroups":[{"filters":[{"propertyName":"email","operator":"EQ","value":"test@test.com"}]}]}
                     query_dict = json.loads(query)
-                    
-                    # Merge the query dict with our base payload
                     if "filterGroups" in query_dict:
                         payload["filterGroups"] = query_dict["filterGroups"]
                     if "sorts" in query_dict:
                         payload["sorts"] = query_dict["sorts"]
-                        
                 except json.JSONDecodeError:
                     raise HTTPException(status_code=400, detail="Invalid JSON payload provided for HubSpot Search filter.")
             
-            # 4. Execute POST request
             res = await client.post(url, headers=headers, json=payload)
             
             if res.status_code != 200:
@@ -197,7 +184,6 @@ class CrmQueryService:
                 
             raw_results = res.json().get("results", [])
             
-            # 5. Flatten the records for the frontend
             flattened_records = []
             for r in raw_results:
                 flat_rec = {"id": r.get("id")}
