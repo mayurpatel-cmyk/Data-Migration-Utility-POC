@@ -48,4 +48,10 @@ export class MappingApiService {
       params: params
     }).pipe(timeout(30000));
   }
+
+  autoMapFields(payload: { sourceFields: string[]; targetFields: string[]; model?: string; useFastMode?: boolean }): Observable<Record<string, string>> {
+    return this.http.post<Record<string, string>>(`${this.baseUrl}/metadata/auto-map`, payload, {
+      headers: this.getAuthHeaders()
+    }).pipe(timeout(15000));
+  }
 }

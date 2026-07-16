@@ -1,3 +1,7 @@
+import json
+import subprocess
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Request, HTTPException
 from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
@@ -5,6 +9,8 @@ from app.services.crm_metadata_service import CrmMetadataService
 from app.services.crm_query_service import CrmQueryService
 
 router = APIRouter()
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+MAPPING_AGENT_PATH = PROJECT_ROOT / 'mapping-agent.js'
 
 # =========================================================
 # FETCH OBJECTS DYNAMICALLY (With Silent Token Refresh)
@@ -65,6 +71,45 @@ async def get_crm_fields(crm_id: str, object_name: str, role: str = "source", cu
             new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
             return await _fetch(new_token)
         raise e
+
+@router.post("/api/metadata/auto-map")
+async def auto_map_fields(request: Request, current_user = Depends(get_current_user)):
+    payload = await request.json()
+    source_fields = payload.get('sourceFields', []) or []
+    target_fields = payload.get('targetFields', []) or []
+
+    if not source_fields or not target_fields:
+        raise HTTPException(status_code=400, detail='sourceFields and targetFields are required.')
+
+    source_names = [str(field) for field in source_fields if field]
+    target_names = [str(field) for field in target_fields if field]
+
+    command = ['node', str(MAPPING_AGENT_PATH), '--json', '--source', ','.join(source_names), '--target', ','.join(target_names)]
+    if payload.get('useFastMode'):
+        command.append('--fast')
+
+    model = payload.get('model')
+    if model:
+        command.extend(['--model', str(model)])
+
+    completed_process = subprocess.run(
+        command,
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=45
+    )
+
+    if completed_process.returncode != 0:
+        raise HTTPException(status_code=500, detail=(completed_process.stderr or completed_process.stdout).strip() or 'Auto mapping failed.')
+
+    try:
+        output_text = completed_process.stdout.strip()
+        if not output_text:
+            raise ValueError('No output')
+        return json.loads(output_text)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'Unable to parse auto-mapping response: {exc}') from exc
 
 # =========================================================
 # RUN PREVIEW QUERY DYNAMICALLY (With Silent Token Refresh)

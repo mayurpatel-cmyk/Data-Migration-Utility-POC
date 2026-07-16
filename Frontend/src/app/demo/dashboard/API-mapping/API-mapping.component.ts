@@ -31,6 +31,7 @@ interface MappingRow {
   relationalExtIdField?: string;
   parentObjectName?: string;
   massUpdateValue?: string;
+  autoMapSource?: 'legacy' | 'agent';
 }
 
 interface CrmEntity {
@@ -110,6 +111,11 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   mappedCount = 0;
   isStrictMapping = false;
   hideMappedFields = false;
+  isAutoMapping = false;
+  autoMapStatusMessage = '';
+  autoMapStatusType: 'success' | 'warning' | 'info' | 'danger' | 'default' = 'default';
+  autoMapProgressPercent = 0;
+  private autoMapProgressTimer: number | null = null;
 
   // Execution Variables
   jobStatus = 'Idle';
@@ -187,6 +193,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   }
 
   ngOnDestroy() {
+    this.clearAutoMapProgressTimer();
+
     // 1. Kill active websockets
     if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
       this.validationSocket.close();
@@ -669,6 +677,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
   selectField(mapping: any, fieldName: string) {
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
+    mapping.autoMapSource = undefined;
     
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
@@ -1285,33 +1294,167 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
   clearMapping(index: number) {
     this.mappings[index].targetField = '';
+    this.mappings[index].autoMapSource = undefined;
     this.updateMappedCount();
+  }
+
+  private startAutoMapProgressTimer() {
+    this.clearAutoMapProgressTimer();
+    this.autoMapProgressPercent = 12;
+    this.autoMapProgressTimer = window.setInterval(() => {
+      if (this.autoMapProgressPercent < 90) {
+        this.autoMapProgressPercent = Math.min(90, this.autoMapProgressPercent + Math.floor(Math.random() * 8) + 4);
+      }
+      this.cdr.detectChanges();
+    }, 350);
+  }
+
+  private clearAutoMapProgressTimer() {
+    if (this.autoMapProgressTimer !== null) {
+      window.clearInterval(this.autoMapProgressTimer);
+      this.autoMapProgressTimer = null;
+    }
+  }
+
+  private completeAutoMapProgress() {
+    this.clearAutoMapProgressTimer();
+    this.autoMapProgressPercent = 100;
+    this.cdr.detectChanges();
   }
 
   resetAllMappings() {
-    this.mappings.forEach((m) => (m.targetField = ''));
+    this.mappings.forEach((m) => {
+      m.targetField = '';
+      m.autoMapSource = undefined;
+    });
     this.updateMappedCount();
   }
 
-  autoMap() {
+  autoMap(showFeedback: boolean = true) {
+    if (!this.sourceFields.length || !this.targetFields.length) {
+      if (showFeedback) {
+        this.toastr.warning('Schema metadata is not ready yet. Please wait for the object metadata to finish loading.', 'Auto-Map');
+      }
+      return;
+    }
+
+    const sourceFieldNames = this.sourceFields.map((field) => field.name).filter(Boolean);
+    const targetFieldNames = this.targetFields.map((field) => field.name).filter(Boolean);
+
+    this.isAutoMapping = true;
+    this.autoMapProgressPercent = 0;
+    this.logMessages.unshift('System: Agent auto-mapping is in progress...');
+    this.cdr.detectChanges();
+    this.startAutoMapProgressTimer();
+
+    const quickMatchCount = this.applyLegacyAutoMap();
+    this.updateMappedCount();
+
+    const totalRows = Math.max(1, this.mappings.length);
+    const quickProgress = Math.round((quickMatchCount / totalRows) * 100);
+    this.autoMapProgressPercent = Math.max(15, Math.min(70, quickProgress));
+    this.cdr.detectChanges();
+
+    if (showFeedback) {
+      if (quickMatchCount > 0) {
+        this.autoMapStatusMessage = `Standard auto-map logic applied ${quickMatchCount} quick matches; agent refinement is running...`;
+        this.autoMapStatusType = 'success';
+      } else {
+        this.autoMapStatusMessage = 'Standard auto-map logic finished; agent refinement is running...';
+        this.autoMapStatusType = 'success';
+      }
+    }
+
+    this.autoMapStatusMessage = 'Agent auto-mapping is in progress...';
+    this.autoMapStatusType = 'danger';
+
+    this.mappingApi.autoMapFields({
+      sourceFields: sourceFieldNames,
+      targetFields: targetFieldNames,
+      useFastMode: false
+    }).subscribe({
+      next: (mapping) => {
+        this.isAutoMapping = false;
+        let refinedCount = 0;
+
+        this.mappings.forEach((mappingRow) => {
+          if (mappingRow.targetField) {
+            return;
+          }
+
+          const mappedTargetField = mapping?.[mappingRow.sourceField];
+          if (!mappedTargetField) {
+            return;
+          }
+
+          const matchedTargetField = this.targetFields.find((field) => field.name === mappedTargetField);
+          if (!matchedTargetField) {
+            return;
+          }
+
+          mappingRow.targetField = matchedTargetField.name;
+          if (this.isReferenceField(matchedTargetField.name)) {
+            mappingRow.relationalExtIdField = 'Id';
+          }
+          mappingRow.autoMapSource = 'agent';
+          refinedCount += 1;
+        });
+
+        this.updateMappedCount();
+        const totalMatched = quickMatchCount + refinedCount;
+        this.autoMapProgressPercent = Math.min(100, Math.round((totalMatched / Math.max(1, this.mappings.length)) * 100));
+        this.completeAutoMapProgress();
+
+        if (showFeedback) {
+          if (totalMatched > 0) {
+            this.autoMapStatusMessage = `Agent auto-mapping completed successfully — ${totalMatched} fields matched.`;
+            this.autoMapStatusType = 'danger';
+            this.toastr.success(`Agent auto-mapping completed successfully — ${totalMatched} fields matched.`, 'Auto-Map Complete');
+            this.logMessages.unshift(`System: Agent auto-mapping completed successfully. ${totalMatched} fields matched.`);
+          } else {
+            this.autoMapStatusMessage = 'Agent auto-mapping completed — no confident matches were found.';
+            this.autoMapStatusType = 'danger';
+            this.toastr.info('Agent auto-mapping completed — no confident matches were found.', 'Auto-Map Finished');
+            this.logMessages.unshift('System: Agent auto-mapping completed, but no matches were found.');
+          }
+        }
+      },
+      error: (error) => {
+        this.isAutoMapping = false;
+        this.completeAutoMapProgress();
+        console.error('AI auto-mapping failed:', error);
+        this.logMessages.unshift('System: Agent helper unavailable. Keeping the fast local matches.');
+        if (showFeedback) {
+          this.autoMapStatusMessage = 'Agent auto-mapping could not finish; fast local matches are ready instead.';
+          this.autoMapStatusType = 'danger';
+          this.toastr.warning('Agent auto-mapping could not finish; fast local matches are ready instead.', 'Auto-Map');
+        }
+      }
+    });
+  }
+
+  applyLegacyAutoMap(): number {
     let matchCount = 0;
 
     const restrictedTargetFields = [
-      'id', 
+      'id',
       'createddate', 'created_at', 'createdat',
       'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
       'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
     ];
 
-    this.mappings.forEach((m) => {
-      if (m.targetField) return; 
+    this.mappings.forEach((mappingRow) => {
+      if (mappingRow.targetField) {
+        return;
+      }
 
-      const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
-      if (!sourceMeta) return;
+      const sourceMeta = this.sourceFields.find((field) => field.name === mappingRow.sourceField);
+      if (!sourceMeta) {
+        return;
+      }
 
       const srcApiExact = sourceMeta.name.toLowerCase();
       const srcLabelExact = sourceMeta.label.toLowerCase();
-      
       const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
       const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
       const srcType = (sourceMeta.type || 'string').toLowerCase();
@@ -1319,85 +1462,68 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       let bestMatch: FieldMeta | null = null;
       let highestScore = 0;
 
-      // Grade this source field against EVERY target field
-      this.targetFields.forEach(t => {
-        const tgtApiExact = t.name.toLowerCase();
-
-        // If the target field is in our restricted list, skip it instantly!
+      this.targetFields.forEach((targetField) => {
+        const tgtApiExact = targetField.name.toLowerCase();
         if (restrictedTargetFields.includes(tgtApiExact)) {
-          return; 
+          return;
         }
 
         let score = 0;
-        const tgtLabelExact = t.label.toLowerCase();
-        
-        // Clean target names exactly the same way
+        const tgtLabelExact = targetField.label.toLowerCase();
         const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
         const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
-        const tgtType = (t.type || 'string').toLowerCase();
+        const tgtType = (targetField.type || 'string').toLowerCase();
 
-        // DATA TYPE COMPATIBILITY CHECK
         const isExactTypeMatch = srcType === tgtType;
-        const isForgivingTypeMatch = 
+        const isForgivingTypeMatch =
           (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
           (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
-        
+
         const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
-
-        // STRICT MODE ENFORCEMENT
         if (this.isStrictMapping && !isCompatible) {
-          return; // Instantly disqualify if strict mode is on and types clash
+          return;
         }
-        
+
         if (tgtApiExact === srcApiExact) {
-          score += 100; // Perfect API Match (Guarantees same-CRM mapping works flawlessly)
+          score += 100;
         } else if (tgtApiClean === srcApiClean) {
-          score += 90;  // Cleaned API Match (e.g., Matches Zoho's "First_Name" to Salesforce's "FirstName")
+          score += 90;
         } else if (tgtLabelExact === srcLabelExact) {
-          score += 85;  // Perfect Label Match
+          score += 85;
         } else if (tgtLabelClean === srcLabelClean) {
-          score += 75;  // Cleaned Label Match
+          score += 75;
         } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
-          score += 40;  // Fuzzy Substring API Match
-        } else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) {
-          score += 30;  // Fuzzy Substring Label Match
+          score += 40;
+        } else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(srcLabelClean))) {
+          score += 30;
         }
 
-        // DATA TYPE BONUS (Only apply if the name was a decent match)
         if (score >= 30) {
-          if (isExactTypeMatch) score += 20; 
-          else if (isForgivingTypeMatch) score += 10;
+          if (isExactTypeMatch) {
+            score += 20;
+          } else if (isForgivingTypeMatch) {
+            score += 10;
+          }
         }
 
-        // TRACK THE WINNER (Must be 50 points or higher to qualify as a match)
-        if (score > highestScore && score >= 50) { 
+        if (score > highestScore && score >= 50) {
           highestScore = score;
-          bestMatch = t;
+          bestMatch = targetField;
         }
       });
 
-      // Apply the best match found for this specific source field
       if (bestMatch) {
-        m.targetField = bestMatch['name'];
-        
-        // Auto-assign External ID requirement for Reference fields
-        if (this.isReferenceField(bestMatch['name'])) {
-          m.relationalExtIdField = 'Id';
+        mappingRow.targetField = bestMatch.name;
+        mappingRow.autoMapSource = 'legacy';
+        if (this.isReferenceField(bestMatch.name)) {
+          mappingRow.relationalExtIdField = 'Id';
         }
-        matchCount++;
+        matchCount += 1;
       }
     });
 
     this.updateMappedCount();
-    
-    // UI Feedback Upgrade
-    if (matchCount > 0) {
-      this.toastr.success(`Intelligently mapped ${matchCount} fields!`, 'Auto-Map Complete');
-      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} fields successfully matched.`);
-    } else {
-      this.toastr.info(`No high-confidence matches found.`, 'Auto-Map Finished');
-      this.logMessages.unshift(`System: Auto-mapping ran, but no matches were found.`);
-    }
+    return matchCount;
   }
 
   updateMappedCount() {

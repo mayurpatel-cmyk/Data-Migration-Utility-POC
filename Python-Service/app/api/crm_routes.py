@@ -18,15 +18,15 @@ ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200"
 
 SF_CLIENT_ID = os.getenv("SF_CLIENT_ID")
 SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET")
-SF_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/salesforce/callback"
+SF_REDIRECT_URI = os.getenv("SF_REDIRECT_URI") or f"{FASTAPI_BACKEND_URL}/api/crm/auth/salesforce/callback"
 
 ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "").strip()
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "").strip()
-ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zoho/callback"
+ZOHO_REDIRECT_URI = os.getenv("ZOHO_REDIRECT_URI") or f"{FASTAPI_BACKEND_URL}/api/crm/auth/zoho/callback"
 
 ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
 ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
-ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zendesk/callback"
+ZD_REDIRECT_URI = os.getenv("ZD_REDIRECT_URI") or f"{FASTAPI_BACKEND_URL}/api/crm/auth/zendesk/callback"
 
 ZOHO_REGIONS = {
     "us": "https://accounts.zoho.com",
@@ -66,7 +66,8 @@ def get_salesforce_url(side: str, environment: str = "production", current_user 
     
     # &prompt=login forces Salesforce account chooser
     auth_url = f"https://{domain}/services/oauth2/authorize?{urllib.parse.urlencode(params)}&prompt=login"
-    return {"url": auth_url}
+    print(f"[OAuth] Salesforce redirect_uri={SF_REDIRECT_URI}")
+    return {"url": auth_url, "redirect_uri": SF_REDIRECT_URI}
 
 @router.get("/auth/salesforce/callback")
 async def salesforce_callback(code: str = None, state: str = None, error: str = None):
@@ -145,7 +146,8 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
     }
     
     auth_url = f"https://accounts.zoho.com/oauth/v2/auth?{urllib.parse.urlencode(params)}"
-    return {"url": auth_url}
+    print(f"[OAuth] Zoho redirect_uri={ZOHO_REDIRECT_URI}")
+    return {"url": auth_url, "redirect_uri": ZOHO_REDIRECT_URI}
 
 @router.get("/auth/zoho/callback")
 async def zoho_callback(code: str, state: str, request: Request):
@@ -210,8 +212,9 @@ def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_curren
     
     # Zendesk isolates accounts dynamically by the {subdomain} injected into this URL
     auth_url = f"https://{subdomain}.zendesk.com/oauth/authorizations/new?{urllib.parse.urlencode(params)}"
+    print(f"[OAuth] Zendesk redirect_uri={ZD_REDIRECT_URI}")
     
-    return {"url": auth_url}
+    return {"url": auth_url, "redirect_uri": ZD_REDIRECT_URI}
 
 @router.get("/auth/zendesk/callback")
 async def zendesk_callback(code: str, state: str):
@@ -273,7 +276,8 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     }
 
     auth_url = f"https://app.hubspot.com/oauth/authorize?{urllib.parse.urlencode(params)}"
-    return {"url": auth_url}
+    print(f"[OAuth] HubSpot redirect_uri={HS_REDIRECT_URI}")
+    return {"url": auth_url, "redirect_uri": HS_REDIRECT_URI}
 
 @router.get("/auth/hubspot/callback")
 async def hubspot_callback(code: str, state: str):

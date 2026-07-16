@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 2
+    },
+    "auditLog": "D:\\Data Migration\\Data-Migration-Utility-POC\\Backend\\src\\logs\\.c25f985f3ffb25ba439e495c0395f48dfde4d942-audit.json",
+    "files": [
+        {
+            "date": 1781853973140,
+            "name": "D:\\Data Migration\\Data-Migration-Utility-POC\\Backend\\src\\logs\\Data Migration-logs-2026-06-19.json",
+            "hash": "07dbc41f327f3be1c74b1c7c0b0549d02b9d0fb3e5e976d64868b05781b13703"
+        }
+    ],
+    "hashType": "sha256"
+}

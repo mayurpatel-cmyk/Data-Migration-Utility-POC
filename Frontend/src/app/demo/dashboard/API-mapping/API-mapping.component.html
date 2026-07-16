@@ -653,8 +653,11 @@ html {
                 
                 <td>
                   <div class="position-relative" (click)="$event.stopPropagation()">
-                    <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
-                         [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                    <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center fw-bold" 
+                         [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : mapping.autoMapSource === 'agent' ? 'bg-danger border-danger text-white shadow-lg' : mapping.autoMapSource === 'legacy' ? 'bg-success border-success text-white shadow-lg' : 'bg-white'"
+                         [style.background]="mapping.autoMapSource === 'agent' ? 'linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%)' : mapping.autoMapSource === 'legacy' ? 'linear-gradient(135deg, #166534 0%, #16a34a 100%)' : ''"
+                         [style.boxShadow]="mapping.autoMapSource === 'agent' ? '0 0 0 3px rgba(127, 29, 29, 0.45), 0 12px 28px rgba(127, 29, 29, 0.45)' : mapping.autoMapSource === 'legacy' ? '0 0 0 3px rgba(22, 101, 52, 0.45), 0 12px 28px rgba(22, 101, 52, 0.45)' : ''"
+                         [style.borderColor]="mapping.autoMapSource === 'agent' ? '#7f1d1d' : mapping.autoMapSource === 'legacy' ? '#166534' : ''"
                          (click)="toggleDropdown(mapping, $event)">
                       
                       <span class="text-truncate" [class.text-muted]="!mapping.targetField">
@@ -720,6 +723,34 @@ html {
           </table>
           }
         </div>
+        @if (autoMapStatusMessage) {
+          <div class="mt-3 p-3 border rounded-3 shadow-sm {{ autoMapStatusType === 'success' ? 'border-success bg-success-subtle' : autoMapStatusType === 'warning' ? 'border-warning bg-warning-subtle' : autoMapStatusType === 'danger' ? 'border-danger bg-danger-subtle' : autoMapStatusType === 'info' ? 'border-info bg-info-subtle' : 'border-primary bg-light' }}" style="box-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 10px 24px rgba(0,0,0,0.08);">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <span class="badge rounded-pill {{ autoMapStatusType === 'danger' ? 'bg-danger text-white border border-danger' : autoMapStatusType === 'success' ? 'bg-success text-white border border-success' : 'bg-primary text-white border border-primary' }} d-inline-flex align-items-center gap-2 px-2 py-1 fw-bold">
+                <i class="feather icon-cpu"></i>
+                <span>Agent</span>
+              </span>
+              @if (isAutoMapping) {
+                <div class="spinner-border spinner-border-sm {{ autoMapStatusType === 'danger' ? 'text-danger' : autoMapStatusType === 'success' ? 'text-success' : autoMapStatusType === 'warning' ? 'text-warning' : 'text-primary' }}" role="status"></div>
+              } @else {
+                <i class="feather {{ autoMapStatusType === 'success' ? 'icon-check-circle text-success' : autoMapStatusType === 'warning' ? 'icon-alert-triangle text-warning' : autoMapStatusType === 'danger' ? 'icon-alert-triangle text-danger' : autoMapStatusType === 'info' ? 'icon-info text-info' : 'icon-cpu text-primary' }}"></i>
+              }
+              <span class="fw-bold text-dark">{{ autoMapStatusMessage }}</span>
+            </div>
+            @if (isAutoMapping || autoMapProgressPercent > 0) {
+              <div class="mt-2">
+                <div class="d-flex justify-content-between align-items-center small text-muted mb-1">
+                  <span>{{ isAutoMapping ? 'Agent mapping progress' : 'Auto-map completed' }}</span>
+                  <span class="fw-semibold text-dark">{{ autoMapProgressPercent }}%</span>
+                </div>
+                <div class="progress" style="height: 8px;">
+                  <div class="progress-bar {{ isAutoMapping ? 'progress-bar-striped progress-bar-animated' : '' }} {{ autoMapStatusType === 'success' ? 'bg-success' : autoMapStatusType === 'warning' ? 'bg-warning' : autoMapStatusType === 'danger' ? 'bg-danger' : autoMapStatusType === 'info' ? 'bg-info' : 'bg-primary' }}" role="progressbar" [style.width.%]="autoMapProgressPercent"></div>
+                </div>
+              </div>
+            }
+          </div>
+        }
+
         <div class="mt-3 pt-3 border-top d-flex justify-content-between align-items-center flex-shrink-0">
           <div class="d-flex align-items-center gap-3">
             <!-- <div class="form-check form-switch m-0" title="Enforce Strict Salesforce Rules">
