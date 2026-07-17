@@ -48,4 +48,17 @@ export class MappingApiService {
       params: params
     }).pipe(timeout(30000));
   }
+
+  getAiAutoMapping(sourceFields: any[], targetFields: any[]): Observable<any> {
+  return this.http.post<any>(
+    `${this.baseUrl}/metadata/ai-auto-map`, 
+    {
+      sourceFields: sourceFields,
+      targetFields: targetFields
+    },
+    {
+      headers: this.getAuthHeaders()
+    }
+  ); // <-- NO .pipe(timeout(...)) HERE! Let the browser manage the connection natively.
+}
 }

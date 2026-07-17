@@ -31,6 +31,7 @@ interface MappingRow {
   relationalExtIdField?: string;
   parentObjectName?: string;
   massUpdateValue?: string;
+  _isAiProcessing?: boolean;
 }
 
 interface CrmEntity {
@@ -90,6 +91,8 @@ export class ApiMappingComponent implements OnInit,OnDestroy {
   targetSystem = 'Unknown';
   currentSessionId: string = '';
   previewLimit: number = 5;
+  isAutoMapping: boolean = false;
+autoMapProgress = { current: 0, total: 0 };
 
   // Dynamic Entity Lists for Dropdowns
   sourceEntities: CrmEntity[] = [];
@@ -1293,112 +1296,183 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     this.updateMappedCount();
   }
 
-  autoMap() {
-    let matchCount = 0;
+  autoMap(): void {
+  // Prevent duplicate double-clicks
+  if (this.isAutoMapping || this.isLoading) return; 
 
-    const restrictedTargetFields = [
-      'id', 
-      'createddate', 'created_at', 'createdat',
-      'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
-      'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
-    ];
+  let heuristicMatchCount = 0;
+  const restrictedTargetFields = [
+    'id', 'createddate', 'created_at', 'createdat',
+    'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
+    'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
+  ];
 
-    this.mappings.forEach((m) => {
-      if (m.targetField) return; 
+  // =========================================================
+  // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING 
+  // =========================================================
+  this.mappings.forEach((m) => {
+    if (m.targetField) return; 
 
-      const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
-      if (!sourceMeta) return;
+    const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
+    if (!sourceMeta) return;
 
-      const srcApiExact = sourceMeta.name.toLowerCase();
-      const srcLabelExact = sourceMeta.label.toLowerCase();
+    const srcApiExact = sourceMeta.name.toLowerCase();
+    const srcLabelExact = sourceMeta.label.toLowerCase();
+    const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+    const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+    const srcType = (sourceMeta.type || 'string').toLowerCase();
+
+    let bestMatch: any = null;
+    let highestScore = 0;
+
+    this.targetFields.forEach(t => {
+      const tgtApiExact = t.name.toLowerCase();
+      if (restrictedTargetFields.includes(tgtApiExact)) return; 
+
+      let score = 0;
+      const tgtLabelExact = t.label.toLowerCase();
+      const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+      const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
+      const tgtType = (t.type || 'string').toLowerCase();
+
+      const isExactTypeMatch = srcType === tgtType;
+      const isForgivingTypeMatch = 
+        (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
+        (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
       
-      const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
-      const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
-      const srcType = (sourceMeta.type || 'string').toLowerCase();
+      if (this.isStrictMapping && !(isExactTypeMatch || isForgivingTypeMatch)) return; 
+      
+      if (tgtApiExact === srcApiExact) score += 100;
+      else if (tgtApiClean === srcApiClean) score += 90;
+      else if (tgtLabelExact === srcLabelExact) score += 85;
+      else if (tgtLabelClean === srcLabelClean) score += 75;
+      else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) score += 40;
+      else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) score += 30;
 
-      let bestMatch: FieldMeta | null = null;
-      let highestScore = 0;
+      if (score >= 30) {
+        if (isExactTypeMatch) score += 20; 
+        else if (isForgivingTypeMatch) score += 10;
+      }
 
-      // Grade this source field against EVERY target field
-      this.targetFields.forEach(t => {
-        const tgtApiExact = t.name.toLowerCase();
-
-        // If the target field is in our restricted list, skip it instantly!
-        if (restrictedTargetFields.includes(tgtApiExact)) {
-          return; 
-        }
-
-        let score = 0;
-        const tgtLabelExact = t.label.toLowerCase();
-        
-        // Clean target names exactly the same way
-        const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
-        const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
-        const tgtType = (t.type || 'string').toLowerCase();
-
-        // DATA TYPE COMPATIBILITY CHECK
-        const isExactTypeMatch = srcType === tgtType;
-        const isForgivingTypeMatch = 
-          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
-        
-        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
-
-        // STRICT MODE ENFORCEMENT
-        if (this.isStrictMapping && !isCompatible) {
-          return; // Instantly disqualify if strict mode is on and types clash
-        }
-        
-        if (tgtApiExact === srcApiExact) {
-          score += 100; // Perfect API Match (Guarantees same-CRM mapping works flawlessly)
-        } else if (tgtApiClean === srcApiClean) {
-          score += 90;  // Cleaned API Match (e.g., Matches Zoho's "First_Name" to Salesforce's "FirstName")
-        } else if (tgtLabelExact === srcLabelExact) {
-          score += 85;  // Perfect Label Match
-        } else if (tgtLabelClean === srcLabelClean) {
-          score += 75;  // Cleaned Label Match
-        } else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) {
-          score += 40;  // Fuzzy Substring API Match
-        } else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) {
-          score += 30;  // Fuzzy Substring Label Match
-        }
-
-        // DATA TYPE BONUS (Only apply if the name was a decent match)
-        if (score >= 30) {
-          if (isExactTypeMatch) score += 20; 
-          else if (isForgivingTypeMatch) score += 10;
-        }
-
-        // TRACK THE WINNER (Must be 50 points or higher to qualify as a match)
-        if (score > highestScore && score >= 50) { 
-          highestScore = score;
-          bestMatch = t;
-        }
-      });
-
-      // Apply the best match found for this specific source field
-      if (bestMatch) {
-        m.targetField = bestMatch['name'];
-        
-        // Auto-assign External ID requirement for Reference fields
-        if (this.isReferenceField(bestMatch['name'])) {
-          m.relationalExtIdField = 'Id';
-        }
-        matchCount++;
+      if (score > highestScore && score >= 50) { 
+        highestScore = score;
+        bestMatch = t;
       }
     });
 
-    this.updateMappedCount();
-    
-    // UI Feedback Upgrade
-    if (matchCount > 0) {
-      this.toastr.success(`Intelligently mapped ${matchCount} fields!`, 'Auto-Map Complete');
-      this.logMessages.unshift(`System: Smart Auto-mapping applied. ${matchCount} fields successfully matched.`);
-    } else {
-      this.toastr.info(`No high-confidence matches found.`, 'Auto-Map Finished');
-      this.logMessages.unshift(`System: Auto-mapping ran, but no matches were found.`);
+    if (bestMatch) {
+      m.targetField = bestMatch['name'];
+      if (this.isReferenceField(bestMatch['name'])) {
+        m.relationalExtIdField = 'Id';
+      }
+      heuristicMatchCount++;
     }
+  });
+
+  // Calculate exactly what goes to the AI
+  const unmappedSourcePayload = this.sourceFields.filter(sf => {
+    const activeMap = this.mappings.find(m => m.sourceField === sf.name);
+    return activeMap && !activeMap.targetField;
+  });
+
+  if (unmappedSourcePayload.length === 0) {
+    this.mappings = [...this.mappings];
+    if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+    if (heuristicMatchCount > 0) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
+    return;
   }
+
+  // =========================================================
+  // PHASE 2: SYNCHRONOUS UI SETUP (Fixes NG0100 Error)
+  // =========================================================
+  // By doing this BEFORE the timeout, Angular registers the progress bar perfectly.
+  this.isAutoMapping = true; 
+  this.autoMapProgress = { current: 0, total: unmappedSourcePayload.length };
+  
+  // Turn on all the inline loading spinners visually
+  unmappedSourcePayload.forEach(field => {
+    const mappingRow = this.mappings.find(m => m.sourceField === field.name);
+    if (mappingRow) mappingRow._isAiProcessing = true;
+  });
+
+  // Force Angular to render the setup
+  this.mappings = [...this.mappings];
+  if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+
+  // =========================================================
+  // PHASE 3: ASYNC AI CHUNKING
+  // =========================================================
+  const CHUNK_SIZE = 10; 
+  let currentIndex = 0;
+  let aiMatchCount = 0;
+
+  const processNextChunk = () => {
+    if (currentIndex >= unmappedSourcePayload.length) {
+      this.isAutoMapping = false;
+      const totalMapped = heuristicMatchCount + aiMatchCount;
+      this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Auto-Map Complete');
+      return;
+    }
+
+    const currentChunk = unmappedSourcePayload.slice(currentIndex, currentIndex + CHUNK_SIZE);
+
+    this.mappingApi.getAiAutoMapping(currentChunk, this.targetFields)
+      .subscribe({
+        next: (response: any) => {
+          if (response && response.mappings) {
+            response.mappings.forEach((backendMap: any) => {
+              const localRow = this.mappings.find(m => m.sourceField === backendMap.sourceField);
+              if (localRow) {
+                if (!localRow.targetField && backendMap.targetField) {
+                  localRow.targetField = backendMap.targetField;
+                  if (this.isReferenceField(backendMap.targetField)) {
+                    localRow.relationalExtIdField = 'Id';
+                  }
+                  aiMatchCount++;
+                }
+                localRow._isAiProcessing = false; // Turn off spinner for completed fields
+              }
+            });
+          } else {
+             // Fallback: Ensure spinners turn off even if no response mapping is returned
+             currentChunk.forEach(field => {
+               const mappingRow = this.mappings.find(m => m.sourceField === field.name);
+               if (mappingRow) mappingRow._isAiProcessing = false;
+             });
+          }
+
+          // Advance progress bar
+          this.autoMapProgress.current += currentChunk.length;
+
+          // Force UI repaint
+          this.mappings = [...this.mappings];
+          if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+
+          currentIndex += CHUNK_SIZE;
+          
+          // Let the UI breathe for 50ms before firing the next batch request
+          setTimeout(() => processNextChunk(), 50); 
+        },
+        error: (error: any) => {
+          console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
+          this.isAutoMapping = false;
+          
+          // Shut off all remaining spinners so the screen isn't frozen
+          this.mappings.forEach(m => m._isAiProcessing = false);
+          this.mappings = [...this.mappings]; 
+
+          if (error.status === 404) {
+            this.toastr.error('Backend endpoint not found (404). Please verify your Python FastAPI server is running.', 'Connection Error');
+          } else {
+            this.toastr.warning('The AI connection was interrupted. Partial mappings saved.', 'Incomplete');
+          }
+        }
+      });
+  };
+
+  // Start the first chunk fetch AFTER the synchronous UI renders
+  setTimeout(() => processNextChunk(), 50);
+}
 
   updateMappedCount() {
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
