@@ -1,71 +1,111 @@
 import httpx
-import json
+import math
 import re
 from fastapi import HTTPException
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
-AI_MODEL = "llama3.2:1b"
+
+# We use an embedding-specific model instead of a chat model for millisecond processing
+EMBEDDING_MODEL = "nomic-embed-text" 
 
 class LocalAiService:
     @staticmethod
-    async def generate_mapping(source_fields: list, target_fields: list) -> dict:
-        """
-        Queries llama3.1 using Ollama's native API with strict JSON formatting.
-        """
-        
-        system_prompt = (
-            "You are an expert data-migration assistant specializing in CRM schema matching.\n"
-            "Your task is to map source fields to target fields based on deep semantic similarity and data type compatibility.\n\n"
-            "CRITICAL RULES:\n"
-            "1. Only map fields if they have a clear semantic relationship (e.g., 'email_address' matches 'WorkEmail').\n"
-            "2. Strict Type Alignment: Avoid mapping incompatible types unless easily coercible (e.g., do NOT map a 'boolean' to a 'datetime').\n"
-            "3. Explicit Omissions: If a source field has NO logical match in the target schema, do NOT invent a mapping. Omit it from the results array entirely.\n"
-            "4. Confidence Scores: Assign a realistic confidence score between 0.0 and 1.0 based on how exact the semantic match is.\n\n"
-            "You must respond ONLY with a valid JSON object matching this exact schema:\n"
-            "{\n"
-            '  "mappings": [\n'
-            '    {"sourceField": "string", "targetField": "string", "confidence": 0.85}\n'
-            '  ]\n'
-            "}\n"
-        )
-        
-        user_prompt = f"Source Schema Fields: {json.dumps(source_fields)}\nTarget Schema Fields: {json.dumps(target_fields)}"
-        
+    def cosine_similarity(v1: list[float], v2: list[float]) -> float:
+        """Calculates the mathematical distance between two vectors."""
+        dot_product = sum(a * b for a, b in zip(v1, v2))
+        magnitude1 = math.sqrt(sum(a * a for a in v1))
+        magnitude2 = math.sqrt(sum(a * a for a in v2))
+        if magnitude1 * magnitude2 == 0:
+            return 0.0
+        return dot_product / (magnitude1 * magnitude2)
+
+    @staticmethod
+    async def get_embeddings(texts: list[str]) -> list[list[float]]:
+        """Fetches vector embeddings in batches from Ollama."""
+        if not texts:
+            return []
+            
         payload = {
-            "model": AI_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "format": "json",       
-            "stream": False,        
-            "options": {
-                "temperature": 0.0,
-                "num_predict": 800, 
-                "num_ctx": 4096, 
-                "num_thread": 8     
-            }
+            "model": EMBEDDING_MODEL,
+            "input": texts
         }
         
-        try:
-            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
+            try:
                 response = await client.post(
-                    f"{OLLAMA_BASE_URL}/chat", 
-                    json=payload,
-                    headers={"Content-Type": "application/json"}
+                    f"{OLLAMA_BASE_URL}/embed", 
+                    json=payload
                 )
                 
                 if response.status_code != 200:
-                    raise HTTPException(status_code=500, detail=f"Ollama Error: {response.text}")
+                    raise HTTPException(status_code=500, detail=f"Ollama Embed Error: {response.text}")
                 
-                raw_content = response.json().get("message", {}).get("content", "")
-                clean_content = re.sub(r"```json\s*|```", "", raw_content).strip()
+                return response.json().get("embeddings", [])
                 
-                return json.loads(clean_content)
+            except httpx.RequestError:
+                raise HTTPException(status_code=503, detail="Cannot reach Ollama embedding service.")
+            
+    @staticmethod
+    async def generate_mapping(source_fields: list, target_fields: list) -> dict:
+        """
+        Uses mathematical vector similarity instead of an LLM to instantly 
+        match semantic meaning between source and target fields.
+        """
+        if not source_fields or not target_fields:
+            return {"mappings": []}
+
+        # 1. Clean up field names for better semantic understanding
+        # Changes "billing_address" or "BillingAddress" into "billing address"
+        def prep_text(name):
+            if not name: return ""
+            s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', name)
+            clean = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower()
+            return clean
+
+        src_texts = [prep_text(f.get("name", "")) for f in source_fields]
+        tgt_texts = [prep_text(f.get("name", "")) for f in target_fields]
+
+        # 2. Instantly generate vectors for all fields
+        src_vectors = await LocalAiService.get_embeddings(src_texts)
+        tgt_vectors = await LocalAiService.get_embeddings(tgt_texts)
+
+        mappings = []
+
+        # 3. Calculate distance and find the best matches
+        for idx_src, src_vec in enumerate(src_vectors):
+            src_field = source_fields[idx_src]
+            src_type = src_field.get("type", "string").lower()
+            
+            best_match = None
+            best_score = 0.0
+
+            for idx_tgt, tgt_vec in enumerate(tgt_vectors):
+                tgt_field = target_fields[idx_tgt]
+                tgt_type = tgt_field.get("type", "string").lower()
+
+                # CRITICAL: Enforce Type Compatibility so vectors don't map unrelated data types
+                is_exact = src_type == tgt_type
+                is_forgiving = (
+                    ("string" in src_type and tgt_type in ['string', 'text', 'textarea', 'picklist', 'reference']) or
+                    (src_type in ['number', 'integer', 'double', 'currency', 'float'] and tgt_type in ['number', 'integer', 'double', 'currency', 'float'])
+                )
+
+                if not (is_exact or is_forgiving):
+                    continue
+
+                # Math calculation
+                similarity = LocalAiService.cosine_similarity(src_vec, tgt_vec)
                 
-        except httpx.ReadTimeout:
-            raise HTTPException(status_code=504, detail="AI generation timed out.")
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=503, detail="Cannot reach AI service sidecar.")
-        except (json.JSONDecodeError, KeyError) as e:
-            raise HTTPException(status_code=502, detail="AI response failed structural JSON validation.")
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match = tgt_field.get("name")
+
+            # 4. Apply a strict confidence threshold (0.65 for embeddings is usually safe)
+            if best_score > 0.65 and best_match:
+                mappings.append({
+                    "sourceField": src_field.get("name"),
+                    "targetField": best_match,
+                    "confidence": round(best_score, 2)
+                })
+
+        return {"mappings": mappings}

@@ -32,6 +32,7 @@ interface MappingRow {
   parentObjectName?: string;
   massUpdateValue?: string;
   _isAiProcessing?: boolean;
+  _mappedBy?: 'rule' | 'ai';
 }
 
 interface CrmEntity {
@@ -97,6 +98,9 @@ autoMapProgress = { current: 0, total: 0 };
   // Dynamic Entity Lists for Dropdowns
   sourceEntities: CrmEntity[] = [];
   targetEntities: CrmEntity[] = [];
+  showReviewPanel: boolean = false;
+  reviewPanelMinimized: boolean = false;
+  reviewFilter: 'mapped' | 'unmapped' = 'mapped';
 
   selectedSourceObject = '';
   selectedTargetObject = '';
@@ -129,7 +133,7 @@ autoMapProgress = { current: 0, total: 0 };
   errorCurrentPage: number = 1;
   errorPageSize: number = 10;
   mappingSearchQuery = '';
-  
+  reviewPanelExpanded: boolean = false;
   isSourceDropdownOpen = false;
   sourceSearchQuery = '';
   isTargetDropdownOpen = false;
@@ -672,6 +676,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
   selectField(mapping: any, fieldName: string) {
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
+    delete mapping._mappedBy;
     
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
@@ -1288,6 +1293,8 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
   clearMapping(index: number) {
     this.mappings[index].targetField = '';
+    this.mappings[index].relationalExtIdField = '';
+    delete this.mappings[index]._mappedBy; // <--- Clear the tag
     this.updateMappedCount();
   }
 
@@ -1370,6 +1377,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
         if (typeof this.isReferenceField === 'function' && this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
+        m._mappedBy = 'rule';
         heuristicMatchCount++;
       }
     });
@@ -1407,24 +1415,39 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
       this.mappings = [...this.mappings];
 
-      const CHUNK_SIZE = 10; 
+      const CHUNK_SIZE = 30; 
       let currentIndex = 0;
       let aiMatchCount = 0;
 
       const processNextChunk = () => {
         if (currentIndex >= unmappedSourcePayload.length) {
-          this.isAutoMapping = false;
-          const totalMapped = heuristicMatchCount + aiMatchCount;
           
-          if (totalMapped > 0) {
-              if (this.toastr) this.toastr.success(`Successfully mapped ${totalMapped} fields! (${heuristicMatchCount} Rule-based, ${aiMatchCount} AI-based)`, 'Hybrid Auto-Map Complete');
-              if (this.logMessages) this.logMessages.unshift(`System: Hybrid Auto-mapping complete. ${heuristicMatchCount} rule matches, ${aiMatchCount} AI semantic matches.`);
-          } else {
-              if (this.toastr) this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
-          }
+          setTimeout(() => {
+            this.isAutoMapping = false;
+            const totalMapped = heuristicMatchCount + aiMatchCount;
+            
+            if (totalMapped > 0) {
+                if (this.toastr) this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Hybrid Auto-Map Complete');
+                if (this.logMessages) this.logMessages.unshift(`System: Hybrid Auto-mapping complete.`);
+                
+                // NEW: Open the Review Panel!
+                this.showReviewPanel = true;
+                this.reviewPanelMinimized = false;
+                this.reviewFilter = 'mapped'; 
+                
+            } else {
+                if (this.toastr) this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
+                
+                // NEW: Open the Review Panel directly to the Unmapped tab
+                this.showReviewPanel = true;
+                this.reviewPanelMinimized = false;
+                this.reviewFilter = 'unmapped';
+            }
+            
+            this.mappings = [...this.mappings];
+            if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+          }, 600);
           
-          this.mappings = [...this.mappings];
-          if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
           return;
         }
 
@@ -1442,6 +1465,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
                     localRow.relationalExtIdField = 'Id';
                   }
+                  localRow._mappedBy = 'ai';
                   aiMatchCount++;
                 }
               });

@@ -164,6 +164,59 @@
     70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(25, 135, 84, 0); }
     100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
   }
+
+  /* Floating Review Panel */
+  .floating-review-panel {
+    position: fixed;
+    bottom: 25px;
+    right: 25px;
+    width: 650px;
+    height: 550px; /* Explicit height helps native resizing */
+    max-height: 85vh;
+    background-color: #ffffff;
+    border-radius: 0.5rem;
+    box-shadow: 0 1rem 3rem rgba(0,0,0,0.3);
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    border: 1px solid #dee2e6;
+    
+    /* NEW: Native Drag-to-Resize */
+    resize: both;
+    overflow: hidden;
+    min-width: 450px;
+    min-height: 350px;
+  }
+  
+  /* NEW: Maximize/Expanded State */
+  .floating-review-panel.expanded {
+    width: 90vw !important;
+    height: 90vh !important;
+    max-height: 90vh !important;
+    bottom: 5vh;
+    right: 5vw;
+    resize: none; /* Turn off drag-to-resize when fullscreen */
+  }
+
+  .floating-review-panel.minimized {
+    width: 280px;
+    height: 48px;
+    min-width: 280px;
+    min-height: 48px;
+    cursor: pointer;
+    transform: translateY(0);
+    resize: none; /* Turn off resize when minimized */
+  }
+  .floating-review-panel.minimized:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.2);
+  }
+  .floating-review-panel .panel-body {
+    overflow-y: auto;
+    flex-grow: 1;
+    background-color: #f8f9fa;
+  }
 </style>
 
 @if (isGlobalLoading) {
@@ -504,18 +557,18 @@
         </div>
 
         <!-- PREMIUM UX: Live Progress Bar (FROZEN) -->
-        @if (isAutoMapping) {
-          <div class="alert alert-info py-2 px-3 mb-2 d-flex align-items-center justify-content-between border-info-subtle shadow-sm animate__animated animate__fadeIn flex-shrink-0">
-            <div class="d-flex align-items-center gap-2">
-              <div class="spinner-border spinner-border-sm text-info" style="border-width: 0.15em;" role="status"></div>
-              <strong class="text-info-emphasis small m-0">AI is mapping fields...</strong>
+       @if (isAutoMapping) {
+          <div class="alert alert-info py-3 px-4 mb-3 d-flex align-items-center justify-content-between border-info-subtle shadow-sm animate__animated animate__fadeInDown flex-shrink-0" style="border-radius: 0.5rem;">
+            <div class="d-flex align-items-center gap-3">
+              <div class="spinner-border text-info" style="border-width: 0.2em; width: 1.5rem; height: 1.5rem;" role="status"></div>
+              <strong class="text-info-emphasis m-0 fs-6">AI is mapping fields...</strong>
             </div>
-            <div class="progress flex-grow-1 mx-3 bg-white" style="height: 8px; border-radius: 10px; border: 1px solid #cff4fc;">
+            <div class="progress flex-grow-1 mx-4 bg-white" style="height: 10px; border-radius: 10px; border: 1px solid #cff4fc; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);">
               <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" 
                    [style.width.%]="(autoMapProgress.current / autoMapProgress.total) * 100"
                    style="border-radius: 10px;"></div>
             </div>
-            <span class="small fw-bold text-info font-monospace">{{ autoMapProgress.current }} / {{ autoMapProgress.total }}</span>
+            <span class="fw-bold text-info fs-6 font-monospace">{{ autoMapProgress.current }} / {{ autoMapProgress.total }}</span>
           </div>
         }
 
@@ -592,16 +645,33 @@
                       <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
                            [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
                            (click)="toggleDropdown(mapping, $event)">
-                        <span class="text-truncate" [class.text-muted]="!mapping.targetField">
-                          {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
-                        </span>
-                        @if (isTypeMismatch(mapping)) {
-                          <i class="feather icon-alert-triangle text-danger" title="Type Mismatch! You are mapping incompatible data types."></i>
-                        } @else if (mapping.targetField) {
-                          <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}" style="font-size: 0.6rem;">
-                            {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+                        
+                        <div class="d-flex align-items-center gap-2 text-truncate">
+                          <span class="text-truncate" [class.text-muted]="!mapping.targetField">
+                            {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
                           </span>
-                        }
+                          
+                          <!-- NEW: Origin Tags -->
+                          @if (mapping._mappedBy === 'rule') {
+                            <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1" style="font-size: 0.6rem;" title="Matched by exact naming rules">
+                              <i class="feather icon-zap"></i> Rule
+                            </span>
+                          } @else if (mapping._mappedBy === 'ai') {
+                            <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1" style="font-size: 0.6rem; background-color: #e0f2fe;" title="Matched by AI semantic math">
+                              <i class="feather icon-cpu"></i> AI
+                            </span>
+                          }
+                        </div>
+
+                        <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                          @if (isTypeMismatch(mapping)) {
+                            <i class="feather icon-alert-triangle text-danger" title="Type Mismatch! You are mapping incompatible data types."></i>
+                          } @else if (mapping.targetField) {
+                            <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}" style="font-size: 0.6rem;">
+                              {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+                            </span>
+                          }
+                        </div>
                       </div>
 
                       @if (isReferenceField(mapping.targetField)) {
@@ -657,18 +727,39 @@
         </div>
 
         <!-- LOCKED Footer Action Bar -->
-        <div class="mt-2 pt-3 border-top d-flex justify-content-between align-items-center flex-shrink-0 bg-white" style="position: sticky; bottom: 0; z-index: 10;">
-          <div class="d-flex align-items-center gap-3 w-100 justify-content-end">
-            <div class="d-flex gap-2">
-              <button class="btn btn-sm btn-white border shadow-sm text-primary btn-hover-lift" 
-                      (click)="autoMap()" 
-                      [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping" 
-                      title="Auto Map">
-                <i class="feather" [ngClass]="isAutoMapping ? 'icon-loader fa-spin text-info' : 'icon-cpu text-info'"></i> 
-                {{ isAutoMapping ? 'Mapping...' : 'Auto Map' }}
-              </button>
-              <button class="btn btn-sm btn-white border shadow-sm text-danger btn-hover-lift" (click)="resetAllMappings()" [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping" title="Clear All">
-                <i class="feather icon-trash-2 text-danger"></i> Clear
+        <div class="mt-3 pt-3 border-top d-flex align-items-center flex-shrink-0 bg-white" style="position: sticky; bottom: 0; z-index: 10;">
+          <div class="d-flex align-items-center gap-3 w-100">
+            <!-- Primary Action -->
+            <button class="btn btn-primary shadow-sm btn-hover-lift-primary px-4 py-2 fw-bold d-flex align-items-center gap-2" 
+                    (click)="autoMap()" 
+                    [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping" 
+                    title="Auto Map">
+              <i class="feather fs-5" [ngClass]="isAutoMapping ? 'icon-loader fa-spin' : 'icon-cpu'"></i> 
+              {{ isAutoMapping ? 'Mapping in Progress...' : 'Auto Map Fields' }}
+            </button>
+            
+            <!-- Secondary Action -->
+            <button class="btn btn-light border-secondary-subtle text-danger shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2" 
+                    (click)="resetAllMappings()" 
+                    [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping" 
+                    title="Clear All">
+              <i class="feather icon-trash-2 fs-5"></i> Clear All
+            </button>
+            
+            <!-- Dynamic Status Indicator on Right Side -->
+            <div class="ms-auto">
+              <!-- @if (isAutoMapping) {
+                <span class="badge bg-info-subtle text-info-emphasis px-3 py-2 animate__animated animate__pulse animate__infinite border border-info-subtle d-flex align-items-center gap-2" style="font-size: 0.8rem;">
+                  <span class="spinner-border spinner-border-sm" style="border-width: 0.15em;"></span>
+                  Processing AI Match...
+                </span>
+              } -->
+              <!-- NEW: On-Demand Review Button -->
+              <button class="btn btn-outline-info shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2 bg-white" 
+                      (click)="showReviewPanel = true; reviewPanelMinimized = false"
+                      [disabled]="mappings.length === 0 || isAutoMapping"
+                      title="Open Review Panel">
+                <i class="feather icon-eye fs-5"></i> Open Review
               </button>
             </div>
           </div>
@@ -940,4 +1031,148 @@
     </div>
   </div>
 </div>
+}
+
+<!-- ========================================================= -->
+<!-- FLOATING REVIEW PANEL (AUTO-MAP RESULTS)                  -->
+<!-- ========================================================= -->
+@if (showReviewPanel) {
+ <div class="floating-review-panel animate__animated animate__fadeInUp" 
+       [class.minimized]="reviewPanelMinimized" 
+       [class.expanded]="reviewPanelExpanded">
+    
+    <!-- Panel Header (Click to maximize if minimized) -->
+    <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0" 
+         style="border-radius: 8px 8px 0 0; cursor: pointer;" 
+         (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null">
+      <div class="d-flex align-items-center gap-2">
+        <i class="feather icon-check-circle text-success fs-5"></i>
+        <h6 class="m-0 fw-bold">Auto-Map Review</h6>
+        @if (reviewPanelMinimized) {
+          <span class="badge bg-primary ms-2">{{ mappedCount }} / {{ mappings.length }}</span>
+        }
+      </div>
+      <div class="d-flex gap-2">
+        @if (!reviewPanelMinimized) {
+          
+          <!-- NEW: Maximize / Restore Button -->
+          <button class="btn btn-sm btn-link text-white-50 p-0 btn-hover-lift" 
+                  (click)="reviewPanelExpanded = !reviewPanelExpanded; $event.stopPropagation()" 
+                  title="Toggle Fullscreen">
+            <i class="feather fs-5" [ngClass]="reviewPanelExpanded ? 'icon-minimize' : 'icon-maximize'"></i>
+          </button>
+          
+          <button class="btn btn-sm btn-link text-white-50 p-0 btn-hover-lift" 
+                  (click)="reviewPanelMinimized = true; reviewPanelExpanded = false; $event.stopPropagation()" 
+                  title="Minimize">
+            <i class="feather icon-minus fs-5"></i>
+          </button>
+          <button class="btn btn-sm btn-link text-white-50 p-0 btn-hover-lift" 
+                  (click)="showReviewPanel = false; $event.stopPropagation()" 
+                  title="Close">
+            <i class="feather icon-x fs-5"></i>
+          </button>
+        } @else {
+          <button class="btn btn-sm btn-link text-white-50 p-0"><i class="feather icon-maximize-2 fs-5"></i></button>
+        }
+      </div>
+    </div>
+
+    <!-- Panel Content (Hidden when minimized) -->
+    @if (!reviewPanelMinimized) {
+      <!-- Tabs -->
+      <div class="bg-white p-2 border-bottom d-flex gap-2 flex-shrink-0 shadow-sm z-1">
+        <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2 transition-all" 
+                [class.btn-primary]="reviewFilter === 'mapped'" 
+                [class.btn-outline-primary]="reviewFilter !== 'mapped'" 
+                (click)="reviewFilter = 'mapped'">
+          Mapped <span class="badge" [class.bg-white]="reviewFilter === 'mapped'" [class.text-primary]="reviewFilter === 'mapped'" [class.bg-primary]="reviewFilter !== 'mapped'">{{ mappedCount }}</span>
+        </button>
+        <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2 transition-all" 
+                [class.btn-warning]="reviewFilter === 'unmapped'" 
+                [class.btn-outline-warning]="reviewFilter !== 'unmapped'" 
+                (click)="reviewFilter = 'unmapped'">
+          Unmapped <span class="badge" [class.bg-white]="reviewFilter === 'unmapped'" [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{ mappings.length - mappedCount }}</span>
+        </button>
+      </div>
+
+      <!-- Scrollable Mapping Area (Re-uses your exact mapping rows) -->
+      <div class="panel-body p-0">
+        <table class="table table-hover table-borderless align-middle mb-0 w-100">
+          <tbody>
+            @for (mapping of mappings; track mapping.sourceField; let i = $index) {
+              <!-- Conditionally show rows based on the selected tab -->
+              @if ((reviewFilter === 'mapped' && mapping.targetField) || (reviewFilter === 'unmapped' && !mapping.targetField)) {
+                <tr class="border-bottom">
+                  <td class="px-3 py-2 w-50" title="{{ mapping.sourceLabel }}">
+                    <div class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
+                      <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+                    </div>
+                  </td>
+                  <td class="text-center text-muted px-0" style="width: 20px;">
+                    <i class="feather icon-arrow-right small"></i>
+                  </td>
+                  <td class="px-3 py-2 w-50">
+                    <div class="position-relative" (click)="$event.stopPropagation()">
+                      <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
+                           [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                           (click)="toggleDropdown(mapping, $event)">
+                        
+                        <div class="d-flex align-items-center gap-2 text-truncate">
+                          <span class="text-truncate" [class.text-muted]="!mapping.targetField">
+                            {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
+                          </span>
+                          
+                          @if (mapping._mappedBy === 'rule') {
+                            <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1" style="font-size: 0.6rem;">
+                              <i class="feather icon-zap"></i> Rule
+                            </span>
+                          } @else if (mapping._mappedBy === 'ai') {
+                            <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1" style="font-size: 0.6rem; background-color: #e0f2fe;">
+                              <i class="feather icon-cpu"></i> AI
+                            </span>
+                          }
+                        </div>
+                      </div>
+
+                      <!-- Search Dropdown Logic -->
+                      @if (mapping.isDropdownOpen) {
+                        <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white" style="max-height: 200px; overflow-y: auto; z-index: 9999; top: 100%;">
+                          <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                            <input type="text" class="form-control form-control-sm" placeholder="Search..." [(ngModel)]="mapping.searchQuery" autofocus>
+                          </div>
+                          <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold small" (click)="selectField(mapping, '')">
+                            <i class="feather icon-slash"></i> -- Ignore --
+                          </div>
+                          @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
+                            <div class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center" 
+                                 (click)="selectField(mapping, field.name)">
+                              <span class="fw-bold text-dark small">{{ field.label }}</span>
+                            </div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  </td>
+                  <td class="px-2 text-center">
+                    <button class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger m-0" (click)="clearMapping(i)">
+                      <i class="feather icon-x"></i>
+                    </button>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+      
+      <!-- Footer Action -->
+      <div class="p-3 bg-white border-top flex-shrink-0 text-end rounded-bottom d-flex justify-content-between align-items-center">
+        <span class="small text-muted fw-bold">Review mappings before running the job.</span>
+        <button class="btn btn-sm btn-primary px-4 shadow-sm fw-bold btn-hover-lift-primary" (click)="showReviewPanel = false">
+          Done Reviewing
+        </button>
+      </div>
+    }
+  </div>
 }
