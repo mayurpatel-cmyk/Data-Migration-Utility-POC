@@ -4,21 +4,27 @@ import re
 from fastapi import HTTPException
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
-# UPGRADE: Swapped out large model for the high-speed 1.5B CPU-optimized version
-AI_MODEL = "qwen2.5:1.5b"
+AI_MODEL = "llama3.2:1b"
 
 class LocalAiService:
     @staticmethod
     async def generate_mapping(source_fields: list, target_fields: list) -> dict:
         """
-        Queries qwen2.5:1.5b using Ollama's native API with strict JSON formatting.
+        Queries llama3.1 using Ollama's native API with strict JSON formatting.
         """
+        
         system_prompt = (
-            "You are a strict data-matching API router. Your task is to match source fields to target fields based on semantic similarity.\n"
+            "You are an expert data-migration assistant specializing in CRM schema matching.\n"
+            "Your task is to map source fields to target fields based on deep semantic similarity and data type compatibility.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Only map fields if they have a clear semantic relationship (e.g., 'email_address' matches 'WorkEmail').\n"
+            "2. Strict Type Alignment: Avoid mapping incompatible types unless easily coercible (e.g., do NOT map a 'boolean' to a 'datetime').\n"
+            "3. Explicit Omissions: If a source field has NO logical match in the target schema, do NOT invent a mapping. Omit it from the results array entirely.\n"
+            "4. Confidence Scores: Assign a realistic confidence score between 0.0 and 1.0 based on how exact the semantic match is.\n\n"
             "You must respond ONLY with a valid JSON object matching this exact schema:\n"
             "{\n"
             '  "mappings": [\n'
-            '    {"sourceField": "string", "targetField": "string", "confidence": 0.95}\n'
+            '    {"sourceField": "string", "targetField": "string", "confidence": 0.85}\n'
             '  ]\n'
             "}\n"
         )
@@ -34,7 +40,10 @@ class LocalAiService:
             "format": "json",       
             "stream": False,        
             "options": {
-                "temperature": 0.0  
+                "temperature": 0.0,
+                "num_predict": 800, 
+                "num_ctx": 4096, 
+                "num_thread": 8     
             }
         }
         

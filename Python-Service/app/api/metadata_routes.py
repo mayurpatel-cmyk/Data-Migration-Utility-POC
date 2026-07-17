@@ -173,60 +173,79 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
                 "tokens": tokenize_field(t_name)
             })
         
-        # 1. RUN FAST HEURISTIC ALIGNMENT (Executes in ~5 Milliseconds)
+       # 1. RUN FAST HEURISTIC ALIGNMENT
         for src in source_fields:
             src_name = src.get("name")
+            src_type = src.get("type", "string")
             src_norm = normalize_field_name(src_name)
             src_tok = tokenize_field(src_name)
             
-            # Pass A: Perfect Text Normalization (e.g., "first_name" -> "FirstName")
+            # Pass A: Perfect Text Normalization + Type Check
             if src_norm in target_lookup:
-                final_mappings.append({
-                    "sourceField": src_name,
-                    "targetField": target_lookup[src_norm],
-                    "confidence": 1.0
-                })
-                continue
+                tgt_name = target_lookup[src_norm]
+                tgt_meta = next((t for t in target_fields if t.get("name") == tgt_name), {})
                 
-            # Pass B: Token Intersect Overlap (e.g., "mailing_street" -> "MailingStreetAddress")
+                # Verify types match before auto-assigning 1.0 confidence
+                if src_type == tgt_meta.get("type", "string"):
+                    final_mappings.append({
+                        "sourceField": src_name,
+                        "targetField": tgt_name,
+                        "confidence": 1.0
+                    })
+                    continue
+                
+            # Pass B: Strict Token Intersect Overlap (Require more than just 1 generic match)
             best_token_match = None
             max_overlap = 0
             for tgt in target_tokens:
+                tgt_meta = next((t for t in target_fields if t.get("name") == tgt["name"]), {})
+                # Skip if types are wildly mismatched
+                if src_type != tgt_meta.get("type", "string"):
+                    continue
+                    
                 overlap = len(src_tok.intersection(tgt["tokens"]))
                 if overlap > max_overlap:
                     max_overlap = overlap
                     best_token_match = tgt["name"]
-                    
-            if max_overlap >= 1 and best_token_match:
+            
+        
+            if max_overlap >= 2 and best_token_match:
                 final_mappings.append({
                     "sourceField": src_name,
                     "targetField": best_token_match,
-                    "confidence": 0.90
+                    "confidence": 0.85
                 })
                 continue
 
-            # Pass C: Text Distance Fallback (Fuzzy typos / layout variations)
-            close_matches = difflib.get_close_matches(src_name, target_names, n=1, cutoff=0.60)
+        
+            close_matches = difflib.get_close_matches(src_name, target_names, n=1, cutoff=0.75) 
             if close_matches:
-                final_mappings.append({
-                    "sourceField": src_name,
-                    "targetField": close_matches[0],
-                    "confidence": 0.80
-                })
-                continue
+                tgt_meta = next((t for t in target_fields if t.get("name") == close_matches[0]), {})
+                if src_type == tgt_meta.get("type", "string"):
+                    final_mappings.append({
+                        "sourceField": src_name,
+                        "targetField": close_matches[0],
+                        "confidence": 0.75
+                    })
+                    continue
                 
-            # Only fields that completely fail textual heuristics go to the local AI
-            unmapped_source.append({"name": src_name, "type": src.get("type", "string")})
+            unmapped_source.append({"name": src_name, "type": src_type})
                 
         print(f"[HYBRID ENGINE]: Resolved {len(final_mappings)} fields instantly via fast token algorithms.")
         print(f"[HYBRID ENGINE]: Passing remaining {len(unmapped_source)} complex fields to local SLM...")
 
-        # 2. LOCAL AI PHASE (Processes the tiny remaining fraction of fields)
+
         if unmapped_source:
-            minimized_target = [{"name": f.get("name"), "type": f.get("type", "string")} for f in target_fields]
+            # OPTIMIZATION: Only send target fields that haven't been mapped yet!
+            mapped_target_names = [m["targetField"] for m in final_mappings if "targetField" in m]
             
-            # Small, single-batch call because the workload has been minimized
-            CHUNK_SIZE = 35
+            minimized_target = [
+                {"name": f.get("name"), "type": f.get("type", "string")} 
+                for f in target_fields 
+                if f.get("name") not in mapped_target_names
+            ]
+            
+            CHUNK_SIZE = 10
             source_chunks = [unmapped_source[i:i + CHUNK_SIZE] for i in range(0, len(unmapped_source), CHUNK_SIZE)]
             
             for index, chunk in enumerate(source_chunks):

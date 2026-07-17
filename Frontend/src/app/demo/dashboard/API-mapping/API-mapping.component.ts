@@ -1297,182 +1297,190 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
   }
 
   autoMap(): void {
-  // Prevent duplicate double-clicks
-  if (this.isAutoMapping || this.isLoading) return; 
+    // Prevent duplicate double-clicks
+    if (this.isAutoMapping || this.isLoading) return; 
 
-  let heuristicMatchCount = 0;
-  const restrictedTargetFields = [
-    'id', 'createddate', 'created_at', 'createdat',
-    'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
-    'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
-  ];
+    let heuristicMatchCount = 0;
+    const restrictedTargetFields = [
+      'id', 'createddate', 'created_at', 'createdat',
+      'lastmodifieddate', 'updated_at', 'updatedat', 'updateddate',
+      'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted'
+    ];
 
-  // =========================================================
-  // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING 
-  // =========================================================
-  this.mappings.forEach((m) => {
-    if (m.targetField) return; 
+    // =========================================================
+    // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING 
+    // =========================================================
+    this.mappings.forEach((m) => {
+      if (m.targetField) return; 
 
-    const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
-    if (!sourceMeta) return;
+      const sourceMeta = this.sourceFields.find(sf => sf.name === m.sourceField);
+      if (!sourceMeta) return;
 
-    const srcApiExact = sourceMeta.name.toLowerCase();
-    const srcLabelExact = sourceMeta.label.toLowerCase();
-    const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
-    const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
-    const srcType = (sourceMeta.type || 'string').toLowerCase();
-
-    let bestMatch: any = null;
-    let highestScore = 0;
-
-    this.targetFields.forEach(t => {
-      const tgtApiExact = t.name.toLowerCase();
-      if (restrictedTargetFields.includes(tgtApiExact)) return; 
-
-      let score = 0;
-      const tgtLabelExact = t.label.toLowerCase();
-      const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
-      const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
-      const tgtType = (t.type || 'string').toLowerCase();
-
-      const isExactTypeMatch = srcType === tgtType;
-      const isForgivingTypeMatch = 
-        (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-        (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+      const srcApiExact = sourceMeta.name.toLowerCase();
+      const srcLabelExact = sourceMeta.label.toLowerCase();
       
-      if (this.isStrictMapping && !(isExactTypeMatch || isForgivingTypeMatch)) return; 
-      
-      if (tgtApiExact === srcApiExact) score += 100;
-      else if (tgtApiClean === srcApiClean) score += 90;
-      else if (tgtLabelExact === srcLabelExact) score += 85;
-      else if (tgtLabelClean === srcLabelClean) score += 75;
-      else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) score += 40;
-      else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) score += 30;
+      const srcApiClean = srcApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+      const srcLabelClean = srcLabelExact.replace(/[^a-z0-9]/g, '');
+      const srcType = (sourceMeta.type || 'string').toLowerCase();
 
-      if (score >= 30) {
-        if (isExactTypeMatch) score += 20; 
-        else if (isForgivingTypeMatch) score += 10;
-      }
+      let bestMatch: any = null; 
+      let highestScore = 0;
 
-      if (score > highestScore && score >= 50) { 
-        highestScore = score;
-        bestMatch = t;
+      this.targetFields.forEach(t => {
+        const tgtApiExact = t.name.toLowerCase();
+        if (restrictedTargetFields.includes(tgtApiExact)) return; 
+
+        let score = 0;
+        const tgtLabelExact = t.label.toLowerCase();
+        
+        const tgtApiClean = tgtApiExact.replace(/__c$/, '').replace(/__r$/, '').replace(/[^a-z0-9]/g, '');
+        const tgtLabelClean = tgtLabelExact.replace(/[^a-z0-9]/g, '');
+        const tgtType = (t.type || 'string').toLowerCase();
+
+        // DATA TYPE COMPATIBILITY CHECK
+        const isExactTypeMatch = srcType === tgtType;
+        const isForgivingTypeMatch = 
+          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
+          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) && ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+        
+        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
+
+        if (this.isStrictMapping && !isCompatible) return; 
+        
+        if (tgtApiExact === srcApiExact) score += 100;
+        else if (tgtApiClean === srcApiClean) score += 90;
+        else if (tgtLabelExact === srcLabelExact) score += 85;
+        else if (tgtLabelClean === srcLabelClean) score += 75;
+        else if (srcApiClean.length > 3 && (tgtApiClean.includes(srcApiClean) || srcApiClean.includes(tgtApiClean))) score += 40;
+        else if (srcLabelClean.length > 3 && (tgtLabelClean.includes(srcLabelClean) || srcLabelClean.includes(tgtLabelClean))) score += 30;
+
+        if (score >= 30) {
+          if (isExactTypeMatch) score += 20; 
+          else if (isForgivingTypeMatch) score += 10;
+        }
+
+        if (score > highestScore && score >= 50) { 
+          highestScore = score;
+          bestMatch = t;
+        }
+      });
+
+      if (bestMatch) {
+        m.targetField = bestMatch['name'];
+        if (typeof this.isReferenceField === 'function' && this.isReferenceField(bestMatch['name'])) {
+          m.relationalExtIdField = 'Id';
+        }
+        heuristicMatchCount++;
       }
     });
 
-    if (bestMatch) {
-      m.targetField = bestMatch['name'];
-      if (this.isReferenceField(bestMatch['name'])) {
-        m.relationalExtIdField = 'Id';
+    const unmappedSourcePayload = this.sourceFields.filter(sf => {
+      const activeMap = this.mappings.find(m => m.sourceField === sf.name);
+      return activeMap && !activeMap.targetField;
+    });
+
+    if (unmappedSourcePayload.length === 0) {
+      this.mappings = [...this.mappings];
+      if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+      
+      if (heuristicMatchCount > 0) {
+        if (this.toastr) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
+        if (this.logMessages) this.logMessages.unshift(`System: Fast-pass local mapping matched ${heuristicMatchCount} fields.`);
+      } else {
+        if (this.toastr) this.toastr.info(`No matches found.`, 'Auto-Map Finished');
       }
-      heuristicMatchCount++;
-    }
-  });
-
-  // Calculate exactly what goes to the AI
-  const unmappedSourcePayload = this.sourceFields.filter(sf => {
-    const activeMap = this.mappings.find(m => m.sourceField === sf.name);
-    return activeMap && !activeMap.targetField;
-  });
-
-  if (unmappedSourcePayload.length === 0) {
-    this.mappings = [...this.mappings];
-    if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
-    if (heuristicMatchCount > 0) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
-    return;
-  }
-
-  // =========================================================
-  // PHASE 2: SYNCHRONOUS UI SETUP (Fixes NG0100 Error)
-  // =========================================================
-  // By doing this BEFORE the timeout, Angular registers the progress bar perfectly.
-  this.isAutoMapping = true; 
-  this.autoMapProgress = { current: 0, total: unmappedSourcePayload.length };
-  
-  // Turn on all the inline loading spinners visually
-  unmappedSourcePayload.forEach(field => {
-    const mappingRow = this.mappings.find(m => m.sourceField === field.name);
-    if (mappingRow) mappingRow._isAiProcessing = true;
-  });
-
-  // Force Angular to render the setup
-  this.mappings = [...this.mappings];
-  if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
-
-  // =========================================================
-  // PHASE 3: ASYNC AI CHUNKING
-  // =========================================================
-  const CHUNK_SIZE = 10; 
-  let currentIndex = 0;
-  let aiMatchCount = 0;
-
-  const processNextChunk = () => {
-    if (currentIndex >= unmappedSourcePayload.length) {
-      this.isAutoMapping = false;
-      const totalMapped = heuristicMatchCount + aiMatchCount;
-      this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Auto-Map Complete');
       return;
     }
 
-    const currentChunk = unmappedSourcePayload.slice(currentIndex, currentIndex + CHUNK_SIZE);
+    // =========================================================
+    // PHASE 2 & 3: UI SETUP AND AI FETCH (DEFERRED)
+    // =========================================================
+    setTimeout(() => {
+      this.isAutoMapping = true; 
+      this.autoMapProgress = { current: 0, total: unmappedSourcePayload.length };
+      
+      // Turn on inline spinners
+      unmappedSourcePayload.forEach(field => {
+        const mappingRow = this.mappings.find(m => m.sourceField === field.name);
+        if (mappingRow) mappingRow._isAiProcessing = true;
+      });
 
-    this.mappingApi.getAiAutoMapping(currentChunk, this.targetFields)
-      .subscribe({
-        next: (response: any) => {
-          if (response && response.mappings) {
-            response.mappings.forEach((backendMap: any) => {
-              const localRow = this.mappings.find(m => m.sourceField === backendMap.sourceField);
-              if (localRow) {
-                if (!localRow.targetField && backendMap.targetField) {
+      this.mappings = [...this.mappings];
+
+      const CHUNK_SIZE = 10; 
+      let currentIndex = 0;
+      let aiMatchCount = 0;
+
+      const processNextChunk = () => {
+        if (currentIndex >= unmappedSourcePayload.length) {
+          this.isAutoMapping = false;
+          const totalMapped = heuristicMatchCount + aiMatchCount;
+          
+          if (totalMapped > 0) {
+              if (this.toastr) this.toastr.success(`Successfully mapped ${totalMapped} fields! (${heuristicMatchCount} Rule-based, ${aiMatchCount} AI-based)`, 'Hybrid Auto-Map Complete');
+              if (this.logMessages) this.logMessages.unshift(`System: Hybrid Auto-mapping complete. ${heuristicMatchCount} rule matches, ${aiMatchCount} AI semantic matches.`);
+          } else {
+              if (this.toastr) this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
+          }
+          
+          this.mappings = [...this.mappings];
+          if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+          return;
+        }
+
+        const currentChunk = unmappedSourcePayload.slice(currentIndex, currentIndex + CHUNK_SIZE);
+
+        this.mappingApi.getAiAutoMapping(currentChunk, this.targetFields).subscribe({
+          next: (response: any) => {
+            if (response && Array.isArray(response.mappings)) {
+              response.mappings.forEach((backendMap: any) => {
+                const localRow = this.mappings.find(m => m.sourceField === backendMap.sourceField);
+                
+                if (localRow && !localRow.targetField && backendMap.targetField) {
                   localRow.targetField = backendMap.targetField;
-                  if (this.isReferenceField(backendMap.targetField)) {
+                  
+                  if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
                     localRow.relationalExtIdField = 'Id';
                   }
                   aiMatchCount++;
                 }
-                localRow._isAiProcessing = false; // Turn off spinner for completed fields
-              }
+              });
+            }
+            
+            // Fallback cleanup: Turn off spinners for this chunk
+            currentChunk.forEach(field => {
+              const mappingRow = this.mappings.find(m => m.sourceField === field.name);
+              if (mappingRow) mappingRow._isAiProcessing = false;
             });
-          } else {
-             // Fallback: Ensure spinners turn off even if no response mapping is returned
-             currentChunk.forEach(field => {
-               const mappingRow = this.mappings.find(m => m.sourceField === field.name);
-               if (mappingRow) mappingRow._isAiProcessing = false;
-             });
+
+            this.autoMapProgress.current += currentChunk.length;
+            this.mappings = [...this.mappings];
+            if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+
+            currentIndex += CHUNK_SIZE;
+            processNextChunk(); 
+          },
+          error: (error: any) => {
+            console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
+            this.isAutoMapping = false;
+            
+            this.mappings.forEach(m => m._isAiProcessing = false);
+            this.mappings = [...this.mappings]; 
+
+            if (this.toastr) {
+              if (error.status === 404) {
+                this.toastr.error('Backend endpoint not found (404).', 'Connection Error');
+              } else {
+                this.toastr.warning('The AI connection was interrupted. Partial mappings saved.', 'Incomplete');
+              }
+            }
           }
+        });
+      };
 
-          // Advance progress bar
-          this.autoMapProgress.current += currentChunk.length;
-
-          // Force UI repaint
-          this.mappings = [...this.mappings];
-          if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
-
-          currentIndex += CHUNK_SIZE;
-          
-          // Let the UI breathe for 50ms before firing the next batch request
-          setTimeout(() => processNextChunk(), 50); 
-        },
-        error: (error: any) => {
-          console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
-          this.isAutoMapping = false;
-          
-          // Shut off all remaining spinners so the screen isn't frozen
-          this.mappings.forEach(m => m._isAiProcessing = false);
-          this.mappings = [...this.mappings]; 
-
-          if (error.status === 404) {
-            this.toastr.error('Backend endpoint not found (404). Please verify your Python FastAPI server is running.', 'Connection Error');
-          } else {
-            this.toastr.warning('The AI connection was interrupted. Partial mappings saved.', 'Incomplete');
-          }
-        }
-      });
-  };
-
-  // Start the first chunk fetch AFTER the synchronous UI renders
-  setTimeout(() => processNextChunk(), 50);
-}
+      processNextChunk();
+    });
+  }
 
   updateMappedCount() {
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
