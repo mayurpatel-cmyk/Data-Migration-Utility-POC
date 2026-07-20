@@ -1303,9 +1303,14 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
     this.updateMappedCount();
   }
 
-  autoMap(): void {
+ autoMap(): void {
     // Prevent duplicate double-clicks
     if (this.isAutoMapping || this.isLoading) return; 
+    
+    // Set loading state
+    this.isAutoMapping = true;
+
+    // REMOVED: The lines that forced the review panel to open immediately have been deleted.
 
     let heuristicMatchCount = 0;
     const restrictedTargetFields = [
@@ -1391,9 +1396,16 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
       this.mappings = [...this.mappings];
       if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
       
+      this.isAutoMapping = false; 
+
       if (heuristicMatchCount > 0) {
         if (this.toastr) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
         if (this.logMessages) this.logMessages.unshift(`System: Fast-pass local mapping matched ${heuristicMatchCount} fields.`);
+        
+        // Opens review panel ONLY when fast-mapping is complete
+        this.showReviewPanel = true;
+        this.reviewPanelMinimized = false;
+        this.reviewFilter = 'mapped';
       } else {
         if (this.toastr) this.toastr.info(`No matches found.`, 'Auto-Map Finished');
       }
@@ -1430,20 +1442,18 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
                 if (this.toastr) this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Hybrid Auto-Map Complete');
                 if (this.logMessages) this.logMessages.unshift(`System: Hybrid Auto-mapping complete.`);
                 
-                // NEW: Open the Review Panel!
-                this.showReviewPanel = true;
-                this.reviewPanelMinimized = false;
+                // Switch to mapped tab to show results
                 this.reviewFilter = 'mapped'; 
-                
             } else {
                 if (this.toastr) this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
-                
-                // NEW: Open the Review Panel directly to the Unmapped tab
-                this.showReviewPanel = true;
-                this.reviewPanelMinimized = false;
+                // Switch to unmapped tab to show what failed
                 this.reviewFilter = 'unmapped';
             }
             
+            // Opens review panel ONLY when AI is completely finished
+            this.showReviewPanel = true;
+            this.reviewPanelMinimized = false;
+
             this.mappings = [...this.mappings];
             if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
           }, 600);
@@ -1504,7 +1514,7 @@ readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter
 
       processNextChunk();
     });
-  }
+}
 
   updateMappedCount() {
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;

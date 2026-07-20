@@ -643,7 +643,12 @@
                   } @else {
                     <div class="position-relative" (click)="$event.stopPropagation()">
                       <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
-                           [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                           [ngClass]="{
+       'bg-danger-subtle border-danger text-danger': isTypeMismatch(mapping),
+       'bg-success-subtle border-success text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'rule',
+       'bg-info-subtle border-info text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'ai',
+       'bg-white border-info': !isTypeMismatch(mapping) && !mapping._mappedBy
+     }"
                            (click)="toggleDropdown(mapping, $event)">
                         
                         <div class="d-flex align-items-center gap-2 text-truncate">
@@ -1115,7 +1120,12 @@
                   <td class="px-3 py-2 w-50">
                     <div class="position-relative" (click)="$event.stopPropagation()">
                       <div class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center" 
-                           [ngClass]="isTypeMismatch(mapping) ? 'bg-danger-subtle border-danger text-danger' : 'bg-white'"
+                           [ngClass]="{
+       'bg-danger-subtle border-danger text-danger': isTypeMismatch(mapping),
+       'bg-success-subtle border-success text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'rule',
+       'bg-info-subtle border-info text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'ai',
+       'bg-white border-info': !isTypeMismatch(mapping) && !mapping._mappedBy
+     }"
                            (click)="toggleDropdown(mapping, $event)">
                         
                         <div class="d-flex align-items-center gap-2 text-truncate">

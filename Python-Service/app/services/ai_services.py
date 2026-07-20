@@ -55,21 +55,25 @@ class LocalAiService:
         if not source_fields or not target_fields:
             return {"mappings": []}
 
-        # 1. Clean up text perfectly (Do NOT include the data type in the text, it confuses the AI)
+        # 1. Clean up text perfectly (Strip CRM noise and normalize)
         def prep_text(name):
             if not name: return ""
-            s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', name)
-            return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower()
+            # Remove common CRM custom field suffixes to prevent AI confusion
+            clean_name = name.replace('__c', '').replace('__r', '')
+            # Split CamelCase and normalize
+            s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', clean_name)
+            return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower().strip()
 
         src_texts = [prep_text(f.get("name", "")) for f in source_fields]
+        tgt_texts = [prep_text(f.get("name", "")) for f in target_fields] # Pre-compute for exact string matching
         
         # 2. Check Cache for Targets to save network time
         tgt_texts_to_fetch = []
         tgt_indices_to_fetch = []
         tgt_vectors = [None] * len(target_fields)
 
-        for i, f in enumerate(target_fields):
-            cache_key = prep_text(f.get("name", ""))
+        for i, text in enumerate(tgt_texts):
+            cache_key = text
             if cache_key in _TARGET_CACHE:
                 tgt_vectors[i] = _TARGET_CACHE[cache_key]
             else:
@@ -110,7 +114,7 @@ class LocalAiService:
                 tgt_type = tgt_field.get("type", "string").lower()
 
                 # STRICT TYPE ENFORCEMENT: Group checking
-                is_exact = src_type == tgt_type
+                is_exact_type = src_type == tgt_type
                 is_forgiving = (
                     (src_type in text_types and tgt_type in text_types) or
                     (src_type in numeric_types and tgt_type in numeric_types) or
@@ -118,26 +122,31 @@ class LocalAiService:
                     (src_type in bool_types and tgt_type in bool_types)
                 )
 
-                # Skip completely if types are fundamentally incompatible (e.g., date to boolean)
-                if not (is_exact or is_forgiving):
+                # Skip completely if types are fundamentally incompatible
+                if not (is_exact_type or is_forgiving):
                     continue
 
-                # Math calculation
+                # Math calculation (Cosine Similarity)
                 similarity = LocalAiService.fast_cosine_similarity(src_vec, tgt_vec, src_mag, tgt_mags[idx_tgt])
                 
-                # THE SECRET SAUCE: Add a mathematical bonus if the data types match EXACTLY
-                if is_exact:
+                # BONUS 1: Exact Cleaned Text Match (Massive Bonus)
+                if src_texts[idx_src] == tgt_texts[idx_tgt]:
+                    similarity += 0.20
+
+                # BONUS 2: Data Type Match (Small Bonus)
+                if is_exact_type:
                     similarity += 0.05 
                 
-                # RAISED THRESHOLD: Must be > 0.75 to prevent bad guesses
-                if similarity > 0.75:
+                # STRICTER THRESHOLD: Raised from 0.75 to 0.83. 
+                # If the score is below 0.83, the AI safely skips this field to prevent bad guesses.
+                if similarity > 0.83:
                     all_potential_matches.append({
                         "sourceField": src_field.get("name"),
                         "targetField": tgt_field.get("name"),
                         "confidence": similarity
                     })
 
-        # 5. Sort matches by highest confidence first (Tie-breakers won by type exactness)
+        # 5. Sort matches by highest confidence first
         all_potential_matches.sort(key=lambda x: x["confidence"], reverse=True)
 
         for match in all_potential_matches:
