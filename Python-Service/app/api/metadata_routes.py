@@ -153,11 +153,35 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
     """
     try:
         source_fields = payload.get("sourceFields")
-        target_fields = payload.get("targetFields")
+        raw_target_fields = payload.get("targetFields")
         
-        if not source_fields or not target_fields:
+        if not source_fields or not raw_target_fields:
             raise HTTPException(status_code=400, detail="Both sourceFields and targetFields arrays are required.")
             
+        # ====================================================
+        #  FILTER OUT RESTRICTED SYSTEM FIELDS FOR THE HYBRID ENGINE
+        # ====================================================
+        restricted_targets = {
+            'id', 'hs_object_id', 'url',
+            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted',
+            'hs_createdate', 'hs_lastmodifieddate', 'createdate', 'archived',
+            'created_at', 'updated_at', 'submitter_id',
+            'created_time', 'modified_time', 'created_by', 'modified_by', '$state', '$process_flow',
+            'createdat', 'updatedat', 'updateddate', 'deleted'
+        }
+
+        # Safe Target Fields (Overwrites the raw list)
+        target_fields = [
+            t for t in raw_target_fields 
+            if t.get("name", "").lower() not in restricted_targets
+            and t.get("type", "").lower() not in ['reference', 'id']
+        ]
+        source_fields = [
+            s for s in source_fields
+            if s.get("type", "").lower() not in ['reference', 'id']
+        ]
+        # ====================================================
+
         final_mappings = []
         unmapped_source = []
         
@@ -171,8 +195,7 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
             target_tokens.append({
                 "name": t_name,
                 "tokens": tokenize_field(t_name)
-            })
-        
+            })        
        # 1. RUN FAST HEURISTIC ALIGNMENT
         for src in source_fields:
             src_name = src.get("name")

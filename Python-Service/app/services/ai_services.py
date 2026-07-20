@@ -55,17 +55,48 @@ class LocalAiService:
         if not source_fields or not target_fields:
             return {"mappings": []}
 
+        # ====================================================
+        #  FILTER OUT RESTRICTED SYSTEM FIELDS
+        # ====================================================
+        restricted_targets = {
+            # General & Primary Keys
+            'id', 'hs_object_id', 'url',
+            
+            # Salesforce
+            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted',
+            
+            # HubSpot
+            'hs_createdate', 'hs_lastmodifieddate', 'createdate', 'archived',
+            
+            # Zendesk
+            'created_at', 'updated_at', 'submitter_id',
+            
+            # Zoho
+            'created_time', 'modified_time', 'created_by', 'modified_by', '$state', '$process_flow',
+            
+            # General Fallbacks & Variations
+            'createdat', 'updatedat', 'updateddate', 'deleted'
+        }
+        
+        # Overwrite target_fields to exclude anything in the restricted list
+        target_fields = [
+            f for f in target_fields 
+            if f.get("name", "").lower() not in restricted_targets
+        ]
+
+        if not target_fields:
+            return {"mappings": []}
+        # ====================================================
+
         # 1. Clean up text perfectly (Strip CRM noise and normalize)
         def prep_text(name):
             if not name: return ""
-            # Remove common CRM custom field suffixes to prevent AI confusion
             clean_name = name.replace('__c', '').replace('__r', '')
-            # Split CamelCase and normalize
             s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', clean_name)
             return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower().strip()
 
         src_texts = [prep_text(f.get("name", "")) for f in source_fields]
-        tgt_texts = [prep_text(f.get("name", "")) for f in target_fields] # Pre-compute for exact string matching
+        tgt_texts = [prep_text(f.get("name", "")) for f in target_fields] 
         
         # 2. Check Cache for Targets to save network time
         tgt_texts_to_fetch = []
@@ -113,7 +144,7 @@ class LocalAiService:
                 tgt_field = target_fields[idx_tgt]
                 tgt_type = tgt_field.get("type", "string").lower()
 
-                # STRICT TYPE ENFORCEMENT: Group checking
+                # STRICT TYPE ENFORCEMENT
                 is_exact_type = src_type == tgt_type
                 is_forgiving = (
                     (src_type in text_types and tgt_type in text_types) or
@@ -122,23 +153,20 @@ class LocalAiService:
                     (src_type in bool_types and tgt_type in bool_types)
                 )
 
-                # Skip completely if types are fundamentally incompatible
                 if not (is_exact_type or is_forgiving):
                     continue
 
                 # Math calculation (Cosine Similarity)
                 similarity = LocalAiService.fast_cosine_similarity(src_vec, tgt_vec, src_mag, tgt_mags[idx_tgt])
                 
-                # BONUS 1: Exact Cleaned Text Match (Massive Bonus)
+                # BONUS 1: Exact Cleaned Text Match
                 if src_texts[idx_src] == tgt_texts[idx_tgt]:
                     similarity += 0.20
 
-                # BONUS 2: Data Type Match (Small Bonus)
+                # BONUS 2: Data Type Match
                 if is_exact_type:
                     similarity += 0.05 
                 
-                # STRICTER THRESHOLD: Raised from 0.75 to 0.83. 
-                # If the score is below 0.83, the AI safely skips this field to prevent bad guesses.
                 if similarity > 0.83:
                     all_potential_matches.append({
                         "sourceField": src_field.get("name"),
