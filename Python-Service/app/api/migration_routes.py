@@ -6,13 +6,16 @@ from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
 from app.services.crm_service import CrmService
 import math
+import csv
+from fpdf import FPDF
 
 # Import our Migrators!
 from app.services.migrators.salesforce_migrator import SalesforceMigrator
 from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
 from app.services.migrators.hubspot_migrator import HubspotMigrator
-from app.services.payload_builder import PayloadBuilderService
+from app.services.payload_builder import PayloadBuilderService  
+from app.services.audit_service import AuditService 
 
 import uuid
 import sqlite3
@@ -228,6 +231,22 @@ async def websocket_migration(websocket: WebSocket):
                     "record": safe_record,
                     "error": error_msg
                 })
+                #  Generate PDF, CSVs, and Save History ---
+        report_urls = {}
+        try:
+         await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
+         report_urls = AuditService.generate_and_save_reports(
+             user_id=user_id,
+             session_id=session_id or f"direct_{str(uuid.uuid4())[:8]}",
+             source_crm=source_crm,
+             target_crm=target_crm,
+             target_object=target_object,
+             auth_token=auth_token,
+             success_data=safe_success_data, # Pass the actual success data
+             error_data=formatted_errors     # Pass the actual error data
+          )
+        except Exception as e:
+            print(f"Failed to generate reports: {e}")
 
             # Send the final safe payload to the frontend
             await websocket.send_json({

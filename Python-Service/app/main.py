@@ -21,7 +21,8 @@ from app.api.validation_routes import router as validation_router
 from app.api.migration_routes import router as migration_router
 from app.api.auth_routes import router as auth_router
 from app.api.crm_routes import router as crm_router
-from app.api.metadata_routes import router as metadata_router 
+from app.api.metadata_routes import router as metadata_router
+from app.api.migration_history import router as migration_history 
 
 app = FastAPI(title="Migration Engine")
 
@@ -39,6 +40,7 @@ app.add_middleware(
 # Register our API routes
 app.include_router(metadata_router) 
 app.include_router(migration_router)
+app.include_router(migration_history)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
 app.include_router(validation_router)

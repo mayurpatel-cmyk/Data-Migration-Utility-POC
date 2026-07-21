@@ -56,6 +56,14 @@ export const NavigationItems: NavigationItem[] = [
     url: '/migration-docs',
     icon: 'ti ti-book', 
     breadcrumbs: true
-  }
+  },
+  // {
+  //   id: 'migration-history',
+  //   title: 'Migration History',
+  //   type: 'item',
+  //   url: '/migration-history',
+  //   icon: 'ti ti-history', 
+  //   breadcrumbs: true
+  // }
 
 ];

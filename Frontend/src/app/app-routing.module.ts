@@ -45,6 +45,10 @@ export const routes: Routes = [
       {
         path: 'migration-docs',
         loadComponent: () => import('./demo/dashboard/migration-docs/migration-docs.component').then((c) => c.MigrationDocsComponent)
+      },
+      {
+        path: 'migration-history',
+        loadComponent: () => import('./demo/dashboard/Migration-history/migration-history.component').then((c) => c.MigrationHistoryComponent)
       }
     ]
   },

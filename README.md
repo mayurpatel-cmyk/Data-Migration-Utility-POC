@@ -41,7 +41,7 @@ docker build -t test-backend .
 docker run -p 3000:3000 test-backend
 
 ## ollama
-ollama pull nomic-embed-text
+ollama pull mxbai-embed-large
 
 1. To build and start everything at once:-  docker-compose up --build
 2. To run them in the background:- docker-compose up -d --build

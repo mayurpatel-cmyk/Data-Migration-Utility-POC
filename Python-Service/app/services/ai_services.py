@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from typing import Dict, List, Any
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
-EMBEDDING_MODEL = "nomic-embed-text" 
+EMBEDDING_MODEL = "mxbai-embed-large" 
 
 # In-memory cache to prevent re-embedding the same target fields
 _TARGET_CACHE: Dict[str, List[float]] = {}

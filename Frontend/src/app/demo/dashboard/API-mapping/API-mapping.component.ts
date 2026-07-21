@@ -1533,7 +1533,7 @@ hasActiveTypeMismatches(): boolean {
 
       this.mappings = [...this.mappings];
 
-      const CHUNK_SIZE = 30;
+      const CHUNK_SIZE = 50;
       let currentIndex = 0;
       let aiMatchCount = 0;
 
