@@ -1,9 +1,15 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.services.auth_service import AuthService
+from app.api.dependencies.auth import get_current_user 
+
 
 router = APIRouter()
 
+
+# Add this Pydantic model near your other payloads
+class UpdateEmailPayload(BaseModel):
+    new_email: str
 # 1. Separate Payloads for better validation
 class LoginPayload(BaseModel):
     email: str
@@ -59,4 +65,12 @@ def forgot_password(payload: ForgotPasswordPayload):
     return {
         "success": True, 
         "message": "If that email exists, a reset link has been sent."
+    }
+
+@router.put("/update-email")
+def update_email(payload: UpdateEmailPayload, current_user = Depends(get_current_user)):
+    AuthService.update_email(payload.new_email)
+    return {
+        "success": True, 
+        "message": "Check your new email address for a confirmation link."
     }

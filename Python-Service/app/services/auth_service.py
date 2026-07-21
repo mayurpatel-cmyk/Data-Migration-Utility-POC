@@ -61,3 +61,15 @@ class AuthService:
             return True
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @staticmethod
+    def update_email(new_email: str):
+        try:
+            # Supabase requires the user to verify the new email. 
+            # It will send a confirmation link to the NEW email address.
+            response = supabase.auth.update_user({
+                "email": new_email
+            })
+            return response.user
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))

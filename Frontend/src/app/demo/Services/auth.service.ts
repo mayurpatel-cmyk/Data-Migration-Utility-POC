@@ -1,5 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient ,HttpHeaders} from '@angular/common/http';
 import { Observable, tap } from 'rxjs';
 import { Router } from '@angular/router';
 
@@ -33,6 +33,7 @@ export class AuthService {
           // Store both tokens securely
           localStorage.setItem('supabase_token', res.token);
           localStorage.setItem('supabase_refresh', res.refresh_token);
+          localStorage.setItem('supabase_user', JSON.stringify(res.user));
           this.currentUser.set(res.token);
         }
       })
@@ -54,6 +55,16 @@ export class AuthService {
           this.currentUser.set(res.token);
         }
       })
+    );
+  }
+
+  updateEmail(newEmail: string) {
+    const token = localStorage.getItem('supabase_token');
+    const headers = new HttpHeaders().set('Authorization', `Bearer ${token}`);
+
+    return this.http.put('http://localhost:8000/update-email', 
+      { new_email: newEmail },
+      { headers }
     );
   }
 
