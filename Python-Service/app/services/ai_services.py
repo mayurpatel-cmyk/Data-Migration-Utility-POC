@@ -10,6 +10,51 @@ EMBEDDING_MODEL = "mxbai-embed-large"
 # In-memory cache to prevent re-embedding the same target fields
 _TARGET_CACHE: Dict[str, List[float]] = {}
 
+# ====================================================
+# GLOBAL CRM SYNONYM
+# ====================================================
+CRM_FIELD_CONTEXT = {
+    # --- Names & Identity ---
+    "firstname": "first given name",
+    "fname": "first given name",
+    "lastname": "last family surname name",
+    "lname": "last family surname name",
+    "fullname": "full complete name",
+    "company": "account company organization name",
+    "accountname": "account company organization name",
+    "title": "job title position role designation",
+    
+    # --- Contact Info ---
+    "email": "email address electronic mail",
+    "phone": "phone telephone mobile cell number",
+    "mobile": "phone telephone mobile cell number",
+    "fax": "fax facsimile number",
+    "website": "website url domain link",
+    
+    # --- Addresses ---
+    "billingstreet": "billing street address line 1 location",
+    "billingcity": "billing city municipality",
+    "billingstate": "billing state province region",
+    "billingpostalcode": "billing postal zip code",
+    "billingcountry": "billing country nation",
+    "shippingstreet": "shipping delivery street address line 1",
+    
+    # --- Sales & Deals (Opportunities) ---
+    "amount": "amount deal value revenue price",
+    "stagename": "stage status phase pipeline",
+    "dealstage": "stage status phase pipeline",
+    "closedate": "close date expected timeline",
+    "probability": "probability chance likelihood percent",
+    "leadsource": "lead source origin channel",
+    
+    # --- Support & Tickets (Cases) ---
+    "subject": "subject title issue summary",
+    "description": "description details notes context",
+    "priority": "priority urgency severity level",
+    "status": "status state condition phase"
+}
+
+
 class LocalAiService:
     @staticmethod
     def _precompute_magnitude(vector: List[float]) -> float:
@@ -49,7 +94,51 @@ class LocalAiService:
                 
             except httpx.RequestError:
                 raise HTTPException(status_code=503, detail="Cannot reach Ollama embedding service.")
-            
+
+    @staticmethod
+    def prep_text(field: Dict[str, Any]) -> str:
+        """
+        Enriches raw field metadata with taxonomy synonyms, labels, 
+        and descriptions to produce high-accuracy AI vectors.
+        """
+        if not isinstance(field, dict):
+            return ""
+
+        raw_name = field.get("name", "")
+        label = field.get("label", "")
+        desc = field.get("description", "")
+
+        if not raw_name and not label:
+            return ""
+
+        # Step A: Clean standard CRM noise (__c, __r, camelCase, underscores)
+        clean_name = raw_name.replace('__c', '').replace('__r', '')
+        s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', clean_name)
+        base_string = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower().strip()
+
+        # Step B: Check Synonym Taxonomy cheat sheet
+        condensed_key = base_string.replace(' ', '')
+        taxonomy_expansion = CRM_FIELD_CONTEXT.get(condensed_key, "")
+
+        parts = []
+        if taxonomy_expansion:
+            parts.append(taxonomy_expansion)
+        else:
+            if base_string:
+                parts.append(base_string)
+            # Include human label if different from field name
+            if label:
+                clean_label = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', label).replace('_', ' ').lower().strip()
+                if clean_label != base_string:
+                    parts.append(clean_label)
+
+        # Include description context if available (truncated for vector efficiency)
+        if desc:
+            clean_desc = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(desc)).lower().strip()[:80]
+            parts.append(clean_desc)
+
+        return " ".join(parts).strip()
+
     @staticmethod
     async def generate_mapping(source_fields: List[Dict[str, Any]], target_fields: List[Dict[str, Any]]) -> dict:
         if not source_fields or not target_fields:
@@ -78,7 +167,7 @@ class LocalAiService:
             'createdat', 'updatedat', 'updateddate', 'deleted'
         }
         
-        # Overwrite target_fields to exclude anything in the restricted list
+        # Exclude system fields from target selection
         target_fields = [
             f for f in target_fields 
             if f.get("name", "").lower() not in restricted_targets
@@ -88,17 +177,11 @@ class LocalAiService:
             return {"mappings": []}
         # ====================================================
 
-        # 1. Clean up text perfectly (Strip CRM noise and normalize)
-        def prep_text(name):
-            if not name: return ""
-            clean_name = name.replace('__c', '').replace('__r', '')
-            s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', clean_name)
-            return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower().strip()
-
-        src_texts = [prep_text(f.get("name", "")) for f in source_fields]
-        tgt_texts = [prep_text(f.get("name", "")) for f in target_fields] 
+        # 1. Clean and enrich text for source and target fields
+        src_texts = [LocalAiService.prep_text(f) for f in source_fields]
+        tgt_texts = [LocalAiService.prep_text(f) for f in target_fields] 
         
-        # 2. Check Cache for Targets to save network time
+        # 2. Check Cache for Target Vectors to avoid redundant API calls
         tgt_texts_to_fetch = []
         tgt_indices_to_fetch = []
         tgt_vectors = [None] * len(target_fields)
@@ -111,7 +194,7 @@ class LocalAiService:
                 tgt_texts_to_fetch.append(cache_key)
                 tgt_indices_to_fetch.append(i)
 
-        # 3. Fetch Embeddings
+        # 3. Fetch Embeddings from Ollama
         src_vectors = await LocalAiService.get_embeddings(src_texts)
         
         if tgt_texts_to_fetch:
@@ -120,7 +203,7 @@ class LocalAiService:
                 tgt_vectors[idx] = vec
                 _TARGET_CACHE[text] = vec 
 
-        # Pre-compute magnitudes
+        # Pre-compute magnitudes for high-speed mathematical loops
         src_mags = [LocalAiService._precompute_magnitude(v) for v in src_vectors]
         tgt_mags = [LocalAiService._precompute_magnitude(v) for v in tgt_vectors]
 
@@ -134,7 +217,7 @@ class LocalAiService:
         date_types = {'date', 'datetime', 'timestamp'}
         bool_types = {'boolean', 'checkbox'}
 
-        # 4. Score all combinations
+        # 4. Score all field combinations
         for idx_src, src_vec in enumerate(src_vectors):
             src_field = source_fields[idx_src]
             src_type = src_field.get("type", "string").lower()
@@ -163,7 +246,7 @@ class LocalAiService:
                 if src_texts[idx_src] == tgt_texts[idx_tgt]:
                     similarity += 0.20
 
-                # BONUS 2: Data Type Match
+                # BONUS 2: Exact Data Type Match
                 if is_exact_type:
                     similarity += 0.05 
                 
@@ -174,7 +257,7 @@ class LocalAiService:
                         "confidence": similarity
                     })
 
-        # 5. Sort matches by highest confidence first
+        # 5. Collision Prevention: Sort matches by highest confidence first
         all_potential_matches.sort(key=lambda x: x["confidence"], reverse=True)
 
         for match in all_potential_matches:
