@@ -30,11 +30,14 @@ class ZohoValidator:
             valid_mask &= ~is_duplicate
 
         for mapping in mappings:
-            csv_col = mapping.get('csvField')
-            target_field = mapping.get('sfField', mapping.get('targetField')) # Safely handle both mapping schemas
+            csv_col = mapping.get('sourceField') or mapping.get('csvField')
+            target_field = mapping.get('targetField') or mapping.get('sfField')
             
-            if not target_field or csv_col not in df.columns or mapping.get('skipValidation'):
+            if not target_field or not csv_col or mapping.get('skipValidation'):
                 continue
+
+            if csv_col not in df.columns:
+                df[csv_col] = None
              
             df[csv_col] = df[csv_col].astype(object)
             field_rules = zoho_rules.get(target_field, {})
@@ -44,7 +47,7 @@ class ZohoValidator:
             is_empty = df[csv_col].isna() | (str_col == '') | (str_col == '<na>') | (str_col == 'nat') | (str_col == 'none')
 
             # --- REQUIRED CHECK ---
-            is_required = field_rules.get('required', mapping.get('isRequired', False))
+            is_required = field_rules.get('required', mapping.get('isRequired', mapping.get('required', False)))
             if is_required:
                 df.loc[is_empty, '_errors'] += f"[{csv_col}: Field is strictly required in Zoho CRM but is empty.] "
                 valid_mask &= ~is_empty

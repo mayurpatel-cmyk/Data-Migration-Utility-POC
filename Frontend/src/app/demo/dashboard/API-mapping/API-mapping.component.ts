@@ -125,6 +125,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   isPreviewLoading = false;
   sourceFields: FieldMeta[] = [];
   successData: any[] = [];
+  isQueueMinimized: boolean = false;
   errorData: any[] = [];
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
   validationResults: any = null;
@@ -141,6 +142,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   operationMode: string = 'insert';
   batchSize: number = 5000;
+  migrationQueue: any[] = [];
 
   recentQueries: string[] = [];
   // --- MONACO EDITOR CONFIGURATION ---
@@ -721,6 +723,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   selectField(mapping: any, fieldName: string) {
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
+    if (!fieldName || fieldName === '') {
+      mapping._mappedBy = null;
+    }
     delete mapping._mappedBy;
 
     if (this.isReferenceField(fieldName)) {
@@ -732,11 +737,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.updateMappedCount();
   }
 
-hasActiveTypeMismatches(): boolean {
-  return this.mappings.some(mapping => 
-    mapping.targetField && this.isTypeMismatch(mapping)
-  );
-}
+  hasActiveTypeMismatches(): boolean {
+    return this.mappings.some((mapping) => mapping.targetField && this.isTypeMismatch(mapping));
+  }
 
   getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
     let filtered = this.targetFields;
@@ -1364,7 +1367,9 @@ hasActiveTypeMismatches(): boolean {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
+    mapping._mappedBy = null;
     mapping.relationalExtIdField = '';
+    this.mappedCount = this.mappings.filter((m) => m.targetField).length;
     delete mapping._mappedBy;
     delete mapping._mappedBy;
     this.updateMappedCount();
@@ -1372,6 +1377,7 @@ hasActiveTypeMismatches(): boolean {
 
   resetAllMappings() {
     this.mappings.forEach((m) => (m.targetField = ''));
+
     this.updateMappedCount();
   }
 
@@ -1381,8 +1387,6 @@ hasActiveTypeMismatches(): boolean {
 
     // Set loading state
     this.isAutoMapping = true;
-
-    // REMOVED: The lines that forced the review panel to open immediately have been deleted.
 
     let heuristicMatchCount = 0;
     const restrictedTargetFields = [
@@ -1500,6 +1504,7 @@ hasActiveTypeMismatches(): boolean {
 
     if (unmappedSourcePayload.length === 0) {
       this.mappings = [...this.mappings];
+      this.cdr.detectChanges();
       if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
 
       this.isAutoMapping = false;
@@ -1594,6 +1599,8 @@ hasActiveTypeMismatches(): boolean {
 
             this.autoMapProgress.current += currentChunk.length;
             this.mappings = [...this.mappings];
+            this.cdr.detectChanges();
+
             if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
 
             currentIndex += CHUNK_SIZE;
@@ -1605,6 +1612,7 @@ hasActiveTypeMismatches(): boolean {
 
             this.mappings.forEach((m) => (m._isAiProcessing = false));
             this.mappings = [...this.mappings];
+            this.cdr.detectChanges();
 
             if (this.toastr) {
               if (error.status === 404) {
@@ -1668,13 +1676,20 @@ hasActiveTypeMismatches(): boolean {
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
+    // --- CRITICAL FIX: Add sourceField, targetField, and isRequired so the backend can enforce it ---
     const activeMappings = this.mappings
       .filter((m) => m.targetField)
-      .map((m) => ({
-        csvField: m.sourceField,
-        sfField: m.targetField,
-        type: this.targetFields.find((t) => t.name === m.targetField)?.type || 'string'
-      }));
+      .map((m) => {
+        const targetMeta = this.targetFields.find((t) => t.name === m.targetField);
+        return {
+          csvField: m.sourceField,
+          sfField: m.targetField,
+          sourceField: m.sourceField,
+          targetField: m.targetField,
+          type: targetMeta?.type || 'string',
+          isRequired: targetMeta?.isRequired || targetMeta?.required || false
+        };
+      });
 
     const sfRules: any = {};
     this.targetFields.forEach((field) => {

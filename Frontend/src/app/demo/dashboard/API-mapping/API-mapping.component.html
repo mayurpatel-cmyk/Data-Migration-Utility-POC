@@ -306,6 +306,33 @@
     flex-grow: 1;
     background-color: #f8f9fa;
   }
+
+  /* Floating Queue Manager */
+  .floating-queue-panel {
+    position: fixed;
+    bottom: 25px;
+    left: 25px;
+    width: 320px;
+    background-color: #ffffff;
+    border-radius: 0.5rem;
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.25);
+    z-index: 1100;
+    border: 1px solid #ffc107;
+    /* Matches your warning-subtle theme */
+    transition: all 0.3s ease;
+    overflow: hidden;
+  }
+
+  .floating-queue-panel.minimized {
+    width: auto;
+    min-width: 220px;
+    cursor: pointer;
+  }
+
+  .floating-queue-panel.minimized:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  }
 </style>
 
 @if (isGlobalLoading) {
@@ -426,6 +453,8 @@
   </div>
 </div>
 }
+
+
 
 @if (selectedSourceObject && selectedTargetObject) {
 <div class="row g-3 mb-3 animate__animated animate__fadeIn">
@@ -650,7 +679,7 @@
         <!-- MAPPING LEGEND -->
         <div class="d-flex align-items-center gap-3 mb-2 px-2 animate__animated animate__fadeIn flex-shrink-0">
           <span class="small fw-bold text-dark me-2"><i class="feather icon-help-circle"></i>Mapping Color Key:</span>
-          
+
           <div class="d-flex align-items-center gap-1">
             <span class="badge bg-success text-white shadow-sm" style="font-size: 0.65rem;">Rule</span>
             <span class="small text-dark fw-medium" style="font-size: 0.75rem;">Auto Map</span>
@@ -784,6 +813,8 @@
                         </span>
 
                         <!-- NEW: Origin Tags -->
+                        @if (mapping.targetField) {
+                        <!-- NEW: Origin Tags -->
                         @if (mapping._mappedBy === 'rule') {
                         <span
                           class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1"
@@ -803,6 +834,7 @@
                           title="These data types cannot be safely migrated without conversion.">
                           <i class="feather icon-alert-triangle"></i> Invalid Cast
                         </span>
+                        }
                         }
                       </div>
 
@@ -903,14 +935,7 @@
               <i class="feather icon-trash-2 fs-5"></i> Clear All
             </button>
 
-            <!-- Dynamic Status Indicator on Right Side -->
-            <div class="ms-auto">
-              <!-- @if (isAutoMapping) {
-                <span class="badge bg-info-subtle text-info-emphasis px-3 py-2 animate__animated animate__pulse animate__infinite border border-info-subtle d-flex align-items-center gap-2" style="font-size: 0.8rem;">
-                  <span class="spinner-border spinner-border-sm" style="border-width: 0.15em;"></span>
-                  Processing AI Match...
-                </span>
-              } -->
+            <div class="ms-auto d-flex align-items-center gap-3">
               <!-- NEW: On-Demand Review Button -->
               <button
                 class="btn btn-light border-info text-info shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
@@ -918,6 +943,14 @@
                 [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
                 <i class="feather icon-eye fs-5"></i> Open Review
               </button>
+
+              <!-- <button
+                class="btn btn-warning shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
+                (click)="addJobToQueue()"
+                [disabled]="mappings.length === 0 || isAutoMapping || getMissingRequiredFields().length > 0"
+                title="Queue this mapping and prepare the next object">
+                <i class="feather icon-layers fs-5"></i> Add to Queue
+              </button> -->
             </div>
           </div>
         </div>
@@ -1178,30 +1211,41 @@
               </span>
             </span>
             <div class="d-flex gap-2">
-              @if (successData.length > 0) {
+
+              <!-- FIX 1: Add Safe Navigation (?.) to prevent length errors on undefined data -->
+              @if (successData?.length > 0) {
               <button class="btn btn-xs btn-outline-success d-flex align-items-center gap-1 btn-hover-lift"
                 style="font-size: 0.7rem; padding: 2px 8px;"
                 (click)="downloadCSV(successData, 'migration_success_log.csv')">
                 <i class="feather icon-download"></i> Success ({{ successData.length }})
               </button>
               }
-              @if (errorData.length > 0) {
+
+              @if (errorData?.length > 0) {
               <button class="btn btn-xs btn-outline-danger d-flex align-items-center gap-1 btn-hover-lift"
                 style="font-size: 0.7rem; padding: 2px 8px;"
                 (click)="downloadCSV(errorData, 'migration_error_log.csv')">
                 <i class="feather icon-alert-triangle"></i> Errors ({{ errorData.length }})
               </button>
               }
-              <span class="small text-muted ms-2"><span class="badge bg-secondary">{{ logMessages.length }}</span>
+              <span class="small text-muted ms-2"><span class="badge bg-secondary">{{ logMessages?.length || 0 }}</span>
                 logs</span>
             </div>
           </div>
+
           <div class="bg-light border rounded p-3 font-monospace small text-dark flex-grow-1 overflow-auto shadow-inner"
             style="font-size: 0.8rem; min-height: 200px; box-shadow: inset 0 2px 4px rgba(0,0,0,.05);">
-            <div *ngIf="logMessages.length === 0" class="text-center mt-4 text-muted">
+
+            <!-- FIX 2: Convert legacy *ngIf to the new @if syntax -->
+            @if (!logMessages || logMessages.length === 0) {
+            <div class="text-center mt-4 text-muted">
               Awaiting job execution...
             </div>
-            <div *ngFor="let log of logMessages" class="mb-1" [ngClass]="{
+            }
+
+            <!-- FIX 3: Convert legacy *ngFor to the new @for syntax -->
+            @for (log of logMessages; track $index) {
+            <div class="mb-1" [ngClass]="{
                    'text-danger fw-bold': log.toLowerCase().includes('error') || log.toLowerCase().includes('fail'),
                    'text-success': log.toLowerCase().includes('success') || log.toLowerCase().includes('passed'),
                    'text-muted': !log.toLowerCase().includes('error') && !log.toLowerCase().includes('success')
@@ -1210,6 +1254,7 @@
                 [ngClass]="log.toLowerCase().includes('error') ? 'text-danger' : 'text-primary'">&gt;</span>
               {{ log }}
             </div>
+            }
           </div>
         </div>
       </div>
@@ -1313,6 +1358,7 @@
                     {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
                   </span>
 
+                  @if (mapping.targetField) {
                   @if (mapping._mappedBy === 'rule') {
                   <span
                     class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1"
@@ -1324,6 +1370,7 @@
                     style="font-size: 0.6rem; background-color: #e0f2fe;">
                     <i class="feather icon-cpu"></i> AI
                   </span>
+                  }
                   }
                 </div>
               </div>

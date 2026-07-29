@@ -232,29 +232,33 @@ async def websocket_migration(websocket: WebSocket):
                     "error": error_msg
                 })
                 #  Generate PDF, CSVs, and Save History ---
+        # Generate PDF, CSVs, and Save History ---
         report_urls = {}
         try:
-         await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
-         report_urls = AuditService.generate_and_save_reports(
-             user_id=user_id,
-             session_id=session_id or f"direct_{str(uuid.uuid4())[:8]}",
-             source_crm=source_crm,
-             target_crm=target_crm,
-             target_object=target_object,
-             auth_token=auth_token,
-             success_data=safe_success_data, # Pass the actual success data
-             error_data=formatted_errors     # Pass the actual error data
-          )
+            await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
+            report_urls = AuditService.generate_and_save_reports(
+                user_id=user_id,
+                session_id=session_id or f"direct_{str(uuid.uuid4())[:8]}",
+                source_crm=source_crm,
+                target_crm=target_crm,
+                target_object=target_object,
+                auth_token=auth_token,
+                success_data=safe_success_data, 
+                error_data=formatted_errors     
+            )
         except Exception as e:
             print(f"Failed to generate reports: {e}")
+            report_urls = {} # Fallback to empty if it fails
 
-            # Send the final safe payload to the frontend
-            await websocket.send_json({
-                "status": "Finished",
-                "log": f"Migration completed! {len(safe_success_data)} records successful, {len(formatted_errors)} failed.",
-                "successData": safe_success_data,
-                "errorData": formatted_errors
-            })
+        
+        await websocket.send_json({
+            "status": "Finished",
+            "log": f"Migration completed! {len(safe_success_data)} records successful, {len(formatted_errors)} failed.",
+            "successData": safe_success_data,
+            "errorData": formatted_errors,
+            "reportUrls": report_urls  # Send the PDF URLs back to the frontend
+        })
+        
         await websocket.close()
         
     except WebSocketDisconnect:
