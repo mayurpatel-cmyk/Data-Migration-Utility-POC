@@ -1375,16 +1375,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
-    mapping._mappedBy = null;
     mapping.relationalExtIdField = '';
-    this.mappedCount = this.mappings.filter((m) => m.targetField).length;
-    delete mapping._mappedBy;
     delete mapping._mappedBy;
     this.updateMappedCount();
   }
 
   resetAllMappings() {
-    this.mappings.forEach((m) => (m.targetField = ''));
+    this.mappings.forEach((m) => {
+      m.targetField = '';
+      m.relationalExtIdField = '';
+      delete m._mappedBy;
+    });
 
     this.updateMappedCount();
   }
@@ -1429,6 +1430,15 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     // =========================================================
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
+    // Track every target field that is already claimed (either mapped
+    // manually before Auto Map was clicked, or claimed earlier in this
+    // same loop) so the same target can never be assigned to two
+    // different source fields. Without this, two source fields can
+    // independently score highest against the same target and both get
+    // mapped to it, which inflates the "mapped" count without actually
+    // producing that many usable mappings.
+    const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
+
     this.mappings.forEach((m) => {
       if (m.targetField) return;
 
@@ -1451,6 +1461,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
         if (restrictedTargetFields.includes(tgtApiExact)) return;
+        if (claimedTargetFields.has(t.name)) return;
 
         let score = 0;
         const tgtLabelExact = t.label.toLowerCase();
@@ -1497,6 +1508,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
       if (bestMatch) {
         m.targetField = bestMatch['name'];
+        claimedTargetFields.add(bestMatch['name']);
         if (typeof this.isReferenceField === 'function' && this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
@@ -1587,7 +1599,16 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
               response.mappings.forEach((backendMap: any) => {
                 const localRow = this.mappings.find((m) => m.sourceField === backendMap.sourceField);
 
-                if (localRow && !localRow.targetField && backendMap.targetField) {
+                // Guard against the AI suggesting a target field that has
+                // already been claimed by another row (via the rule pass,
+                // a previous AI chunk, or a manual selection). Applying it
+                // anyway would silently overwrite/duplicate a mapping and
+                // throw off the mapped-field count shown in the UI.
+                const targetAlreadyClaimed = this.mappings.some(
+                  (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
+                );
+
+                if (localRow && !localRow.targetField && backendMap.targetField && !targetAlreadyClaimed) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -1653,6 +1674,28 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       this.toastr.error('Please fix your query criteria before validating.', 'Query Error');
       // Scroll to the top so the user sees the red query box
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.externalIdField) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(
+        `Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`,
+        'External ID Required'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
+      !this.mappings.some((m) => m.targetField === this.externalIdField)
+    ) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(
+        `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`,
+        'External ID Not Mapped'
+      );
       return;
     }
 
@@ -1988,6 +2031,28 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     if (activeMappings.length === 0) {
       this.jobStatus = 'Failed';
       this.toastr.warning('Please map at least one field before running the migration.', 'No Mappings');
+      return;
+    }
+
+    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.externalIdField) {
+      this.jobStatus = 'Failed';
+      this.toastr.error(
+        `Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`,
+        'External ID Required'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
+      !activeMappings.some((m) => m.targetField === this.externalIdField)
+    ) {
+      this.jobStatus = 'Failed';
+      this.toastr.error(
+        `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would be sent with a blank value and fail to match. Map a source field to it first.`,
+        'External ID Not Mapped'
+      );
       return;
     }
 

@@ -130,23 +130,43 @@ class HubspotMigrator:
 
         async def process_chunk(chunk):
             async with semaphore:
+                # Track which original `chunk` position each hs_record came from,
+                # since rows missing the id/dedupe value get filtered out below.
+                # Without this, HubSpot's response indices (which only count
+                # included rows) get zipped against the full chunk further down,
+                # silently misattributing success/error results to the wrong rows.
+                hs_records = []
+                included_indices = []
+
                 if op_mode == "update":
-                    hs_records = [{"id": c["targetRecord"].pop("id"), "properties": c["targetRecord"]} for c in chunk if "id" in c["targetRecord"]]
+                    for i, c in enumerate(chunk):
+                        if "id" in c["targetRecord"]:
+                            hs_records.append({"id": c["targetRecord"].pop("id"), "properties": c["targetRecord"]})
+                            included_indices.append(i)
                 elif op_mode == "upsert":
-                    hs_records = [
-                        {
-                            # Use .get() instead of .pop() to keep the email in the properties body!
-                            "id": str(c["targetRecord"].get(dedupe_key)), 
-                            "idProperty": dedupe_key,
-                            "properties": c["targetRecord"]
-                        } 
-                        for c in chunk if c["targetRecord"].get(dedupe_key)
-                    ]
+                    for i, c in enumerate(chunk):
+                        dedupe_val = c["targetRecord"].get(dedupe_key)
+                        if dedupe_val:
+                            hs_records.append({
+                                # Use .get() instead of .pop() to keep the email in the properties body!
+                                "id": str(dedupe_val),
+                                "idProperty": dedupe_key,
+                                "properties": c["targetRecord"]
+                            })
+                            included_indices.append(i)
                 else:
                     hs_records = [{"properties": c["targetRecord"]} for c in chunk]
+                    included_indices = list(range(len(chunk)))
+
+                skipped_indices = [i for i in range(len(chunk)) if i not in set(included_indices)]
+                missing_field_label = "id" if op_mode == "update" else dedupe_key
 
                 if not hs_records:
-                    return {"chunk": chunk, "status": "error", "message": "Missing required record IDs for operation."}
+                    return {
+                        "chunk": chunk,
+                        "status": "error",
+                        "message": f"Missing required '{missing_field_label}' value for every record in this batch."
+                    }
 
                 req_payload = {"inputs": hs_records}
                 
@@ -176,7 +196,6 @@ class HubspotMigrator:
                         return {"chunk": chunk, "status": "error", "message": error_msg}
                         
                     data = res.json()
-                    results = []
                     
                     successes = data.get("results", [])
                     success_map = {str(i): s for i, s in enumerate(successes)}
@@ -184,21 +203,34 @@ class HubspotMigrator:
                     errors = data.get("errors", [])
                     error_map = {str(e.get("index")): e for e in errors}
                     
-                    for i in range(len(chunk)):
-                        index_str = str(i)
-                        if index_str in error_map:
-                            results.append({
-                                "success": False, 
-                                "details": error_map[index_str].get("message", "Validation failed")
-                            })
-                        elif index_str in success_map:
-                            results.append({
-                                "success": True, 
-                                "id": success_map[index_str].get("id")
-                            })
+                    # Map HubSpot's response (indexed within the filtered hs_records
+                    # array) back to the correct ORIGINAL chunk position.
+                    results_by_index = {}
+                    for hs_pos, orig_idx in enumerate(included_indices):
+                        idx_str = str(hs_pos)
+                        if idx_str in error_map:
+                            results_by_index[orig_idx] = {
+                                "success": False,
+                                "details": error_map[idx_str].get("message", "Validation failed")
+                            }
+                        elif idx_str in success_map:
+                            results_by_index[orig_idx] = {
+                                "success": True,
+                                "id": success_map[idx_str].get("id")
+                            }
                         else:
-                            results.append({"success": True, "id": "Success"})
-                            
+                            results_by_index[orig_idx] = {"success": True, "id": "Success"}
+
+                    # Rows we never sent must be reported as explicit errors, not
+                    # silently defaulted to "success".
+                    for orig_idx in skipped_indices:
+                        results_by_index[orig_idx] = {
+                            "success": False,
+                            "details": f"Skipped: missing required '{missing_field_label}' value."
+                        }
+
+                    results = [results_by_index[i] for i in range(len(chunk))]
+
                     return {"chunk": chunk, "status": "completed", "results": results}
                         
                 except Exception as exc:
