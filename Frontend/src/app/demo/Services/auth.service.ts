@@ -1,107 +1,93 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient ,HttpHeaders} from '@angular/common/http';
 import { Observable, tap } from 'rxjs';
 import { Router } from '@angular/router';
 
-export interface LoginCredentials {
-  environment: string;
-  email: string;
-  password?: string;
-  //securityToken?: string; // 1. Added Security Token for Salesforce
-}
-
 export interface AuthResponse {
   success: boolean;
-  message: string;
-  token: string;          // 2. Added the JWT token returned by Node
-  user: {                 // 3. Updated to match the real backend user object
+  token?: string;
+  refresh_token?: string;
+  message?: string;
+  user?: {
     id: string;
     email: string;
-    environment: string;
-    instanceUrl: string;
-    accessToken: string;
+    full_name: string;
   };
 }
 
 @Injectable({
   providedIn: 'root'
 })
-// export class AuthService {
-//   private http = inject(HttpClient);
-//   private router = inject(Router);
-//   private apiUrl = 'http://localhost:3000/api/auth/login';
-
-//   // Initialize signal from localStorage to persist login on refresh
-//   currentUser = signal<AuthResponse['user'] | null>(
-//     JSON.parse(localStorage.getItem('user_data') || 'null')
-//   );
-//   getSalesforceAuthUrl(environment: string): Observable<{url: string}> {
-//   // This hits your Node.js backend login endpoint
-//   // Make sure this URL matches your backend route!
-//   return this.http.post<{url: string}>('http://localhost:3000/api/auth/login', { environment });
-// }
-
-//   login(credentials: LoginCredentials): Observable<AuthResponse> {
-//     return this.http.post<AuthResponse>(this.apiUrl, credentials).pipe(
-//       tap((response) => {
-//         // Removed the strict check for response.token
-//         if (response.success && response.user) {
-
-//           // 1. Persist data
-//           localStorage.setItem('user_data', JSON.stringify(response.user));
-
-//           // Note: If you want to store the Salesforce accessToken from the user object,
-//           // you can do it like this:
-//           if (response.user.accessToken) {
-//              localStorage.setItem('token', response.user.accessToken);
-//           }
-
-//           // 2. Update Signal
-//           this.currentUser.set(response.user);
-//         }
-//       })
-//     );
-//   }
-
-//   logout() {
-//     localStorage.removeItem('user_data');
-//     this.currentUser.set(null);
-//     this.router.navigate(['/login']);
-//   }
-
-//   isLoggedIn(): boolean {
-//     return !!this.currentUser();
-//   }
-// }
-
 export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
-  private apiUrl = 'http://localhost:3000/api/auth/login';
+  
+  private apiUrl = 'http://localhost:8000/api/auth';
 
-  // 1. Updated signal to check for our new 'sf_token'
-  currentUser = signal<any>(localStorage.getItem('sf_token'));
+  currentUser = signal<string | null>(localStorage.getItem('supabase_token'));
 
-  getSalesforceAuthUrl(environment: string): Observable<{url: string}> {
-    return this.http.post<{url: string}>(this.apiUrl, { environment });
+  login(credentials: any): Observable<AuthResponse> {
+    return this.http.post<AuthResponse>(`${this.apiUrl}/login`, credentials).pipe(
+      tap(res => {
+        if (res.success && res.token && res.refresh_token) {
+          // Store both tokens securely
+          localStorage.setItem('supabase_token', res.token);
+          localStorage.setItem('supabase_refresh', res.refresh_token);
+          localStorage.setItem('supabase_user', JSON.stringify(res.user));
+          this.currentUser.set(res.token);
+        }
+      })
+    );
   }
 
-  // 2. Updated to check for the new key
+  signup(data: { email: string; password: string; full_name: string }) {
+  return this.http.post<any>(`${this.apiUrl}/signup`, data);
+}
+
+  // Use this method in your HTTP Interceptor when a 401 Unauthorized occurs
+  refreshToken(): Observable<any> {
+    const refreshToken = localStorage.getItem('supabase_refresh');
+    return this.http.post<any>(`${this.apiUrl}/refresh`, { refresh_token: refreshToken }).pipe(
+      tap(res => {
+        if (res.success && res.token) {
+          localStorage.setItem('supabase_token', res.token);
+          localStorage.setItem('supabase_refresh', res.refresh_token);
+          this.currentUser.set(res.token);
+        }
+      })
+    );
+  }
+
+  updateEmail(newEmail: string) {
+    const token = localStorage.getItem('supabase_token');
+    const headers = new HttpHeaders().set('Authorization', `Bearer ${token}`);
+
+    return this.http.put('http://localhost:8000/update-email', 
+      { new_email: newEmail },
+      { headers }
+    );
+  }
+
   isLoggedIn(): boolean {
-    return !!localStorage.getItem('sf_token');
+    return !!this.currentUser();
   }
 
-  // 3. Helper to update storage and signal after OAuth redirect
-  handleOAuthLogin(token: string, instanceUrl: string) {
-    localStorage.setItem('sf_token', token);
-    localStorage.setItem('sf_instance_url', instanceUrl);
-    this.currentUser.set(token); // Update the signal so the Guard sees it
+ forgotPassword(email: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/forgot-password`, { email });
+  }
+
+  private clearLocalSession() {
+    localStorage.removeItem('supabase_token');
+    localStorage.removeItem('supabase_refresh');
+    this.currentUser.set(null);
+    this.router.navigate(['/login']);
   }
 
   logout() {
-    localStorage.removeItem('sf_token');
-    localStorage.removeItem('sf_instance_url');
-    this.currentUser.set(null);
-    this.router.navigate(['/login']);
+    // 1. Tell the Python backend to kill the session
+    this.http.post(`${this.apiUrl}/logout`, {}).subscribe({
+      next: () => this.clearLocalSession(),
+      error: () => this.clearLocalSession() // Clear it even if the server fails
+    });
   }
 }

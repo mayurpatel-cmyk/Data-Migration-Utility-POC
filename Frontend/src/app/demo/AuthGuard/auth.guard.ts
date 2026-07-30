@@ -1,26 +1,17 @@
 import { inject } from '@angular/core';
-import { Router, ActivatedRouteSnapshot } from '@angular/router';
-import { AuthService } from '../Services/auth.service';
+import { CanActivateFn, Router } from '@angular/router';
+import { AuthService } from '../Services/auth.service'; // Verify this path
 
-export const authGuard = (route: ActivatedRouteSnapshot) => {
+export const authGuard: CanActivateFn = (route, state) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
-  // 1. If already logged in, let them through
+  // Simply check if the Supabase token exists in our service
   if (authService.isLoggedIn()) {
     return true;
   }
 
-  // 2. Check if we are currently arriving from the Salesforce redirect
-  const token = route.queryParamMap.get('token');
-  const instanceUrl = route.queryParamMap.get('instanceUrl');
-
-  if (token && instanceUrl) {
-    // Save the credentials into storage/signals immediately
-    authService.handleOAuthLogin(token, instanceUrl);
-    return true;
-  }
-
-  // 3. Otherwise, redirect to login
-  return router.parseUrl('/login');
+  // If not logged in, boot them back to the login page
+  router.navigate(['/login']);
+  return false;
 };

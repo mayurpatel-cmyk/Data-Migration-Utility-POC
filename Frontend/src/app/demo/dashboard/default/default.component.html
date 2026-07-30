@@ -57,7 +57,7 @@
 
         <div class="col-md-6 position-relative" [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <div class="form-group mb-0">
-            <label class="form-label fw-bold">2. Select Target Salesforce Object</label>
+            <label class="form-label fw-bold">2. Select Target {{ targetCrmId | titlecase }} Object</label>
 
             <div class="position-relative" (click)="$event.stopPropagation()">
               <div class="form-select cursor-pointer bg-white"
@@ -108,38 +108,41 @@
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i>Migration Mode</h6>
 
         <div class="d-flex flex-wrap gap-4 mb-3">
+          @if (availableOpModes.includes('insert')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opInsert" value="insert"
               [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">
-              Insert
-            </label>
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsert">Insert</label>
             <div class="text-muted small">Creates new records.</div>
           </div>
+          }
+          
+          @if (availableOpModes.includes('update')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpdate" value="update"
-              [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">
-              Update
-            </label>
-            <div class="text-muted small">Updates via SF Id or mapped Ext ID.</div>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdate">Update</label>
+            <div class="text-muted small">Updates via CRM Id or mapped Ext ID.</div>
           </div>
+          }
+
+          @if (availableOpModes.includes('upsert')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opUpsert" value="upsert"
-              [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">
-              Upsert
-            </label>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsert">Upsert</label>
             <div class="text-muted small">Prevents duplicates. Requires Ext ID.</div>
           </div>
+          }
+
+          @if (availableOpModes.includes('delete')) {
           <div class="form-check">
             <input class="form-check-input cursor-pointer" type="radio" name="opMode" id="opDelete" value="delete"
-              [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
-            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">
-              Delete
-            </label>
-            <div class="text-muted small">Removes mapped SF Id records.</div>
+              [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDelete">Delete</label>
+            <div class="text-muted small">Removes mapped CRM Id records.</div>
           </div>
+          }
         </div>
 
         @if (['insert', 'update', 'upsert'].includes(operationMode)) {
@@ -211,85 +214,38 @@
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Migration Mode</h6>
 
         <div class="d-flex flex-wrap gap-4 align-items-start">
+          @if (availableOpModes.includes('insert')) {
           <div class="form-check mt-1">
             <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opInsertStep3"
-              value="insert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">
-              Insert
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpdateStep3"
-              value="update" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpdateStep3">
-              Update
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3"
-              value="upsert" [(ngModel)]="operationMode">
-            <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">
-              Upsert
-            </label>
-          </div>
-
-          <div class="form-check mt-1">
-            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opDeleteStep3"
-              value="delete" [(ngModel)]="operationMode" (change)="targetExtIdField = ''">
-            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDeleteStep3">
-              Delete
-            </label>
-          </div>
-
-          @if (['insert', 'update', 'upsert'].includes(operationMode)) {
-
-          <div
-            class="ms-md-auto bg-white p-2 rounded border border-primary-subtle d-flex align-items-center gap-2 position-relative"
-            [style.z-index]="isUpsertKeyDropdownOpen ? '1050' : 'auto'">
-            <label class="fw-bold mb-0 text-nowrap"><i class="feather icon-key text-primary"></i> External ID
-              Key:</label>
-
-            @if (isLoadingFields) {
-            <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
-            } @else {
-
-            <div class="position-relative" style="min-width: 220px;" (click)="$event.stopPropagation()">
-              <div class="form-select form-select-sm cursor-pointer bg-white border-primary-subtle"
-                (click)="!isLoadingFields && toggleUpsertKeyDropdown($event)" [class.text-muted]="!targetExtIdField">
-                {{ getSfFieldLabel(targetExtIdField) || '-- Select External ID --' }}
-              </div>
-
-              @if (isUpsertKeyDropdownOpen) {
-              <div
-                class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute end-0 mt-1 bg-white"
-                style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
-                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                  <div class="input-group input-group-sm">
-                    <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                    <input type="text" class="form-control" placeholder="Search ID fields..."
-                      [(ngModel)]="upsertKeySearchQuery" autofocus>
-                  </div>
-                </div>
-                <div class="dropdown-item text-muted cursor-pointer py-2 border-bottom mb-1"
-                  (click)="selectUpsertKey('')">
-                  <i class="feather icon-x-circle me-1"></i> -- No External ID --
-                </div>
-                @for (field of getFilteredUpsertKeys(); track field.name) {
-                <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectUpsertKey(field.name)"
-                  [class.bg-light]="targetExtIdField === field.name">
-                  {{ field.label }}
-                  <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
-                </div>
-                }
-              </div>
-              }
-            </div>
-            }
+              value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opInsertStep3">Insert</label>
           </div>
           }
-        </div>
+
+          @if (availableOpModes.includes('update')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpdateStep3"
+              value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpdateStep3">Update</label>
+          </div>
+          }
+
+          @if (availableOpModes.includes('upsert')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opUpsertStep3"
+              value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold cursor-pointer" for="opUpsertStep3">Upsert</label>
+          </div>
+          }
+
+          @if (availableOpModes.includes('delete')) {
+          <div class="form-check mt-1">
+            <input class="form-check-input cursor-pointer" type="radio" name="opModeStep3" id="opDeleteStep3"
+              value="delete" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+            <label class="form-check-label fw-bold text-danger cursor-pointer" for="opDeleteStep3">Delete</label>
+          </div>
+          }
+          </div>
       </div>
 
       <div class="row mb-4 bg-light p-3 rounded border mx-0 g-3">
@@ -309,7 +265,7 @@
         <div [class]="availableSheets.length > 1 ? 'col-md-6' : 'col-md-12'" class="position-relative"
           [style.z-index]="isObjectDropdownOpen ? '1050' : 'auto'">
           <label class="form-label fw-bold text-muted d-flex align-items-center gap-2"><i class="feather icon-box"></i>
-            Target Salesforce Object</label>
+            Target {{ targetCrmId | titlecase }} Object</label>
 
           <div class="position-relative" (click)="$event.stopPropagation()">
             <div class="form-select cursor-pointer bg-white border-secondary"
@@ -353,18 +309,65 @@
       </div>
 
       @if (selectedObject) {
-      @if (operationMode === 'upsert' && getDynamicSequenceWarning()) {
-      <div class="alert alert-warning border-warning shadow-sm d-flex align-items-center gap-3 mb-4 p-3">
-        <div class="bg-warning text-dark rounded-circle d-flex align-items-center justify-content-center"
-          style="min-width: 45px; height: 45px;">
-          <i class="feather icon-info fs-4"></i>
+      @if (operationMode === 'upsert') {
+        <div class="mt-3 p-3 bg-warning-subtle border border-warning-subtle rounded shadow-sm animate__animated animate__fadeIn">
+          <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+            
+            <div>
+              <label class="fw-bold mb-1 text-dark d-flex align-items-center">
+                <i class="feather icon-key text-warning me-2 fs-5"></i> Primary Upsert Key (External ID)
+              </label>
+              <div class="small text-muted mb-0">Select the unique field used to prevent duplicates (e.g., Email or Legacy_ID).</div>
+            </div>
+
+            <div class="flex-grow-1 position-relative" style="min-width: 250px; max-width: 350px;" (click)="$event.stopPropagation()">
+              
+              <div class="form-select form-select-sm border-warning fw-bold bg-white shadow-sm w-100 py-2 cursor-pointer d-flex justify-content-between align-items-center" 
+                   (click)="toggleUpsertDropdown($event)"
+                   [class.text-muted]="!targetExtIdField"
+                   [class.text-dark]="targetExtIdField">
+                <span class="text-truncate">{{ getUpsertKeyLabel(targetExtIdField) || '-- Select Upsert Key --' }}</span>
+              </div>
+
+              @if (isUpsertDropdownOpen) {
+              <div class="dropdown-menu show w-100 p-2 shadow-lg border-warning-subtle position-absolute start-0 mt-1 bg-white"
+                   style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
+                
+                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                  <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-light border-warning-subtle"><i class="feather icon-search text-warning"></i></span>
+                    <input type="text" class="form-control border-warning-subtle" placeholder="Search keys..."
+                           [(ngModel)]="upsertSearchQuery" autofocus>
+                  </div>
+                </div>
+
+                <div class="dropdown-item cursor-pointer py-2 text-danger fw-bold"
+                     (click)="selectUpsertKeyOption('')">
+                   <i class="feather icon-x-circle me-1"></i> Clear Selection
+                </div>
+                <hr class="my-1">
+
+                @for (f of filteredUpsertKeys; track f.name) {
+                  <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                       (click)="selectUpsertKeyOption(f.name)"
+                       [class.bg-warning-subtle]="targetExtIdField === f.name">
+                    {{ f.label }}
+                    <div class="small text-muted" style="font-family: monospace;">{{ f.name }}</div>
+                  </div>
+                }
+
+                @if (filteredUpsertKeys.length === 0) {
+                  <div class="text-center p-3 text-muted small">
+                    No fields found matching "{{ upsertSearchQuery }}"
+                  </div>
+                }
+              </div>
+              }
+            </div>
+            
+          </div>
         </div>
-        <div class="flex-grow-1">
-          <h6 class="alert-heading fw-bold mb-1 text-dark">External ID Link Notice</h6>
-          <p class="mb-0 text-dark small">{{ getDynamicSequenceWarning() }}</p>
-        </div>
-      </div>
-      }
+        }
 
       @if (migrationQueue.length > 1 && hasOrderingIssue()) {
       <div class="alert alert-warning border-warning shadow-sm d-flex align-items-center gap-3 mb-4">
@@ -383,10 +386,10 @@
       }
 
       @if (sfFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
-      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle">
-        <i class="feather icon-alert-triangle text-warning fs-5"></i>
+      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2 small border-warning-subtle shadow-sm animate__animated animate__fadeIn">
+        <i class="feather icon-alert-triangle text-warning fs-4"></i>
         <div>
-          <strong class="text-dark">Missing Required Fields:</strong> You must map columns to the following fields:
+          <strong class="text-dark">Missing Required {{ targetFieldLabel }}s:</strong> {{ targetCrmId | titlecase }} strictly requires the following to be mapped:
           <span class="text-danger fw-bold ms-1">{{ getMissingRequiredFields().join(', ') }}</span>
         </div>
       </div>
@@ -397,16 +400,6 @@
           Mapped: <span class="text-primary">{{ getConfirmedCount(mappings) }} / {{ mappings.length }}</span> columns
         </div>
         <div class="d-flex flex-wrap gap-2">
-
-          <!-- <button class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2 shadow-sm"
-                  (click)="loadMappingTemplate()" [disabled]="isLoadingFields">
-            <i class="feather icon-download"></i> Load Template
-          </button>
-          
-          <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
-                  (click)="saveMappingTemplate()" [disabled]="getConfirmedCount(mappings) === 0">
-            <i class="feather icon-save"></i> Save Template
-          </button> -->
 
           @if (getConfirmedCount(mappings) > 0) {
           <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
@@ -427,7 +420,7 @@
           <thead class="table-light position-sticky top-0" style="z-index: 105;">
             <tr>
               <th width="45%" class="py-3 ps-4">CSV Column </th>
-              <th width="55%" class="py-3">Salesforce Field Mapping</th>
+              <th width="55%" class="py-3">{{ targetCrmId | titlecase }} Field Mapping</th>
             </tr>
           </thead>
           <tbody>
@@ -498,66 +491,71 @@
                   }
                 </div>
 
-                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' &&
-                mapping.parentObjectName) {
-                <div
-                  class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
+                <!-- LOOKUP EXTERNAL ID MAPPING -->
+                @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
+                <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2 animate__animated animate__fadeIn">
                   <label class="small fw-bold text-primary-emphasis mb-0 text-nowrap">
                     <i class="feather icon-link"></i> Parent Ext ID ({{ mapping.parentObjectName }}):
                   </label>
 
                   @if (mapping.isLoadingParentFields) {
-                  <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
-                  } @else {
+                    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                  } @else if (mapping.parentObjectName !== 'Manual_Entry' && parentObjectFieldsCache[mapping.parentObjectName]) {
+                    
+                    <!-- DYNAMIC DROPDOWN (If we know the parent module) -->
+                    <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                      <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
+                        (click)="toggleParentDropdown(mapping, $event)"
+                        [class.text-muted]="!mapping.relationalExtIdField">
+                        {{ getParentFieldLabel(mapping, mapping.relationalExtIdField) || '-- Select External ID --' }}
+                      </div>
 
-                  <div class="position-relative w-100" style="min-width: 220px;" (click)="$event.stopPropagation()">
+                      @if (mapping.isParentDropdownOpen) {
+                      <div class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                        style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
 
-                    <div class="form-select form-select-sm cursor-pointer bg-white border-secondary-subtle"
-                      (click)="toggleParentDropdown(mapping, $event)"
-                      [class.text-muted]="!mapping.relationalExtIdField">
-                      {{ getParentFieldLabel(mapping, mapping.relationalExtIdField) || '-- Select External ID --' }}
-                    </div>
-
-                    @if (mapping.isParentDropdownOpen) {
-                    <div
-                      class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
-                      style="max-height: 250px; overflow-y: auto; z-index: 9999; top: 100%;">
-
-                      <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                        <div class="input-group input-group-sm">
-                          <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
-                          <input type="text" class="form-control" placeholder="Search parent ID fields..."
-                            [(ngModel)]="mapping.parentSearchQuery" autofocus>
+                        <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Search parent ID fields..."
+                              [(ngModel)]="mapping.parentSearchQuery" autofocus>
+                          </div>
                         </div>
-                      </div>
 
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap"
-                        (click)="selectParentField(mapping, 'Id')"
-                        [class.bg-light]="mapping.relationalExtIdField === 'Id'">
-                        <span class="fw-bold">Id</span>
-                        <div class="small text-muted" style="font-family: monospace;">Standard Salesforce ID</div>
-                      </div>
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                          (click)="selectParentField(mapping, 'Id')"
+                          [class.bg-light]="mapping.relationalExtIdField === 'Id'">
+                          <span class="fw-bold">Id</span>
+                          <div class="small text-muted" style="font-family: monospace;">Standard ID</div>
+                        </div>
 
-                      <hr class="my-1">
+                        <hr class="my-1">
 
-                      @for (pField of getFilteredParentFields(mapping); track pField.name) {
-                      <div class="dropdown-item cursor-pointer py-2 text-wrap"
-                        (click)="selectParentField(mapping, pField.name)"
-                        [class.bg-light]="mapping.relationalExtIdField === pField.name">
-                        {{ pField.label }}
-                        <div class="small text-muted" style="font-family: monospace;">{{ pField.name }}</div>
-                      </div>
-                      }
+                        @for (pField of getFilteredParentFields(mapping); track pField.name) {
+                        <div class="dropdown-item cursor-pointer py-2 text-wrap"
+                          (click)="selectParentField(mapping, pField.name)"
+                          [class.bg-light]="mapping.relationalExtIdField === pField.name">
+                          {{ pField.label }}
+                          <div class="small text-muted" style="font-family: monospace;">{{ pField.name }}</div>
+                        </div>
+                        }
 
-                      @if (getFilteredParentFields(mapping).length === 0) {
-                      <div class="text-center p-3 text-muted small">
-                        No fields found matching "{{ mapping.parentSearchQuery }}"
+                        @if (getFilteredParentFields(mapping).length === 0) {
+                        <div class="text-center p-3 text-muted small">
+                          No fields found matching "{{ mapping.parentSearchQuery }}"
+                        </div>
+                        }
                       </div>
                       }
                     </div>
-                    }
-                  </div>
 
+                  } @else {
+                    
+                    <!-- BULLETPROOF FALLBACK (Let user type 'Legacy_ID' manually if module couldn't be guessed) -->
+                    <input type="text" class="form-control form-control-sm border-primary" 
+                           [(ngModel)]="mapping.relationalExtIdField" 
+                           placeholder="Type Ext ID (e.g., Legacy_ID)" 
+                           [disabled]="isMigrating">
                   }
                 </div>
                 }
@@ -621,7 +619,7 @@
       } @else {
       <div class="text-center p-5 border rounded bg-light border-dashed mb-4">
         <i class="feather icon-mouse-pointer text-primary opacity-50" style="font-size: 3rem;"></i>
-        <h5 class="mt-3 text-muted fw-normal">Select a Target Salesforce Object from the dropdown above to continue
+        <h5 class="mt-3 text-muted fw-normal">Select a Target {{ targetCrmId | titlecase }} Object from the dropdown above to continue
           mapping.</h5>
       </div>
       }
@@ -638,7 +636,7 @@
             <thead class="table-light">
               <tr>
                 <th width="25%" class="py-3">Excel Sheet</th>
-                <th width="25%" class="py-3">Salesforce Object</th>
+                <th width="25%" class="py-3">Target Object</th>
                 <th width="20%" class="py-3">Mapped Fields</th>
                 <th width="30%" class="text-end py-3">Actions</th>
               </tr>
@@ -775,6 +773,7 @@
   </div>
 </div>
 }
+
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 4: Review Final Migration Plan">
@@ -800,13 +799,20 @@
           </div>
         </div>
 
-        <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle">
-          <label class="fw-bold mb-0 text-dark small"><i class="feather icon-database text-primary me-1"></i> Record
-            Size:</label>
+        <div class="d-flex align-items-center gap-2 bg-white p-2 rounded shadow-sm border border-secondary-subtle" [title]="batchConfig.tooltip">
+          <label class="fw-bold mb-0 text-dark small" style="cursor: help;">
+            <i class="feather icon-database text-primary me-1"></i> Record Size:
+          </label>
           <input type="number" class="form-control form-control-sm border-primary border-2 fw-bold text-primary"
-            [(ngModel)]="batchSize" [disabled]="isMigrating" min="10" max="10000" step="1000"
+            [(ngModel)]="batchSize" 
+            [disabled]="isMigrating" 
+            [min]="batchConfig.min" 
+            [max]="batchConfig.max" 
+            [step]="batchConfig.step"
+            (change)="validateBatchSize()"
+            (blur)="validateBatchSize()"
             style="width: 100px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
-          <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max 10000)</span></span>
+          <span class="small text-muted fw-bold me-1">rows <span class="fw-normal">(Max {{ batchConfig.max }})</span></span>
         </div>
       </div>
 
@@ -835,7 +841,7 @@
                 <tr>
                   <th width="45%" class="ps-4 border-0 py-3">Source Column </th>
                   <th width="10%" class="text-center border-0 py-3"></th>
-                  <th width="45%" class="border-0 py-3">Destination Field (Salesforce)</th>
+                  <th width="45%" class="border-0 py-3">Destination Field ({{ targetCrmId | titlecase }})</th>
                 </tr>
               </thead>
               <tbody>
@@ -845,7 +851,7 @@
                   <td class="text-center text-primary fw-bold fs-5">➔</td>
                   <td>
                     <span class="fw-bold text-success">{{ m.sfField }}</span>
-                    @if (m.type === 'reference' && m.relationalExtIdField) {
+                    @if (supportsRelationalLookups && m.type === 'reference' && m.relationalExtIdField) {
                     <div class="small text-muted mt-1"><i class="feather icon-link"></i> Linked via
                       <code>{{ m.relationalExtIdField }}</code>
                     </div>
@@ -907,7 +913,7 @@
         <div class="animation-container py-3">
           <i class="feather icon-check-circle text-success" style="font-size: 5rem;"></i>
           <h2 class="text-success mt-3 fw-bold">{{ isDeleteOnlyBatch ? 'Deletion' : 'Migration' }} Successful!</h2>
-          <p class="text-muted fs-5 mt-2">Excellent! All batches processed in Salesforce without any issues.</p>
+          <p class="text-muted fs-5 mt-2">Excellent! All batches processed in {{ targetCrmId | titlecase }} without any issues.</p>
         </div>
         }
 
@@ -962,7 +968,7 @@
             <thead class="table-danger sticky-top">
               <tr>
                 <th width="30%" class="text-danger-emphasis fw-bold p-3">Record Identifier</th>
-                <th width="70%" class="text-danger-emphasis fw-bold p-3">Salesforce Error Description</th>
+                <th width="70%" class="text-danger-emphasis fw-bold p-3">{{ targetCrmId | titlecase }} Error Description</th>
               </tr>
             </thead>
             <tbody>

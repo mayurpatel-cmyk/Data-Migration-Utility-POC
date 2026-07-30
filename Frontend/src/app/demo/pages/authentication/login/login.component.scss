@@ -1,1 +1,148 @@
 // This file is intentionally left empty to allow customers to add custom CSS if needed.
+/* =========================================
+   Modern Data Migration Login Theme
+========================================= */
+
+.auth-main {
+  background-color: #f4f7f6; /* Soft fallback background */
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Logo Styling */
+.auth-logo {
+  height: 65px; /* Adjust this value up or down to find the perfect size */
+  width: auto;  /* Ensures the logo doesn't stretch or distort */
+  max-width: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0px 4px 8px rgba(0,0,0,0.08)); /* Adds a subtle, premium 3D pop */
+  transition: transform 0.3s ease;
+  
+  &:hover {
+    transform: scale(1.02); /* Slight zoom when hovered */
+  }
+}
+
+/* Background Animated Blobs */
+.bg-shape {
+  position: absolute;
+  filter: blur(80px);
+  z-index: 0;
+  opacity: 0.6;
+  border-radius: 50%;
+  animation: float 10s infinite ease-in-out alternate;
+}
+
+.bg-primary.blob-1 {
+  width: 400px;
+  height: 400px;
+  top: -10%;
+  left: -5%;
+  animation-delay: 0s;
+}
+
+.bg-info.blob-2 {
+  width: 350px;
+  height: 350px;
+  bottom: -5%;
+  right: -5%;
+  animation-delay: -3s;
+}
+
+.bg-purple {
+  background-color: #6f42c1;
+  width: 300px;
+  height: 300px;
+  top: 40%;
+  left: 60%;
+  animation-delay: -6s;
+}
+
+@keyframes float {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(30px, 40px) scale(1.1); }
+  100% { transform: translate(-20px, -20px) scale(0.9); }
+}
+
+/* Glassmorphism Card */
+.auth-card {
+  width: 100%;
+  max-width: 450px;
+  background: rgba(255, 255, 255, 0.85); /* Semi-transparent white */
+  backdrop-filter: blur(16px); /* Frosted glass effect */
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08) !important;
+  transition: all 0.3s ease-in-out;
+}
+
+/* Logo Wrapper */
+.logo-wrapper {
+  box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+  border: 1px solid #f0f0f0;
+}
+
+/* Floating Input Styling */
+.custom-floating {
+  .form-control {
+    background-color: rgba(255, 255, 255, 0.7);
+    border: 1px solid #e0e0e0;
+    transition: all 0.2s ease-in-out;
+    padding-left: 1.2rem;
+    
+    &:focus {
+      background-color: #ffffff;
+      border-color: #0d6efd;
+      box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.15);
+    }
+  }
+
+  label {
+    padding-left: 1.2rem;
+    color: #6c757d;
+  }
+}
+
+/* Primary Action Button */
+.action-btn {
+  background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+  border: none;
+  transition: all 0.3s ease;
+
+  &:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(13, 110, 253, 0.3) !important;
+  }
+  
+  &:active:not(:disabled) {
+    transform: translateY(0);
+  }
+}
+
+/* Link Hover Effect */
+.hover-link {
+  transition: opacity 0.2s ease;
+  &:hover {
+    opacity: 0.7;
+    text-decoration: underline !important;
+  }
+}
+
+/* Simple animation classes (if animate.css isn't installed) */
+.animate__animated {
+  animation-duration: 0.6s;
+  animation-fill-mode: both;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translate3d(0, 30px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.animate__fadeInUp { animation-name: fadeInUp; }
+
+@keyframes shakeX {
+  from, to { transform: translate3d(0, 0, 0); }
+  10%, 30%, 50%, 70%, 90% { transform: translate3d(-5px, 0, 0); }
+  20%, 40%, 60%, 80% { transform: translate3d(5px, 0, 0); }
+}
+.animate__shakeX { animation-name: shakeX; }
