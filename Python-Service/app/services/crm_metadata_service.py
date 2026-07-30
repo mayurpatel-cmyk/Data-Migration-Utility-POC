@@ -1,5 +1,8 @@
 import httpx
+import urllib.parse 
 from fastapi import HTTPException
+
+client = httpx.AsyncClient(verify=False, timeout=30.0)
 
 class CrmMetadataService:
     
@@ -79,7 +82,10 @@ class CrmMetadataService:
                         "length": f.get("length"),
                         "custom": f.get("custom"),
                         "isRequired": is_required,
-                        "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None
+                        "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None,
+                        "externalId": f.get("externalId", False),
+        "unique": f.get("unique", False),
+        "idLookup": f.get("idLookup", False)
                     })
 
                 # 2. Fetch Sample Data
@@ -115,7 +121,7 @@ class CrmMetadataService:
     @staticmethod
     async def fetch_zendesk_objects(zd_token: str = None, subdomain: str = None):
         
-        # 1. Standard Objects (Always available, even if credentials are still loading)
+        # 1. Standard Objects
         objects = [
             {"name": "tickets", "label": "Tickets"},
             {"name": "users", "label": "Users"},
@@ -126,29 +132,25 @@ class CrmMetadataService:
             {"name": "views", "label": "Views"}
         ]
         
-        # If tokens are missing, don't crash! Just return the standard objects.
         if not zd_token or not subdomain:
             print("Notice: Missing Zendesk credentials. Returning standard objects only.")
             return sorted(objects, key=lambda x: x["label"])
         
-        # 2. DYNAMICALLY fetch Zendesk Custom Objects (Sunshine API)
         headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-        url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects/object_types"
+        
+        # 2. Modern Native Custom Objects (Admin Center)
+        url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects"
         
         try:
             async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
                 res = await client.get(url, headers=headers)
-                res.raise_for_status() 
-                
-                for custom_obj in res.json().get("object_types", []):
-                    objects.append({
-                        "name": custom_obj["key"], 
-                        "label": custom_obj.get("title", custom_obj["key"])
-                    })
-        except httpx.HTTPStatusError as e:
-            # If 403/404, the user's tier might not support Custom Objects. 
-            print(f"Notice: Custom Objects not available or unauthorized for this Zendesk tier (HTTP {e.response.status_code})")
-        except httpx.RequestError as e:
+                if res.status_code == 200:
+                    for custom_obj in res.json().get("custom_objects", []):
+                        objects.append({
+                            "name": custom_obj["key"], 
+                            "label": custom_obj.get("title", custom_obj["key"])
+                        })
+        except Exception as e:
             print(f"Notice: Network error fetching Zendesk custom objects: {str(e)}")
             
         return sorted(objects, key=lambda x: x["label"])
@@ -164,34 +166,28 @@ class CrmMetadataService:
         
         try:
             async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
-                
-                # 1. Identify the correct schema endpoint based on the object
-                meta_url = None
-                meta_key = None
-                singular_name = safe_object_name[:-1] if safe_object_name.endswith('s') else safe_object_name
-                
-                if safe_object_name in ["tickets", "users", "organizations"]:
-                    meta_url = f"{base_url}/{singular_name}_fields.json"
-                    meta_key = f"{singular_name}_fields"
-                elif safe_object_name not in ["groups", "macros", "triggers", "views"]:
-                    # Sunshine Custom Objects Schema
-                    meta_url = f"{base_url}/custom_objects/object_types/{safe_object_name}"
-                    meta_key = "schema"
-
-                # 2. Fetch and parse the live Metadata Schema
                 schema_fields_map = {}
-                if meta_url:
-                    meta_res = await client.get(meta_url, headers=headers)
-                    if meta_res.status_code == 200:
-                        data = meta_res.json()
+                sample_records = []
+                
+                # Check if it's a standard Zendesk object or a Native Custom Object
+                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+                is_standard = safe_object_name in standard_objects
+                
+                if is_standard:
+                    # ==========================================
+                    # STANDARD ZENDESK OBJECTS
+                    # ==========================================
+                    singular_name = safe_object_name[:-1] if safe_object_name.endswith('s') else safe_object_name
+                    
+                    # 1. Fetch Schema
+                    if safe_object_name in ["tickets", "users", "organizations"]:
+                        meta_url = f"{base_url}/{singular_name}_fields.json"
+                        meta_res = await client.get(meta_url, headers=headers)
                         
-                        # Parse Standard Objects (Tickets, Users, Orgs)
-                        if meta_key in ["ticket_fields", "user_fields", "organization_fields"]:
-                            for f in data.get(meta_key, []):
+                        if meta_res.status_code == 200:
+                            for f in meta_res.json().get(f"{singular_name}_fields", []):
                                 field_id = f.get("id")
-                                # Zendesk custom fields use numeric IDs, standard system fields use strings (e.g. "status")
                                 is_custom = isinstance(field_id, int)
-                                
                                 api_name = f"custom_field_{field_id}" if is_custom else str(field_id)
                                 
                                 schema_fields_map[api_name] = {
@@ -203,69 +199,82 @@ class CrmMetadataService:
                                     "referenceTo": None
                                 }
                                 
-                        # Parse Sunshine Custom Objects
-                        elif meta_key == "schema":
-                            schema = data.get("schema", {})
-                            properties = schema.get("properties", {})
-                            required_fields = schema.get("required", [])
-                            
-                            for prop_key, prop_val in properties.items():
-                                schema_fields_map[prop_key] = {
-                                    "name": prop_key,
-                                    "label": prop_val.get("title", prop_key.replace("_", " ").title()),
-                                    "type": prop_val.get("type", "string"),
-                                    "isRequired": prop_key in required_fields,
-                                    "custom": True,
-                                    "referenceTo": None
-                                }
-
-                # 3. Fetch Sample Data (crucial for getting hidden system fields like 'id' and 'created_at')
-                data_url = f"{base_url}/{safe_object_name}.json?per_page=5"
-                data_res = await client.get(data_url, headers=headers)
-                data_res.raise_for_status()
+                    # 2. Fetch Sample Data
+                    data_url = f"{base_url}/{safe_object_name}.json?per_page=5"
+                    data_res = await client.get(data_url, headers=headers)
+                    data_res.raise_for_status()
                     
-                raw_records = data_res.json().get(safe_object_name, [])
-                sample_records = []
-
-                # 4. Flatten data & discover missing system fields
-                if len(raw_records) > 0:
+                    raw_records = data_res.json().get(safe_object_name, [])
                     for rec in raw_records:
                         flat_rec = {}
                         for k, v in rec.items():
-                            
-                            # Flatten Zendesk's nested 'custom_fields' array into direct keys
                             if k == "custom_fields" and isinstance(v, list):
                                 for cf in v:
-                                    cf_key = f"custom_field_{cf['id']}"
-                                    flat_rec[cf_key] = cf.get("value")
-                            
-                            # Grab all other standard non-nested fields
+                                    flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
                             elif not isinstance(v, (dict, list)): 
                                 flat_rec[k] = v
-                                
-                                # If this data key wasn't in the schema API (e.g., 'id', 'url', 'created_at'), add it manually
+                                # Discover missing system fields dynamically
                                 if k not in schema_fields_map:
-                                    field_type = "string"
-                                    if isinstance(v, bool): field_type = "boolean"
-                                    elif isinstance(v, (int, float)): field_type = "number"
-                                    
+                                    field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
                                     schema_fields_map[k] = {
-                                        "name": k,
-                                        "label": k.replace("_", " ").title(),
-                                        "type": field_type,
-                                        "isRequired": k == "id",
-                                        "custom": False,
-                                        "referenceTo": None
+                                        "name": k, "label": k.replace("_", " ").title(), "type": field_type,
+                                        "isRequired": k == "id", "custom": False, "referenceTo": None
                                     }
-                                
                         sample_records.append(flat_rec)
-                
-                # 5. Format and Sort Output to match Salesforce structure
+
+                else:
+                    # ==========================================
+                    # NATIVE CUSTOM OBJECTS (Admin Center)
+                    # ==========================================
+                    # 1. Fetch Schema using the modern endpoint
+                    meta_url = f"{base_url}/custom_objects/{safe_object_name}/fields"
+                    meta_res = await client.get(meta_url, headers=headers)
+                    
+                    if meta_res.status_code == 200:
+                        for f in meta_res.json().get("custom_object_fields", []):
+                            api_name = f.get("key")
+                            schema_fields_map[api_name] = {
+                                "name": api_name,
+                                "label": f.get("title", api_name),
+                                "type": f.get("type", "string"),
+                                "isRequired": False,
+                                "custom": True,
+                                "referenceTo": None
+                            }
+                            
+                    # 2. Fetch Sample Data using the modern records endpoint
+                    data_url = f"{base_url}/custom_objects/{safe_object_name}/records?per_page=5"
+                    data_res = await client.get(data_url, headers=headers)
+                    data_res.raise_for_status()
+                    
+                    raw_records = data_res.json().get("custom_object_records", [])
+                    for rec in raw_records:
+                        # Extract standard native system fields
+                        flat_rec = {
+                            "id": rec.get("id"), 
+                            "name": rec.get("name"), 
+                            "created_at": rec.get("created_at"), 
+                            "updated_at": rec.get("updated_at")
+                        }
+                        
+                        # Flatten custom_object_fields payload
+                        c_fields = rec.get("custom_object_fields", {})
+                        for k, v in c_fields.items():
+                            flat_rec[k] = v
+                            
+                        # Discover missing system fields dynamically
+                        for k, v in flat_rec.items():
+                            if k not in schema_fields_map:
+                                field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
+                                schema_fields_map[k] = {
+                                    "name": k, "label": k.replace("_", " ").title(), "type": field_type,
+                                    "isRequired": k == "id", "custom": False, "referenceTo": None
+                                }
+                        sample_records.append(flat_rec)
+
+                # Format and Sort Output to match Salesforce structure
                 fields_list = list(schema_fields_map.values())
-                
-                # Sort rules: Required fields go to the top, then sort alphabetically
                 fields_list = sorted(fields_list, key=lambda x: (not x["isRequired"], x["name"]))
-                
                 headers_preview = [f["name"] for f in fields_list[:12]] 
                 
             return {
@@ -281,7 +290,7 @@ class CrmMetadataService:
 
 
 
-    # =========================================================
+   # =========================================================
     # ZOHO CRM METADATA EXTRACTION ENGINE
     # =========================================================
     @staticmethod
@@ -290,8 +299,9 @@ class CrmMetadataService:
             raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        # Assuming api_domain is structured like "https://www.zohoapis.com"
-        url = f"{api_domain.rstrip('/')}/crm/v3/settings/modules"
+        
+        
+        url = f"{api_domain.rstrip('/')}/crm/v6/settings/modules"
 
         try:
             async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
@@ -299,11 +309,17 @@ class CrmMetadataService:
                 response.raise_for_status()
 
                 data = response.json()
-                objects = [
-                    {"name": mod["api_name"], "label": mod["module_name"]}
-                    for mod in data.get("modules", [])
-                    if mod.get("api_supported")
-                ]
+                objects = []
+                
+                for mod in data.get("modules", []):
+                    # Ensure we catch Custom Modules even if Zoho flags them weirdly
+                    if mod.get("api_supported", False) or mod.get("generated_type") == "custom":
+                        objects.append({
+                            "name": mod.get("api_name"),
+                            # Use plural_label for a cleaner UI display
+                            "label": mod.get("plural_label") or mod.get("module_name") or mod.get("api_name")
+                        })
+                        
                 return sorted(objects, key=lambda x: x["label"])
 
         except httpx.HTTPStatusError as e:
@@ -317,7 +333,9 @@ class CrmMetadataService:
             raise HTTPException(status_code=401, detail="Missing Zoho session credentials.")
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        base_url = f"{api_domain.rstrip('/')}/crm/v3"
+        
+       
+        base_url = f"{api_domain.rstrip('/')}/crm/v6"
 
         try:
             async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
@@ -340,16 +358,25 @@ class CrmMetadataService:
                 parsed_fields = []
                 select_fields_list = []
 
+                dangerous_zoho_types = [
+                    "subform", "multiselectlookup", "imageupload", 
+                    "fileupload", "line_tax", "pricing_details", "userlookup"
+                ]
+
                 for f in fields_raw:
-                    if not f.get("api_name"):
+                    api_name = f.get("api_name")
+                    if not api_name:
                         continue
 
-                    select_fields_list.append(f["api_name"])
+                    # Safe COQL check
+                    if not api_name.startswith("$") and f.get("data_type") not in dangerous_zoho_types:
+                        select_fields_list.append(api_name)
+
                     parsed_fields.append({
-                        "name": f["api_name"],
+                        "name": api_name,
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
-                        "required": f.get("system_mandatory", False) or f.get("required", False)
+                        "isRequired": f.get("system_mandatory", False) or f.get("required", False)
                     })
 
                 # 2. Fetch Sample Data
@@ -372,10 +399,146 @@ class CrmMetadataService:
                 return {
                     "headers": select_fields_list[:12],
                     "sampleRecords": sample_records,
-                    "fields": sorted(parsed_fields, key=lambda x: x["required"], reverse=True)
+                    "fields": sorted(parsed_fields, key=lambda x: x["isRequired"], reverse=True)
                 }
 
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Zoho schema error: {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Network error connecting to Zoho: {str(e)}")
+
+
+    # =========================================================
+    # HUBSPOT METADATA EXTRACTION ENGINE
+    # =========================================================
+    @staticmethod
+    async def fetch_hubspot_objects(hs_token: str, api_domain: str = "https://api.hubapi.com"):
+        if not hs_token:
+            raise HTTPException(status_code=401, detail="Missing HubSpot session credentials.")
+
+        headers = {
+            "Authorization": f"Bearer {hs_token}",
+            "Content-Type": "application/json"
+        }
+        
+        objects = []
+        
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                # 1. Fetch Standard Objects (HubSpot doesn't have a single /schemas endpoint for everything)
+                standard_objects = [
+                    {"name": "contacts", "label": "Contacts"},
+                    {"name": "companies", "label": "Companies"},
+                    {"name": "deals", "label": "Deals"},
+                    {"name": "tickets", "label": "Tickets"},
+                    {"name": "products", "label": "Products"},
+                    {"name": "line_items", "label": "Line Items"},
+                    {"name": "quotes", "label": "Quotes"},
+                    {"name": "calls", "label": "Calls"},
+                    {"name": "emails", "label": "Emails"},
+                    {"name": "meetings", "label": "Meetings"},
+                    {"name": "notes", "label": "Notes"},
+                    {"name": "tasks", "label": "Tasks"}
+                ]
+                objects.extend(standard_objects)
+
+                # 2. Fetch Custom Objects
+                custom_url = f"{api_domain.rstrip('/')}/crm/v3/schemas"
+                # We catch errors here silently in case the user's tier doesn't support custom objects
+                res = await client.get(custom_url, headers=headers)
+                if res.status_code == 200:
+                    for schema in res.json().get("results", []):
+                        objects.append({
+                            "name": schema.get("objectTypeId"), # Internal ID needed for querying
+                            "label": schema.get("labels", {}).get("plural", schema.get("name")),
+                            "isCustomObject": True
+                        })
+                
+                return sorted(objects, key=lambda x: x["label"])
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"HubSpot rejected object request: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to HubSpot: {str(e)}")
+
+    @staticmethod
+    async def fetch_hubspot_fields(hs_token: str, api_domain: str, object_name: str):
+        if not hs_token:
+            raise HTTPException(status_code=401, detail="Missing HubSpot session credentials.")
+
+        headers = {
+            "Authorization": f"Bearer {hs_token}",
+            "Content-Type": "application/json"
+        }
+        base_url = f"{api_domain.rstrip('/')}/crm/v3/properties/{object_name}"
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+                # 1. Fetch Schema Properties
+                props_res = await client.get(base_url, headers=headers)
+                props_res.raise_for_status()
+
+                fields_raw = props_res.json().get("results", [])
+                
+                type_mapping = {
+                    "string": "string",
+                    "number": "number",
+                    "date": "date",
+                    "datetime": "date",
+                    "enumeration": "picklist",
+                    "bool": "boolean",
+                    "phone_number": "string"
+                }
+
+                parsed_fields = []
+                select_fields_list = []
+
+                for f in fields_raw:
+                    # Skip internal/hidden fields that shouldn't be mapped
+                    if f.get("hidden"):
+                        continue
+                        
+                    api_name = f.get("name")
+                    select_fields_list.append(api_name)
+                    
+                    parsed_fields.append({
+                        "name": api_name,
+                        "label": f.get("label"),
+                        "type": type_mapping.get(f.get("type"), "string"),
+                        "isRequired": False, # HubSpot doesn't strictly enforce schema-level required fields like SF
+                        "custom": not f.get("hubspotDefined", True),
+                        "referenceTo": f.get("referencedObjectType")
+                    })
+
+                # 2. Fetch Sample Data
+                # HubSpot requires us to specify which properties we want returned
+                sample_fields = select_fields_list[:50] # Limit to avoid URI too long errors
+                properties_query = "&".join([f"properties={urllib.parse.quote(p)}" for p in sample_fields])
+                
+                records_url = f"{api_domain.rstrip('/')}/crm/v3/objects/{object_name}?limit=5&{properties_query}"
+                records_res = await client.get(records_url, headers=headers)
+                
+                sample_records = []
+                if records_res.status_code == 200:
+                    raw_records = records_res.json().get("results", [])
+                    for r in raw_records:
+                        flat_rec = {"id": r.get("id")}
+                        
+                        # Merge properties into the flat record
+                        props = r.get("properties", {})
+                        if props:
+                            for k, v in props.items():
+                                flat_rec[k] = v
+                                
+                        sample_records.append(flat_rec)
+
+                return {
+                    "headers": sample_fields[:12],
+                    "sampleRecords": sample_records,
+                    "fields": sorted(parsed_fields, key=lambda x: x["label"])
+                }
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"HubSpot schema error for '{object_name}': {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error connecting to HubSpot: {str(e)}")

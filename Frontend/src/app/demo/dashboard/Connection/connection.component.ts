@@ -1,10 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, inject, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
-import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
+import { CrmAuthService, CrmConnection } from 'src/app/services/CrmAuthService.service';
+import { ToastrService } from 'ngx-toastr';
+import { Subscription, switchMap, delay } from 'rxjs';
 
 @Component({
   selector: 'app-connection',
@@ -13,13 +15,20 @@ import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
   templateUrl: './connection.component.html',
   styleUrls: ['./connection.component.scss']
 })
-export class ConnectionComponent implements OnInit {
+export class ConnectionComponent implements OnInit, OnDestroy {
+  private router = inject(Router);
+  private route = inject(ActivatedRoute);
+  private crmAuthService = inject(CrmAuthService);
+  private toastr = inject(ToastrService);
+  private cdr = inject(ChangeDetectorRef);
+
+  private authSubscription!: Subscription;
 
   availableCRMs = [
     { id: 'zendesk', name: 'Zendesk', icon: 'icon-headphones' },
     { id: 'salesforce', name: 'Salesforce', icon: 'icon-cloud' },
     { id: 'hubspot', name: 'HubSpot', icon: 'icon-share-2' },
-    { id: 'msdynamics', name: 'MS Dynamics 365', icon: 'icon-cpu' },
+   // { id: 'msdynamics', name: 'MS Dynamics 365', icon: 'icon-cpu' },
     { id: 'zoho', name: 'Zoho CRM', icon: 'icon-layout' }
   ];
 
@@ -29,88 +38,140 @@ export class ConnectionComponent implements OnInit {
   isSourceConnected: boolean = false;
   isTargetConnected: boolean = false;
 
-  zendeskSubdomain: string = '';
-  zohoRegion: string = 'IN';
+  sourceInstanceUrl: string = '';
+  targetInstanceUrl: string = '';
 
-  constructor(
-    private router: Router,
-    private route: ActivatedRoute,
-    private crmAuthService: CrmAuthService
-  ) {}
+  // Source isolated states
+  sourceZendeskSubdomain: string = '';
+  sourceZohoRegion: string = 'IN';
+  sourceSalesforceEnv: string = 'production';
+
+  // Target isolated states
+  targetZendeskSubdomain: string = '';
+  targetZohoRegion: string = 'IN';
+  targetSalesforceEnv: string = 'production';
+
+  showPathSelection: boolean = false;
+  isPageLoading: boolean = true;
+  isSourceConnecting: boolean = false;
+  isTargetConnecting: boolean = false;
 
   ngOnInit() {
-    // =========================================================
-    // STEP 0: RESTORE SUBDOMAIN (Fix for Zendesk OAuth memory wipe)
-    // =========================================================
-    const storedSubdomain = localStorage.getItem('zd_subdomain');
-    if (storedSubdomain) {
-      this.zendeskSubdomain = storedSubdomain;
-    }
+    this.isPageLoading = true; // Start loading immediately
 
-    // =========================================================
-    // STEP 1: RESTORE PREVIOUS CONNECTIONS ON LOAD
-    // =========================================================
-    const savedSource = localStorage.getItem('source_crm_slot');
-    const savedTarget = localStorage.getItem('target_crm_slot');
+    this.authSubscription = this.route.queryParams.pipe(
+      switchMap(params => {
+        const status = params['status'];
+        const crm = params['crm'];   
 
-    if (savedSource && this.hasTokenForCrm(savedSource)) {
-      this.selectedSource = savedSource;
-      this.isSourceConnected = true;
-    }
-
-    if (savedTarget && this.hasTokenForCrm(savedTarget)) {
-      this.selectedTarget = savedTarget;
-      this.isTargetConnected = true;
-    }
-
-    // =========================================================
-    // STEP 2: HANDLE NEW INCOMING REDIRECT PARAMETERS
-    // =========================================================
-  this.route.queryParams.subscribe(params => {
-      const side = params['connected_side'];
-      const crm = params['crm'];
-      const token = params['access_token'];
-      const instanceUrl = params['instance_url'];
-      const apiDomain = params['api_domain'];
-      const accountsServer = params['accounts_server'];
-
-      if (side && crm) {
-        if (side === 'source') {
-          this.selectedSource = crm;
-          this.isSourceConnected = true;
-          localStorage.setItem('source_crm_slot', crm);
-        } else if (side === 'target') {
-          this.selectedTarget = crm;
-          this.isTargetConnected = true;
-          localStorage.setItem('target_crm_slot', crm);
+        if (status === 'success') {
+          this.toastr.success(`${crm ? crm.toUpperCase() : 'CRM'} Connected Successfully!`);
+          this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
+        } else if (status === 'error') {
+          this.toastr.error('Failed to connect to CRM. Please try again.');
+          this.router.navigate([], { relativeTo: this.route, replaceUrl: true });
         }
 
-        if (token) {
-          this.crmAuthService.saveConnectionDetails(crm, {
-            access_token: token,
-            subdomain: this.zendeskSubdomain,
-            instance_url: instanceUrl, // <--- Pass it to CrmAuthService
-            api_domain: apiDomain,
-            accounts_server: accountsServer
-          });
-        }
-
-        this.router.navigate([], {
-          relativeTo: this.route,
-          queryParams: {},
-          replaceUrl: true
-        });
+        return this.crmAuthService.getUserConnections();
+      }),
+      delay(0)
+    ).subscribe({
+      next: (connections: CrmConnection[]) => {
+        this.parseConnections(connections);
+        this.isPageLoading = false; // Turn off page loader
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        console.error('Failed to load CRM connections', err);
+        this.toastr.error('Could not load your saved connections.');
+        this.isPageLoading = false; // Turn off page loader even on error
+        this.cdr.detectChanges();
       }
     });
   }
 
-  // Helper check method to see if token strings actually reside in storage
-  private hasTokenForCrm(crmId: string): boolean {
-    const cleanId = crmId.toLowerCase();
-    if (cleanId === 'salesforce') return !!localStorage.getItem('sf_token');
-    if (cleanId === 'zendesk') return !!localStorage.getItem('zd_token');
-    if (cleanId === 'zoho') return !!localStorage.getItem('zoho_token');
-    return false;
+  loadActiveConnections() {
+    this.isPageLoading = true;
+    this.crmAuthService.getUserConnections().pipe(
+      delay(0)
+    ).subscribe({
+      next: (connections: CrmConnection[]) => {
+        this.parseConnections(connections);
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private parseConnections(connections: CrmConnection[]) {
+    let nextSourceConnected = false;
+    let nextTargetConnected = false;
+    let nextSelectedSource = '';
+    let nextSelectedTarget = '';
+    let nextSourceUrl = '';
+    let nextTargetUrl = '';
+
+    connections.forEach(conn => {
+      if (conn.connection_role === 'source') {
+        nextSelectedSource = conn.crm_type;
+        nextSourceConnected = true;
+        
+        if (conn.crm_type === 'salesforce') {
+          nextSourceUrl = conn.instance_url || '';
+          if (conn.environment) this.sourceSalesforceEnv = conn.environment;
+        } else if (conn.crm_type === 'zoho') {
+          nextSourceUrl = conn.api_domain || '';
+          if (conn.region) this.sourceZohoRegion = conn.region;
+        } else if (conn.crm_type === 'zendesk') {
+          nextSourceUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
+          if (conn.subdomain) this.sourceZendeskSubdomain = conn.subdomain;
+        }
+      } 
+      else if (conn.connection_role === 'target') {
+        nextSelectedTarget = conn.crm_type;
+        nextTargetConnected = true;
+        
+        if (conn.crm_type === 'salesforce') {
+          nextTargetUrl = conn.instance_url || '';
+          if (conn.environment) this.targetSalesforceEnv = conn.environment;
+        } else if (conn.crm_type === 'zoho') {
+          nextTargetUrl = conn.api_domain || '';
+          if (conn.region) this.targetZohoRegion = conn.region;
+        } else if (conn.crm_type === 'zendesk') {
+          nextTargetUrl = conn.subdomain ? `https://${conn.subdomain}.zendesk.com` : '';
+          if (conn.subdomain) this.targetZendeskSubdomain = conn.subdomain;
+        }
+      }
+    });
+
+    this.selectedSource = nextSelectedSource;
+    this.selectedTarget = nextSelectedTarget;
+    this.isSourceConnected = nextSourceConnected;
+    this.isTargetConnected = nextTargetConnected;
+    this.sourceInstanceUrl = nextSourceUrl;
+    this.targetInstanceUrl = nextTargetUrl;
+
+    if (this.selectedSource) {
+      localStorage.setItem('source_crm_slot', this.selectedSource);
+    } else {
+      localStorage.removeItem('source_crm_slot');
+    }
+
+    if (this.selectedTarget) {
+      localStorage.setItem('target_crm_slot', this.selectedTarget);
+    } else {
+      localStorage.removeItem('target_crm_slot');
+    }
+
+    // Turn off connecting spinners if they came back from OAuth
+    this.isSourceConnecting = false;
+    this.isTargetConnecting = false;
+
+    this.cdr.detectChanges();
   }
 
   getCrmConfig(crmId: string) {
@@ -120,52 +181,96 @@ export class ConnectionComponent implements OnInit {
   onCrmChange(side: 'source' | 'target') {
     if (side === 'source') {
       this.isSourceConnected = false;
-      localStorage.removeItem('source_crm_slot');
     } else {
       this.isTargetConnected = false;
-      localStorage.removeItem('target_crm_slot');
     }
   }
 
   loginToCRM(side: 'source' | 'target') {
     const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
+    const subdomain = side === 'source' ? this.sourceZendeskSubdomain : this.targetZendeskSubdomain;
+    const region = side === 'source' ? this.sourceZohoRegion : this.targetZohoRegion;
+    const env = side === 'source' ? this.sourceSalesforceEnv : this.targetSalesforceEnv;
 
-    if (selectedCrmId === 'zendesk') {
-      if (!this.zendeskSubdomain || this.zendeskSubdomain.trim() === '') {
-        alert('Please enter your Zendesk subdomain to continue.');
-        return;
-      }
-      // FIX: Save the subdomain to local storage BEFORE leaving the page
-      localStorage.setItem('zd_subdomain', this.zendeskSubdomain);
+    if (selectedCrmId === 'zendesk' && (!subdomain || subdomain.trim() === '')) {
+      this.toastr.warning(`Please enter your ${side} Zendesk subdomain to continue.`);
+      return;
     }
 
-    this.crmAuthService.connectCrm(selectedCrmId, side, this.zendeskSubdomain , this.zohoRegion);
+    if (side === 'source') {
+      this.isSourceConnecting = true;
+    } else {
+      this.isTargetConnecting = true;
+    }
+
+    this.crmAuthService.connectCrm(selectedCrmId, side, subdomain, region, env);
+    
+    // Safety fallback: if redirect fails or gets blocked, reset loaders after 5s
+    setTimeout(() => {
+      this.isSourceConnecting = false;
+      this.isTargetConnecting = false;
+      this.cdr.detectChanges();
+    }, 5000);
   }
 
   disconnectCRM(side: 'source' | 'target') {
-    const selectedCrmId = side === 'source' ? this.selectedSource : this.selectedTarget;
+    this.isPageLoading = true;
+    
+    this.crmAuthService.disconnectCrm(side).subscribe({
+      next: () => {
+        this.toastr.success(`${side.toUpperCase()} disconnected successfully.`);
+        
+        if (side === 'source') {
+          this.isSourceConnected = false;
+          this.selectedSource = '';
+          this.sourceInstanceUrl = '';
 
-    this.crmAuthService.disconnectCrm(selectedCrmId);
+          localStorage.removeItem('source_crm_slot');
+        } else {
+          this.isTargetConnected = false;
+          this.selectedTarget = '';
+          this.targetInstanceUrl = '';
+          
+          localStorage.removeItem('target_crm_slot');
+        }
+        
+        window.dispatchEvent(new Event('connections-updated'));
+        
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.toastr.error('Failed to disconnect. Please try again.');
+        this.isPageLoading = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
 
-    if (side === 'source') {
-      this.isSourceConnected = false;
-      this.selectedSource = '';
-      localStorage.removeItem('source_crm_slot');
-    } else {
-      this.isTargetConnected = false;
-      this.selectedTarget = '';
-      localStorage.removeItem('target_crm_slot');
+  goToMappingPage(method: 'api' | 'csv') {
+    localStorage.setItem('target_crm_slot', this.selectedTarget);
+
+    if (method === 'api') {
+      if (!this.isSourceConnected || !this.isTargetConnected) return;
+      localStorage.setItem('source_crm_slot', this.selectedSource);
+      
+      this.router.navigate(['/api-mapping'], {
+        state: { sourceCrm: this.selectedSource, targetCrm: this.selectedTarget }
+      });
+      
+    } else if (method === 'csv') {
+      if (!this.isTargetConnected) return;
+      localStorage.setItem('source_crm_slot', 'csv'); // Force the context to CSV
+      
+      this.router.navigate(['/data-validation'], {
+        state: { sourceCrm: 'csv', targetCrm: this.selectedTarget }
+      });
     }
   }
 
-  goToMappingPage() {
-    if (this.isSourceConnected && this.isTargetConnected) {
-      this.router.navigate(['/api-mapping'], {
-        state: {
-          sourceCrm: this.selectedSource,
-          targetCrm: this.selectedTarget
-        }
-      });
+  ngOnDestroy() {
+    if (this.authSubscription) {
+      this.authSubscription.unsubscribe();
     }
   }
 }

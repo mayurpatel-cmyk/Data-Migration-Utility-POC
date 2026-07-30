@@ -1,7 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, timeout } from 'rxjs';
+import { environment } from 'src/environments/environment';
 
 @Injectable({
   providedIn: 'root'
@@ -9,42 +9,31 @@ import { Observable, timeout } from 'rxjs';
 export class ValidationApiService {
   private http = inject(HttpClient);
   
-  // FIX: Point these to your NODE.JS Gateway, NOT Python. 
-  // Adjust the port (3000) and base path to match your Node backend.
-  private validateUrl = 'http://localhost:3000/api/validation/validate-data';
-  private extractHeadersUrl = 'http://localhost:3000/api/validation/extract-headers';
-  private revalidateUrl = 'http://localhost:3000/api/validation/revalidate';
+  // Point to FastAPI
+  private baseUrl = environment.apiUrl ? `${environment.apiUrl}/api/python` : 'http://localhost:8000/api/python';
 
-  private getHeaders(): HttpHeaders {
-    const accessToken = localStorage.getItem('sf_token') || '';
-    const instanceUrl = localStorage.getItem('sf_instance_url') || ''; 
-    const email = localStorage.getItem('sf_user_email') || ''; 
-
+  private getAuthHeaders(): HttpHeaders {
+    const token = localStorage.getItem('supabase_token') || '';
     return new HttpHeaders({
-      'user-email': email,
-      'instanceurl': instanceUrl, 
-      'accesstoken': accessToken  
+      'Authorization': `Bearer ${token}`
     });
   }
 
   extractHeaders(formData: FormData): Observable<any> {
-    return this.http.post<any>(this.extractHeadersUrl, formData, {
-      headers: this.getHeaders(),
-      withCredentials: true 
+    return this.http.post<any>(`${this.baseUrl}/extract-headers`, formData, {
+      headers: this.getAuthHeaders()
     }).pipe(timeout(60000));
   }
 
   validateData(formData: FormData): Observable<any> {
-    return this.http.post<any>(this.validateUrl, formData, {
-      headers: this.getHeaders(),
-      withCredentials: true 
+    return this.http.post<any>(`${this.baseUrl}/validate`, formData, {
+      headers: this.getAuthHeaders()
     }).pipe(timeout(300000));
   }
 
   revalidateData(payload: any): Observable<any> {
-    return this.http.post<any>(this.revalidateUrl, payload, {
-      headers: this.getHeaders(),
-      withCredentials: true 
+    return this.http.post<any>(`${this.baseUrl}/revalidate`, payload, {
+      headers: this.getAuthHeaders()
     }).pipe(timeout(60000));
   }
 }
