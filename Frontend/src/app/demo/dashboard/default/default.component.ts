@@ -2,14 +2,15 @@
 import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { read, utils, WorkBook } from 'xlsx';
+import { read, utils, WorkBook, write } from 'xlsx';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { MigrationService } from 'src/app/services/migration.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
-import { firstValueFrom } from 'rxjs'; // <-- Required for sequential async/await calls
+import { firstValueFrom } from 'rxjs'; 
+import { DataTransferService } from 'src/app/services/data-transfer.service';
 
 interface MappingMeta {
   csvField: string;
@@ -49,9 +50,10 @@ export class DefaultComponent implements OnInit {
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
   private eRef = inject(ElementRef);
-  private route = inject(ActivatedRoute); 
+  private route = inject(ActivatedRoute);
   private router = inject(Router);
   private authService = inject(AuthService);
+  private dataTransfer = inject(DataTransferService);
 
   migrationQueue: JobQueueItem[] = [];
 
@@ -86,74 +88,103 @@ export class DefaultComponent implements OnInit {
 
   operationMode: string = 'insert';
   parentObjectFieldsCache: { [objectName: string]: any[] } = {};
-  batchSize: number = 10;
+  batchSize: number = 10000;
 
   isObjectDropdownOpen = false;
   objectSearchQuery = '';
 
   isUpsertKeyDropdownOpen = false;
   upsertKeySearchQuery = '';
-  displayName = signal('Salesforce User');
+  displayName = signal('CRM User');
+  isUpsertDropdownOpen: boolean = false;
+  upsertSearchQuery: string = '';
 
-  // --- NEW: Real-Time UI State Trackers ---
+  // --- Real-Time UI State Trackers ---
   activeJobStatus: string = '';
   completedJobsCount: number = 0;
 
+  targetCrmId: string = 'salesforce';
+  sourceCrmId: string = 'csv';
 
   ngOnInit() {
-    setTimeout(() => {
-      this.showMigrationInstructions();
-    }, 0);
+    const navState = history.state;
+    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
+    this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot') || 'csv';
 
-    let hasInitialized = false;
+    localStorage.setItem('target_crm_slot', this.targetCrmId);
+    localStorage.setItem('source_crm_slot', this.sourceCrmId);
 
-    this.route.queryParams.subscribe(params => {
-      if (hasInitialized) return; 
+    this.batchSize = this.batchConfig.default;
 
-      const token = params['token'];
-      const instanceUrl = params['instanceUrl'];
-      const name = params['name'];
+    const transferred = this.dataTransfer.getValidatedData();
 
-      hasInitialized = true;
+    // Check if we have an array of jobs transferred from Validation
+    if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
 
+      const newWorkbook = utils.book_new();
+      this.availableSheets = [];
+
+      // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
+      transferred.data.forEach((job: any, index: number) => {
+        const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
+        const worksheet = utils.json_to_sheet(job.results.validRecords);
+
+        utils.book_append_sheet(newWorkbook, worksheet, sheetName);
+        this.availableSheets.push(sheetName);
+      });
+
+      // Bind the new workbook and file to the UI
+      this.workbook = newWorkbook;
+      this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+      // --- AUTO-BUILD THE ENTIRE MIGRATION QUEUE ---
+      this.migrationQueue = []; 
+
+      transferred.data.forEach((job: any, index: number) => {
+        const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
+          csvField: m.csvField,
+          sfField: m.sfField,
+          type: m.type,
+          relationalExtIdField: '',
+          parentObjectName: undefined
+        }));
+
+        this.migrationQueue.push({
+          sheetName: (job.sheetName || `Sheet${index + 1}`).substring(0, 31),
+          targetObject: job.targetObject,
+          csvHeaders: Object.keys(job.results.validRecords[0] || {}),
+          mappings: enhancedMappings,
+          operationMode: 'insert', 
+          targetExtIdField: job.dedupeKey || ''
+        });
+      });
+
+      this.currentStep = 3;
+      this.selectedObject = '';
+
+      this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
+      this.cdr.detectChanges();
+
+    } else {
       setTimeout(() => {
-        if (token && instanceUrl) {
-          console.log('OAuth Callback Detected: Saving session...');
-          
-          if (name) {
-            localStorage.setItem('sf_user_name', name);
-            this.displayName.set(name);
-          }
+        this.showMigrationInstructions();
+      }, 0);
+    }
 
-          this.authService.handleOAuthLogin(token, instanceUrl);
-
-          this.router.navigate([], {
-            relativeTo: this.route,
-            queryParams: { token: null, instanceUrl: null, name: null },
-            queryParamsHandling: 'merge',
-            replaceUrl: true
-          }).then(() => {
-            this.toastr.success('Connection Verified!', 'Welcome');
-            this.loadSalesforceObjects();
-          });
-          
-        } else if (this.authService.isLoggedIn()) {
-          const savedName = localStorage.getItem('sf_user_name');
-          if (savedName) this.displayName.set(savedName);
-          
-          this.loadSalesforceObjects();
-        } else {
-          this.router.navigate(['/login']);
-        }
-      }, 0); 
-    });
+    setTimeout(() => {
+      if (this.authService.isLoggedIn()) {
+        this.loadTargetObjects();
+      } else {
+        this.router.navigate(['/login']);
+      }
+    }, 0);
   }
 
-  private loadSalesforceObjects() {
+  private loadTargetObjects() {
     this.isLoadingObjects = true;
-    this.cdr.detectChanges(); 
+    this.cdr.detectChanges();
 
-    this.migrationService.getAllObjects().subscribe({
+    this.migrationService.getAllObjects(this.targetCrmId, 'target').subscribe({
       next: (objects) => {
         this.sfObjects = objects;
         setTimeout(() => {
@@ -166,12 +197,13 @@ export class DefaultComponent implements OnInit {
           this.isLoadingObjects = false;
           this.cdr.detectChanges();
         });
-        
+
         if (err.status === 401) {
           this.toastr.error('Session expired. Please log in again.');
-          this.authService.logout(); 
+          this.authService.logout();
         } else {
-          this.toastr.error('Could not load Salesforce objects.', 'Connection Error');
+          // FIX: Removed invalid bitwise | operator that crashed the TypeScript build!
+          this.toastr.error(`Could not load objects for ${this.targetCrmId.toUpperCase()}.`, 'Connection Error');
         }
       }
     });
@@ -189,8 +221,79 @@ export class DefaultComponent implements OnInit {
     return this.migrationQueue.length > 0 && this.migrationQueue.every(job => job.operationMode === 'delete');
   }
 
+  // Dynamically returns which operation modes the selected CRM supports
+  get availableOpModes(): string[] {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot':
+        return ['insert', 'update', 'upsert']; // HubSpot Bulk Delete not natively supported here
+      case 'zendesk':
+        return ['insert', 'update', 'upsert']; // Zendesk Bulk Delete not natively supported here
+      case 'zoho':
+      case 'salesforce':
+      default:
+        return ['insert', 'update', 'upsert', 'delete']; // SF & Zoho support all 4
+    }
+  }
+
+  toggleUpsertDropdown(event: Event) {
+    event.stopPropagation();
+    this.isUpsertDropdownOpen = !this.isUpsertDropdownOpen;
+    if (this.isUpsertDropdownOpen) {
+      this.upsertSearchQuery = ''; // Clear search when opening
+    }
+  }
+
+  // Handles the selection
+  selectUpsertKeyOption(fieldName: string) {
+    this.targetExtIdField = fieldName;
+    this.isUpsertDropdownOpen = false;
+    this.onOperationModeChange(); // Fire your existing logic to save it
+  }
+
+  // Filters the list based on what the user types
+  get filteredUpsertKeys(): any[] {
+    if (!this.upsertSearchQuery) return this.validUpsertKeys;
+    const query = this.upsertSearchQuery.toLowerCase();
+    return this.validUpsertKeys.filter(f => 
+      (f.label || '').toLowerCase().includes(query) || 
+      (f.name || '').toLowerCase().includes(query)
+    );
+  }
+
+  getUpsertKeyLabel(fieldName: string): string {
+    if (!fieldName) return '';
+    const field = this.validUpsertKeys.find(f => f.name === fieldName);
+    return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
   get hasDeleteInBatch(): boolean {
     return this.migrationQueue.some(job => job.operationMode === 'delete');
+  }
+
+  get batchConfig() {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'HubSpot max limit: 100' };
+      case 'zendesk':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zendesk max limit: 100' };
+      case 'zoho':
+        return { min: 10, max: 100, step: 10, default: 100, tooltip: 'Zoho max limit: 100' };
+      case 'salesforce':
+      default:
+        return { min: 100, max: 10000, step: 1000, default: 5000, tooltip: 'Salesforce max limit: 10,000' };
+    }
+  }
+
+  validateBatchSize() {
+    const config = this.batchConfig;
+    if (this.batchSize > config.max) {
+      this.batchSize = config.max;
+      this.toastr.info(`Batch size reduced to ${config.max} to comply with ${this.targetCrmId.toUpperCase()} API limits.`);
+    } else if (this.batchSize < config.min) {
+      this.batchSize = config.min;
+    }
   }
 
   onFileSelected(event: any) {
@@ -256,6 +359,22 @@ export class DefaultComponent implements OnInit {
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
+  // Dynamically gets valid fields for the Upsert Key dropdown
+  get validUpsertKeys(): any[] {
+    if (!this.sfFields || this.sfFields.length === 0) return [];
+    
+    const crm = (this.targetCrmId || '').toLowerCase();
+
+    if (crm === 'salesforce') {
+      // Salesforce explicitly flags External IDs
+      return this.sfFields.filter(f => f.externalId || f.unique || f.idLookup || f.name === 'Id');
+    } else {
+      // Zoho, HubSpot, and Zendesk do not reliably send unique flags via standard metadata.
+      // Return ALL fields so the user can manually select their custom ID (e.g., Legacy_ID).
+      return this.sfFields;
+    }
+  }
+
   getFilteredSfFields(query?: string): any[] {
     if (!query) return this.sfFields;
     const lowerQuery = query.toLowerCase();
@@ -264,7 +383,7 @@ export class DefaultComponent implements OnInit {
 
   getParentFieldLabel(mapping: MappingMeta, fieldName?: string): string {
     if (!fieldName) return '';
-    if (fieldName === 'Id') return 'Id (Standard Salesforce ID)';
+    if (fieldName === 'Id') return `Id (Standard ${this.targetCrmId.toUpperCase()} ID)`;
     if (!mapping.parentObjectName) return fieldName;
     const parentFields = this.parentObjectFieldsCache[mapping.parentObjectName] || [];
     const field = parentFields.find((f: any) => f.name === fieldName);
@@ -348,7 +467,7 @@ export class DefaultComponent implements OnInit {
 
   @HostListener('document:click', ['$event'])
   clickout(event: Event) {
-      this.closeAllDropdowns();
+    this.closeAllDropdowns();
   }
 
   getSfFieldMeta(fieldName: string): any {
@@ -357,11 +476,46 @@ export class DefaultComponent implements OnInit {
 
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
-
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    const requiredSfFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
-    const currentlyMappedSfFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
-    return requiredSfFields.filter((reqField) => !currentlyMappedSfFields.includes(reqField));
+
+    const crm = (this.targetCrmId || '').toLowerCase();
+    const objLower = (this.selectedObject || '').toLowerCase();
+
+    // 1. Get API-defined required fields (Works perfectly for Salesforce)
+    let requiredFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
+
+    // Helper to safely suggest a field only if it actually exists in their schema
+    const addIfInSchema = (fieldName: string) => {
+      if (this.sfFields.some(f => f.name === fieldName) && !requiredFields.includes(fieldName)) {
+        requiredFields.push(fieldName);
+      }
+    };
+
+    const currentlyMappedFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
+
+    // 2. Inject CRM-Specific Smart Fallbacks
+    if (crm === 'hubspot') {
+      if (objLower === 'contacts') addIfInSchema('email');
+      if (objLower === 'deals') addIfInSchema('dealname');
+      if (objLower === 'tickets') {
+        addIfInSchema('hs_pipeline');
+        addIfInSchema('hs_pipeline_stage');
+      }
+      
+      // HubSpot Companies Special Rule: Requires EITHER domain OR name
+      if (objLower === 'companies') {
+        if (!currentlyMappedFields.includes('domain') && !currentlyMappedFields.includes('name')) {
+          addIfInSchema('domain'); // Suggest domain as the primary identifier
+        }
+      }
+    } else if (crm === 'zoho') {
+      if (objLower === 'leads' || objLower === 'contacts') addIfInSchema('Last_Name');
+      if (objLower === 'accounts') addIfInSchema('Account_Name');
+      if (objLower === 'deals') addIfInSchema('Deal_Name');
+    }
+
+    // 3. Return what's required but hasn't been mapped yet
+    return requiredFields.filter((reqField) => !currentlyMappedFields.includes(reqField));
   }
 
   onStep2ObjectChange(newObject: string) {
@@ -401,14 +555,167 @@ export class DefaultComponent implements OnInit {
   }
 
   onOperationModeChange() {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    const objLower = (this.selectedObject || '').toLowerCase();
+
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
       
-      if (extIds.length === 1) {
-        this.selectUpsertKey(extIds[0].name);
+      // CRM-SPECIFIC UPSERT LOGIC
+      if (crm === 'hubspot' && objLower === 'contacts') {
+        this.selectUpsertKey('email');
+      } else if (crm === 'hubspot' && objLower === 'companies') {
+        this.selectUpsertKey('domain');
+      } else if (crm === 'zendesk') {
+        // Zendesk commonly upserts via external_id
+        const hasExtId = this.sfFields.find(f => f.name === 'external_id');
+        if (hasExtId) this.selectUpsertKey('external_id');
+      } else {
+        // Default Salesforce/Zoho Logic: Auto-select if there's only 1 external ID field
+        const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
+        if (extIds.length === 1) {
+          this.selectUpsertKey(extIds[0].name);
+        }
       }
+
     } else if (this.operationMode === 'delete') {
       this.targetExtIdField = '';
+    }
+  }
+
+  // Dynamically returns the naming convention for fields/properties
+  get targetFieldLabel(): string {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'hubspot': return 'HubSpot Property';
+      case 'zoho': return 'Zoho Module Field';
+      case 'zendesk': return 'Zendesk Ticket Field';
+      case 'salesforce':
+      default: return 'Salesforce Field';
+    }
+  }
+
+  // Dynamically returns the naming convention for records/objects
+  get targetObjectLabel(): string {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    switch (crm) {
+      case 'zoho': return 'Zoho Module';
+      case 'hubspot':
+      case 'zendesk':
+        return 'Target Object';
+      case 'salesforce':
+      default: return 'Salesforce Object';
+    }
+  }
+
+  // Dynamically determines if the CRM supports complex nested External ID lookups
+  get supportsRelationalLookups(): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    // Currently, only Salesforce natively supports mapping parent relationships 
+    // via dynamic External IDs inside a standard bulk payload.
+    return crm === 'salesforce' || crm === 'zoho';
+  }
+
+  moveQueueItemUp(index: number) {
+    if (index > 0) {
+      const item = this.migrationQueue.splice(index, 1)[0];
+      this.migrationQueue.splice(index - 1, 0, item);
+      this.previewingItemIndex = null;
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  moveQueueItemDown(index: number) {
+    if (index < this.migrationQueue.length - 1) {
+      const item = this.migrationQueue.splice(index, 1)[0];
+      this.migrationQueue.splice(index + 1, 0, item);
+      this.previewingItemIndex = null;
+      this.showPreview = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  // --- SAVED MAPPING TEMPLATES ---
+  async saveMappingTemplate() {
+    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    if (activeMappings.length === 0) {
+      this.toastr.warning('Map at least one field to save a template.', 'Cannot Save');
+      return;
+    }
+
+    const { value: templateName } = await Swal.fire({
+      title: 'Save Mapping Template',
+      input: 'text',
+      inputLabel: 'Give this template a name (e.g., Monthly Sales Import)',
+      inputPlaceholder: 'Template Name...',
+      showCancelButton: true,
+      confirmButtonColor: '#0d6efd',
+      inputValidator: (value) => {
+        if (!value) return 'You need to write a name!';
+        return null;
+      }
+    });
+
+    if (templateName) {
+      const template = {
+        targetObject: this.selectedObject,
+        operationMode: this.operationMode,
+        targetExtIdField: this.targetExtIdField,
+        mappings: activeMappings
+      };
+
+      let templates = JSON.parse(localStorage.getItem(`${this.targetCrmId}_mapping_templates`) || '[]');
+      templates = templates.filter((t: any) => t.name !== templateName);
+      templates.push({ name: templateName, data: template });
+      localStorage.setItem(`${this.targetCrmId}_mapping_templates`, JSON.stringify(templates));
+
+      this.toastr.success(`Template "${templateName}" saved successfully!`, 'Template Saved');
+    }
+  }
+
+  async loadMappingTemplate() {
+    const templates = JSON.parse(localStorage.getItem(`${this.targetCrmId}_mapping_templates`) || '[]');
+    const objectTemplates = templates.filter((t: any) => t.data.targetObject === this.selectedObject);
+
+    if (objectTemplates.length === 0) {
+      this.toastr.info(`No saved templates found for ${this.selectedObject}.`, 'No Templates');
+      return;
+    }
+
+    const options: any = {};
+    objectTemplates.forEach((t: any) => { options[t.name] = t.name; });
+
+    const { value: selectedName } = await Swal.fire({
+      title: 'Load Template',
+      input: 'select',
+      inputOptions: options,
+      inputPlaceholder: '-- Select a Saved Template --',
+      showCancelButton: true,
+      confirmButtonColor: '#198754'
+    });
+
+    if (selectedName) {
+      const t = objectTemplates.find((x: any) => x.name === selectedName).data;
+      this.operationMode = t.operationMode;
+      this.targetExtIdField = t.targetExtIdField;
+
+      this.mappings.forEach(m => { m.sfField = ''; m.parentObjectName = undefined; m.relationalExtIdField = ''; });
+
+      t.mappings.forEach((savedMap: any) => {
+        const match = this.mappings.find(m => m.csvField === savedMap.csvField);
+        if (match) {
+          match.sfField = savedMap.sfField;
+          match.parentObjectName = savedMap.parentObjectName;
+          match.relationalExtIdField = savedMap.relationalExtIdField;
+
+          if (match.parentObjectName) {
+            this.onSfFieldChange(match);
+          }
+        }
+      });
+
+      this.toastr.success(`Loaded "${selectedName}"!`, 'Template Loaded');
+      this.cdr.detectChanges();
     }
   }
 
@@ -426,7 +733,7 @@ export class DefaultComponent implements OnInit {
     if (s1.length < s2.length) { longer = s2; shorter = s1; }
     const longerLength = longer.length;
     if (longerLength === 0) return 1.0;
-    
+
     const costs = new Array();
     for (let i = 0; i <= longer.length; i++) {
       let lastValue = i;
@@ -454,7 +761,7 @@ export class DefaultComponent implements OnInit {
       let matchCount = 0;
       let memoryCount = 0;
 
-      const savedMappingData = localStorage.getItem(`sf_map_${this.selectedObject}`);
+      const savedMappingData = localStorage.getItem(`${this.targetCrmId}_map_${this.selectedObject}`);
       const pastMappings = savedMappingData ? JSON.parse(savedMappingData) : {};
 
       const normalizeString = (str: string) => {
@@ -472,7 +779,7 @@ export class DefaultComponent implements OnInit {
               mapping.sfField = savedSfField.name;
               memoryCount++;
               this.onSfFieldChange(mapping);
-              return; 
+              return;
             }
           }
 
@@ -486,7 +793,7 @@ export class DefaultComponent implements OnInit {
             if (normalCsv === normalName || normalCsv === normalLabel) {
               bestMatch = field;
               highestScore = 1.0;
-              break; 
+              break;
             }
 
             const labelScore = this.getSimilarity(normalCsv, normalLabel);
@@ -539,7 +846,7 @@ export class DefaultComponent implements OnInit {
   }
 
   private fetchObjectFields(objectName: string, isEditMode: boolean = false) {
-    this.migrationService.getObjectFields(objectName).subscribe({
+    this.migrationService.getObjectFields(this.targetCrmId, objectName, 'target').subscribe({
       next: (response: any) => {
         setTimeout(() => {
           const fieldsArray = response.fields ? response.fields : response;
@@ -551,7 +858,8 @@ export class DefaultComponent implements OnInit {
             this.mappings.forEach(m => {
               if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
                 m.isLoadingParentFields = true;
-                this.migrationService.getObjectFields(m.parentObjectName).subscribe({
+                
+                this.migrationService.getObjectFields(this.targetCrmId, m.parentObjectName, 'target').subscribe({
                   next: (pRes: any) => {
                     setTimeout(() => {
                       const pFieldsArray = pRes.fields ? pRes.fields : pRes;
@@ -584,7 +892,7 @@ export class DefaultComponent implements OnInit {
     return fields.sort((a, b) => {
       if (a.isRequired && !b.isRequired) return -1;
       if (!a.isRequired && b.isRequired) return 1;
-      
+
       const valA = (a.label || a.name || '').toLowerCase();
       const valB = (b.label || b.name || '').toLowerCase();
       return valA.localeCompare(valB);
@@ -595,40 +903,72 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
-  onSfFieldChange(mapping: MappingMeta) {
+ onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-    if (fieldMeta && fieldMeta.type === 'reference' && fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) {
-      const parentObj = fieldMeta.referenceTo[0];
-      mapping.parentObjectName = parentObj;
+    // Check if it's a lookup field (reference)
+    if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
+      
+      // 1. Try to get parent object from standard metadata (Works perfectly for Salesforce)
+      let parentObj = (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) ? fieldMeta.referenceTo[0] : null;
 
-      if (!this.parentObjectFieldsCache[parentObj]) {
-        setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
+      // 2. FULLY DYNAMIC SMART FALLBACK: Guess parent module by scanning all loaded CRM objects!
+      // (Change 'this.sfObjects' to 'this.targetObjects' if that's what your array is named)
+      if (!parentObj && this.sfObjects && this.sfObjects.length > 0) {
+        const fieldLower = mapping.sfField.toLowerCase().replace(/[^a-z0-9]/g, ''); // Clean field name
 
-        this.migrationService.getObjectFields(parentObj).subscribe({
-          next: (response: any) => {
-            setTimeout(() => {
-              const fieldsArray = response.fields ? response.fields : response;
-              this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
-              mapping.isLoadingParentFields = false;
-              this.cdr.detectChanges();
-            });
-          },
-          error: (err) => {
-            setTimeout(() => {
-              mapping.isLoadingParentFields = false;
-              this.toastr.error(`Failed to load fields for parent object: ${parentObj}`, 'API Error');
-              this.cdr.detectChanges();
-            });
-          }
+        const matchedObj = this.sfObjects.find(obj => {
+          const objNameLower = (obj.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!objNameLower) return false;
+          
+          // Create a singular version for matching (e.g., 'accounts' -> 'account')
+          const singularName = objNameLower.endsWith('s') ? objNameLower.slice(0, -1) : objNameLower;
+          
+          // Match if the field name contains the object name or its singular form
+          return fieldLower.includes(singularName) || fieldLower.includes(objNameLower);
         });
+
+        if (matchedObj) {
+          parentObj = matchedObj.name; // Use the exact API name from the CRM
+        }
+      }
+
+      // 3. Load the fields for the dropdown
+      if (parentObj) {
+        mapping.parentObjectName = parentObj;
+
+        if (!this.parentObjectFieldsCache[parentObj]) {
+          setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
+          
+          this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
+            next: (response: any) => {
+              setTimeout(() => {
+                const fieldsArray = response.fields ? response.fields : response;
+                this.parentObjectFieldsCache[parentObj] = this.sortFieldsAlphabetically(fieldsArray);
+                mapping.isLoadingParentFields = false;
+                this.cdr.detectChanges();
+              });
+            },
+            error: (err) => {
+              setTimeout(() => {
+                mapping.isLoadingParentFields = false;
+                // Failsafe: Let them type it manually if the API fails
+                mapping.parentObjectName = 'Manual_Entry';
+                this.cdr.detectChanges();
+              });
+            }
+          });
+        }
+      } else {
+        // If we couldn't guess it from any module, trigger the manual entry fallback
+        mapping.parentObjectName = 'Manual_Entry';
       }
     } else {
+      // Not a lookup field, wipe data cleanly
       mapping.parentObjectName = undefined;
       mapping.relationalExtIdField = '';
     }
   }
-
   queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {
@@ -644,7 +984,7 @@ export class DefaultComponent implements OnInit {
 
     const hasSfId = activeMappings.some((m) => m.sfField === 'Id');
     if (this.operationMode === 'delete' && !hasSfId) {
-      this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+      this.toastr.error(`Delete operation requires the ${this.targetCrmId.toUpperCase()} "Id" field to be mapped.`, 'Missing ID');
       return;
     }
 
@@ -676,7 +1016,7 @@ export class DefaultComponent implements OnInit {
 
     const mapToSave: any = {};
     activeMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
-    localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+    localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
     this.migrationQueue.push({
       sheetName: this.selectedSheetName,
@@ -784,7 +1124,7 @@ export class DefaultComponent implements OnInit {
 
   goToReview() {
     this.confirmedMappings = this.mappings.filter((m) => m.sfField && m.sfField !== '');
-    
+
     if (this.confirmedMappings.length === 0 && this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field.', 'Mapping Required');
       return;
@@ -799,7 +1139,7 @@ export class DefaultComponent implements OnInit {
 
       const hasSfId = this.confirmedMappings.some((m) => m.sfField === 'Id');
       if (this.operationMode === 'delete' && !hasSfId) {
-        this.toastr.error('Delete operation requires the Salesforce "Id" field to be mapped.', 'Missing ID');
+        this.toastr.error(`Delete operation requires the ${this.targetCrmId.toUpperCase()} "Id" field to be mapped.`, 'Missing ID');
         return;
       }
       if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
@@ -818,8 +1158,8 @@ export class DefaultComponent implements OnInit {
       }
 
       const enhancedMappings = this.confirmedMappings.map((mapping) => {
-      const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-       return {
+        const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+        return {
           ...mapping,
           type: fieldMeta?.type,
           referenceTo: fieldMeta?.referenceTo,
@@ -829,7 +1169,7 @@ export class DefaultComponent implements OnInit {
 
       const mapToSave: any = {};
       this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
-      localStorage.setItem(`sf_map_${this.selectedObject}`, JSON.stringify(mapToSave));
+      localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
       this.migrationQueue.push({
         sheetName: this.selectedSheetName,
@@ -857,13 +1197,47 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
+  // --- DOWNLOAD MAPPING RECEIPT (AUDIT LOG) ---
+  downloadMappingReceipt() {
+    if (this.migrationQueue.length === 0) {
+      this.toastr.warning('There are no mappings to export.', 'Empty Queue');
+      return;
+    }
+
+    let csvContent = 'Target Object,Source Sheet,Operation Mode,External ID Key,CSV Column,Destination Field,Relational Lookup Key\n';
+
+    this.migrationQueue.forEach(job => {
+      const activeMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
+
+      activeMappings.forEach(m => {
+        const safeCsvCol = `"${m.csvField.replace(/"/g, '""')}"`;
+        const safeSfField = `"${m.sfField.replace(/"/g, '""')}"`;
+        const relation = m.type === 'reference' && m.relationalExtIdField ? `Linked via ${m.relationalExtIdField}` : 'N/A';
+        const safeExtId = job.targetExtIdField || 'N/A';
+
+        csvContent += `"${job.targetObject}","${job.sheetName}","${job.operationMode}","${safeExtId}",${safeCsvCol},${safeSfField},"${relation}"\n`;
+      });
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.download = `${this.targetCrmId.toUpperCase()}_Mapping_Receipt_${dateStr}.csv`;
+
+    link.click();
+    window.URL.revokeObjectURL(url);
+
+    this.toastr.info('Mapping receipt downloaded. Keep this for your audit records!', 'Receipt Generated');
+  }
+
   // --- UPGRADED: Sequential Batch Processing ---
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
-    if (this.batchSize > 200) this.batchSize = 200;
-    if (this.batchSize < 10) this.batchSize = 10;
-
+    
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
@@ -878,7 +1252,6 @@ export class DefaultComponent implements OnInit {
       });
     }
 
-    const estimatedBatches = Math.ceil(totalRows / this.batchSize);
     const isDeleteOnly = this.isDeleteOnlyBatch;
     const hasDelete = this.hasDeleteInBatch;
 
@@ -895,8 +1268,8 @@ export class DefaultComponent implements OnInit {
       : 'btn btn-primary btn-lg rounded-pill shadow px-4 mx-2 fw-bold';
 
     const warningText = isDeleteOnly
-      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the Salesforce Recycle Bin.</p>'
-      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked to prevent API timeouts.</p>';
+      ? '<p class="text-danger fw-bold small mt-3 mb-0"><i class="feather icon-alert-triangle me-1"></i> WARNING: Deleted records will be moved to the CRM Recycle Bin.</p>'
+      : '<p class="text-muted small mt-3 mb-0"><i class="feather icon-shield text-success me-1"></i> Data will be safely chunked by the server to prevent API timeouts.</p>';
 
     Swal.fire({
       title: popupTitle,
@@ -906,30 +1279,17 @@ export class DefaultComponent implements OnInit {
             <span class="text-muted fw-bold small text-uppercase tracking-wide">Total Records</span>
             <span class="fs-4 fw-bold text-dark">${totalRows.toLocaleString()}</span>
           </div>
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <span class="text-muted fw-bold small text-uppercase tracking-wide">Target Objects</span>
-            <span class="fs-5 fw-bold text-primary bg-primary-subtle px-3 py-1 rounded-pill">${this.migrationQueue.length}</span>
-          </div>
-          <hr class="border-secondary-subtle my-2">
           <div class="d-flex justify-content-between align-items-center pt-2">
             <span class="text-muted fw-bold small text-uppercase tracking-wide">Execution Plan</span>
             <span class="badge bg-dark text-white px-3 py-2 rounded-pill shadow-sm">
-              <i class="feather icon-layers me-1"></i> ~${estimatedBatches} Batches of ${this.batchSize.toLocaleString()}
+              <i class="feather icon-layers me-1"></i> Server Managed
             </span>
           </div>
         </div>
         ${warningText}
       `,
       icon: 'question',
-      iconColor: '#0d6efd',
-      backdrop: `
-        rgba(0, 0, 0, 0.4)
-        backdrop-filter: blur(8px)
-        left top
-        no-repeat
-      `,
       showCancelButton: true,
-      buttonsStyling: false,
       confirmButtonText: confirmBtnText,
       cancelButtonText: 'Review Again',
       customClass: {
@@ -938,125 +1298,119 @@ export class DefaultComponent implements OnInit {
         confirmButton: confirmBtnClass,
         cancelButton: 'btn btn-white btn-lg rounded-pill shadow-sm px-4 mx-2 border text-muted fw-bold'
       }
-    }).then(async (result) => {
+    }).then((result) => {
       if (result.isConfirmed) {
         
         this.isMigrating = true;
         this.completedJobsCount = 0;
-        this.activeJobStatus = `Initializing sequence for ${this.migrationQueue.length} objects...`;
+        this.activeJobStatus = `Initializing live connection to server...`;
         this.cdr.detectChanges();
 
-        let totalSuccess = 0;
-        let totalFailed = 0;
-        let allFailures: any[] = [];
-        let allSuccesses: any[] = [];
+        this.authService.refreshToken().subscribe({
+          next: () => {
+            const baseUrl = 'http://localhost:8000'; 
+            const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
+            const ws = new WebSocket(wsUrl);
 
-try {
-  // Process objects sequentially
-  for (let i = 0; i < this.migrationQueue.length; i++) {
-    const job = this.migrationQueue[i];
-    
-    this.activeJobStatus = `Preparing ${job.targetObject}...`;
-    this.cdr.detectChanges();
+        ws.onopen = () => {
+          this.activeJobStatus = `Connection established. Preparing payload...`;
+          this.cdr.detectChanges();
 
-    const worksheet = this.workbook!.Sheets[job.sheetName];
-    const rawData: any[] = utils.sheet_to_json(worksheet);
-    const relationalMapping = job.mappings.find((m) => m.type === 'reference' && m.relationalExtIdField !== '');
+          const token = localStorage.getItem('supabase_token') || '';
 
-    // Sort if relational mapping exists
-    if (relationalMapping) {
-      const parentCsvColumn = relationalMapping.csvField;
-      rawData.sort((a, b) => {
-        const valA = String(a[parentCsvColumn] || '');
-        const valB = String(b[parentCsvColumn] || '');
-        return valA.localeCompare(valB);
-      });
-    }
+          const payload = {
+            authToken: token,
+            queue: this.migrationQueue.map(job => {
+                let parsedSourceRecords = undefined;
 
-    // --- NEW: Frontend Chunking Logic ---
-    const totalRecords = rawData.length;
-    const totalBatches = Math.ceil(totalRecords / this.batchSize);
+                if (this.sourceCrmId === 'csv' && this.workbook) {
+                    const worksheet = this.workbook.Sheets[job.sheetName];
+                    parsedSourceRecords = utils.sheet_to_json(worksheet);
+                }
 
-    // Loop through each batch for this specific object
-    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-  const startRecord = batchIndex * this.batchSize;
-  const endRecord = startRecord + this.batchSize;
-  const batchRecords = rawData.slice(startRecord, endRecord);
+                return {
+                    ...job,
+                    sourceCrmId: this.sourceCrmId, 
+                    targetCrmId: this.targetCrmId, 
+                    batchSize: this.batchSize,
+                    externalIdField: job.targetExtIdField,
+                    sourceRecords: parsedSourceRecords
+                };
+            })
+          };
 
-  // 1. SHOW PROCESSING STATUS
-  this.activeJobStatus = `Processing ${job.targetObject} - Batch ${batchIndex + 1} of ${totalBatches}...`;
-  this.cdr.detectChanges();
+          ws.send(JSON.stringify(payload));
+        };
 
-  const singleBatchPayload = [{
-    targetObject: job.targetObject,
-    records: batchRecords, 
-    mappings: job.mappings,
-    targetExtIdField: job.targetExtIdField,
-    operationMode: job.operationMode,
-    batchSize: this.batchSize 
-  }];
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          
+          this.activeJobStatus = data.log;
+          
+          if (data.log.includes('Completed:')) {
+            this.completedJobsCount++;
+          }
+          
+          this.cdr.detectChanges();
 
-     const response: any = await firstValueFrom(this.migrationService.migrateData(singleBatchPayload));
+          if (data.status === 'Finished' || data.status === 'Failed') {
+              this.isMigrating = false;
+              
+              if (data.successData || data.errorData) {
+                  this.successfulRecords = data.successData || [];
+                  this.failedRecords = data.errorData || [];
+                  this.migrationSummary = { 
+                      success: this.successfulRecords.length, 
+                      failed: this.failedRecords.length 
+                  };
+              }
 
-  // 2. SHOW COMPLETED STATUS
-  this.activeJobStatus = ` Batch ${batchIndex + 1} Completed!`;
-  this.cdr.detectChanges();
-  
-  // 3. ADD A TINY PAUSE (600 milliseconds) SO YOU CAN READ THE TEXT
-  await new Promise(resolve => setTimeout(resolve, 600));
+              if (data.status === 'Finished') {
+                  this.toastr.success('Migration sequence complete.', 'Done');
+              } else {
+                  this.toastr.error('Migration encountered a fatal error. Check logs.', 'Failed');
+              }
 
-  // Tally up the results
-  totalSuccess += response.stats?.success || 0;
-  totalFailed += response.stats?.failed || 0;
-  if (response.failures) allFailures = allFailures.concat(response.failures);
-  if (response.successfulRecords) allSuccesses = allSuccesses.concat(response.successfulRecords);
-}
-    // --- End Frontend Chunking ---
+              this.currentStep = 5;
+              this.autoNavigate();
+              this.cdr.detectChanges();
+              
+              ws.close();
+          }
+        };
 
-    this.completedJobsCount++;
-    this.activeJobStatus = `Completed: ${job.targetObject}`;
-    this.cdr.detectChanges();
-    
-    // Brief visual pause before the next job starts
-    await new Promise(resolve => setTimeout(resolve, 800));
-  }
+        ws.onerror = (error) => {
+          this.isMigrating = false;
+          this.toastr.error('Lost connection to the migration server.', 'Network Error');
+          this.activeJobStatus = 'Connection Error';
+          this.cdr.detectChanges();
+        };
 
-  // All Jobs Finished (Keep your existing finish logic here)
-  this.isMigrating = false;
-  this.migrationSummary = { success: totalSuccess, failed: totalFailed };
-  this.failedRecords = allFailures;
-  this.successfulRecords = allSuccesses;
-
-  const msg = `Successfully processed ${totalSuccess} records. Failed: ${totalFailed}`;
-
-  if (totalSuccess > 0 && totalFailed === 0) {
-    this.toastr.success(msg, 'Migration Complete!');
-  } else if (totalSuccess > 0 && totalFailed > 0) {
-    this.toastr.warning(msg, 'Partial Migration');
-  } else {
-    this.toastr.error(`${msg}. Please review the error log.`, 'Migration Failed');
-  }
-
-  this.currentStep = 5;
-  this.autoNavigate();
-  this.cdr.detectChanges();
-
-} catch (error: any) {
-  this.isMigrating = false;
-  const errMsg = error.error?.message || error.message || 'Check console for details';
-  this.toastr.error(errMsg, 'Server Error');
-  this.cdr.detectChanges();
-}
+        ws.onclose = (event) => {
+          if (this.isMigrating) {
+             this.isMigrating = false;
+             this.toastr.warning('The server closed the connection unexpectedly.', 'Disconnected');
+             this.cdr.detectChanges();
+          }
+        };
+      },
+      error: () => {
+            this.isMigrating = false;
+            this.toastr.error('Authentication expired. Please log in again.');
+            this.router.navigate(['/login']);
+          }
+        });
       }
+
     });
   }
 
   showMigrationInstructions() {
     Swal.fire({
-      title: '<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>',
+      title: `<strong class="text-primary"><i class="feather icon-book-open me-2"></i>Complete Migration Guide</strong>`,
       html: `
         <div class="text-start fs-6 text-muted mt-2">
-          <p class="mb-2">Please review these critical guidelines to ensure a successful Salesforce migration. <strong>Scroll to read all points.</strong></p>
+          <p class="mb-2">Please review these critical guidelines to ensure a successful ${this.targetCrmId.toUpperCase()} migration. <strong>Scroll to read all points.</strong></p>
           
           <div style="max-height: 45vh; overflow-y: auto; overflow-x: hidden; padding-right: 10px;" class="mb-3 border rounded shadow-sm bg-light">
             <ul class="list-group list-group-flush">
@@ -1073,22 +1427,22 @@ try {
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-list text-info me-2"></i>
-                <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in Salesforce (they are case-sensitive).
+                <strong>3. Picklist Values:</strong> Your CSV values must exactly match the active picklist values in ${this.targetCrmId.toUpperCase()} (they are case-sensitive).
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-calendar text-danger me-2"></i>
-                <strong>4. Date & Time Formats:</strong> Salesforce prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
+                <strong>4. Date & Time Formats:</strong> ${this.targetCrmId.toUpperCase()} prefers standard ISO formats (e.g., <code>YYYY-MM-DD</code>). Ensure Excel hasn't auto-formatted your dates incorrectly.
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-key text-success me-2"></i>
-                <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or Salesforce ID column to prevent duplicate records.
+                <strong>5. Upsert Keys:</strong> If updating or upserting, you must map an External ID or ${this.targetCrmId.toUpperCase()} ID column to prevent duplicate records.
               </li>
               
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-alert-circle text-warning me-2"></i>
-                <strong>6. Required Fields:</strong> Check Salesforce to ensure you are mapping all universally required fields for your target object.
+                <strong>6. Required Fields:</strong> Check ${this.targetCrmId.toUpperCase()} to ensure you are mapping all universally required fields for your target object.
               </li>
               
               <li class="list-group-item bg-white py-3">
@@ -1112,7 +1466,7 @@ try {
 
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-users text-info me-2"></i>
-                <strong>10. Record Ownership:</strong> Want someone else to own these records? Ensure you map the <code>OwnerId</code> column with the correct Salesforce User IDs. If left blank, you will own all migrated records.
+                <strong>10. Record Ownership:</strong> Want someone else to own these records? Ensure you map the <code>OwnerId</code> column with the correct User IDs. If left blank, you will own all migrated records.
               </li>
 
               <li class="list-group-item bg-white py-3">
@@ -1122,7 +1476,7 @@ try {
 
               <li class="list-group-item bg-white py-3">
                 <i class="feather icon-map-pin text-danger me-2"></i>
-                <strong>12. State & Country Picklists:</strong> If your Salesforce org has State and Country Picklists enabled, your CSV data must perfectly match the configured Integration Values or ISO Codes, or the rows will fail.
+                <strong>12. State & Country Picklists:</strong> If your ${this.targetCrmId.toUpperCase()} org has State and Country Picklists enabled, your CSV data must perfectly match the configured Integration Values or ISO Codes, or the rows will fail.
               </li>
 
               <li class="list-group-item bg-white py-3">
@@ -1213,8 +1567,7 @@ try {
     this.previewData = [];
     this.previewHeaders = [];
     this.previewingItemIndex = null;
-    
-    // reset real time vars
+
     this.activeJobStatus = '';
     this.completedJobsCount = 0;
 
@@ -1232,7 +1585,7 @@ try {
         const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
 
         if (!isParentInQueue) {
-          return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in Salesforce, or add a ${parentName} sheet to your queue.`;
+          return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in your Target CRM, or add a ${parentName} sheet to your queue.`;
         }
       }
     }
@@ -1255,9 +1608,10 @@ try {
   }
 
   overrideGoToReview() {
+
     if (this.operationMode === 'upsert') {
       if (this.hasOrderingIssue()) {
-        this.toastr.error('Please reorder the queue: Parents (like Accounts) must be above Children.', 'Sequence Error');
+        this.toastr.error('Complex circular dependency detected. Please check your external IDs.', 'Sequence Error');
         return;
       }
     }

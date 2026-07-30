@@ -1,0 +1,10 @@
+# Python cache
+*.py[cod]
+*$py.class
+.pyc
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+SureShift_staging_databases/

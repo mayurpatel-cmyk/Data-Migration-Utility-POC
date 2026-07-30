@@ -53,7 +53,7 @@ export class BreadcrumbComponent {
         
         // 3. Update the list and safely trigger change detection
         this.navigationList = breadcrumbList.splice(-2);
-        this.titleService.setTitle(title + ' | Data Migration Utility - POC');
+        this.titleService.setTitle(title + ' | SureShift');
         
         this.cdr.detectChanges(); // Tell Angular the breadcrumb data has updated
       }

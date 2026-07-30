@@ -5,6 +5,7 @@ import { AppRoutingModule } from './app/app-routing.module';
 import { AppComponent } from './app/app.component';
 import { provideToastr } from 'ngx-toastr';
 import { provideHttpClient } from '@angular/common/http';
+import { provideMonacoEditor } from 'ngx-monaco-editor-v2';
 
 if (environment.production) {
   enableProdMode();
@@ -21,6 +22,9 @@ bootstrapApplication(AppComponent, {
       timeOut: 3000,
       positionClass: 'toast-top-right',
       preventDuplicates: true,
-    })
+    }),
+    provideMonacoEditor({
+      baseUrl: '/assets/monaco/vs' // Explicitly tell it where to look!
+    }),
   ]
 }).catch((err) => console.error(err));

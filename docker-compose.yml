@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  angular-frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "80:80"
+    networks:
+      - migration-net
+
+  node-backend:
+    build: ./backend-node
+    environment:
+      - NODE_ENV=production
+      - SF_CONSUMER_KEY=${SF_CONSUMER_KEY}
+      - SF_CONSUMER_SECRET=${SF_CONSUMER_SECRET}
+      # Point to the internal Docker Python service
+      - PYTHON_SERVICE_URL=http://python-engine:8000 
+    networks:
+      - migration-net
+
+  python-engine:
+    build: ./backend-python
+    environment:
+      - FASTAPI_ENV=production
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    networks:
+      - migration-net
+
+networks:
+  migration-net:
+    driver: bridge

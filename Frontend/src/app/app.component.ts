@@ -13,7 +13,7 @@ import { AuthService } from '../app/demo/Services/auth.service';
   imports: [RouterOutlet, SpinnerComponent]
 })
 export class AppComponent {
-  title = 'Data Migration Utility-POC';
+  title = 'SureShift';
   public authService = inject(AuthService);
   onLogout() {
     this.authService.logout();
