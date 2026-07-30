@@ -673,6 +673,25 @@
               </div>
             </div>
           </div>
+
+          @if (isSalesforceToSalesforce) {
+          <div class="d-flex flex-wrap gap-3 mt-2 pt-2 border-top border-primary-subtle">
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="checkbox" id="migrateAttachmentsCheck"
+                [(ngModel)]="migrateAttachments">
+              <label class="form-check-label fw-bold cursor-pointer small" for="migrateAttachmentsCheck">
+                <i class="feather icon-paperclip me-1"></i> Migrate Attachments (legacy)
+              </label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="checkbox" id="migrateFilesCheck"
+                [(ngModel)]="migrateFiles">
+              <label class="form-check-label fw-bold cursor-pointer small" for="migrateFilesCheck">
+                <i class="feather icon-file me-1"></i> Migrate Files
+              </label>
+            </div>
+          </div>
+          }
         </div>
 
 

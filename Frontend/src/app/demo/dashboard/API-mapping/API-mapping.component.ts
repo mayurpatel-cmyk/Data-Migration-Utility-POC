@@ -144,6 +144,14 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   batchSize: number = 5000;
   migrationQueue: any[] = [];
 
+  // Files & Attachments (Salesforce -> Salesforce only, for now)
+  migrateAttachments = false;
+  migrateFiles = false;
+
+  get isSalesforceToSalesforce(): boolean {
+    return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
+  }
+
   recentQueries: string[] = [];
   // --- MONACO EDITOR CONFIGURATION ---
   editorOptions = {
@@ -2121,6 +2129,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
+      migrateAttachments: this.isSalesforceToSalesforce ? this.migrateAttachments : false,
+      migrateFiles: this.isSalesforceToSalesforce ? this.migrateFiles : false,
 
       authToken: localStorage.getItem('supabase_token') || ''
     };

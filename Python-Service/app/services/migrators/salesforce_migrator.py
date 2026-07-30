@@ -17,6 +17,10 @@ class SalesforceMigrator:
         sf_instance = creds.get("instance_url", "").rstrip('/')
         
         headers_list = [m["sourceField"] if "sourceField" in m else m["csvField"] for m in mappings if m.get("sourceField") or m.get("csvField")]
+        if "Id" not in headers_list:
+            # Always pull Id -- needed downstream to map old records to their
+            # newly-created target Ids (e.g. for the file/attachment migration pass)
+            headers_list.append("Id")
         fields_str = ", ".join(headers_list) if headers_list else "Id"
         
         clean_query = (query or "").strip()

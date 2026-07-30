@@ -14,6 +14,7 @@ from app.services.migrators.salesforce_migrator import SalesforceMigrator
 from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
 from app.services.migrators.hubspot_migrator import HubspotMigrator
+from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
 from app.services.payload_builder import PayloadBuilderService  
 from app.services.audit_service import AuditService 
 
@@ -36,6 +37,9 @@ MIGRATORS = {
     "zendesk": ZendeskMigrator(),
     "hubspot": HubspotMigrator()
 }
+
+# Files/Attachments migration is Salesforce -> Salesforce only for now
+FILE_MIGRATOR = SalesforceFileMigrator()
 
 def get_db_path(session_id: str):
     parts = session_id.split('_')
@@ -137,6 +141,14 @@ async def websocket_migration(websocket: WebSocket):
                 op_mode = job.get("operationMode", "insert")
                 batch_size = int(job.get("batchSize", 5000))
                 ext_id_field = job.get("externalIdField") or job.get("targetExtIdField", "")
+                migrate_attachments = job.get("migrateAttachments", False)
+                migrate_files = job.get("migrateFiles", False)
+                if migrate_attachments or migrate_files:
+                    await send_log(
+                        f"[{target_object}] File/attachment migration requested "
+                        f"(Attachments={migrate_attachments}, Files={migrate_files}, "
+                        f"source={source_crm}, target={target_crm})."
+                    )
                 
                 if not mappings: continue
                 source_records = []
@@ -170,6 +182,7 @@ async def websocket_migration(websocket: WebSocket):
                     all_success_data.extend(succ)
                     all_error_data.extend(err)
 
+                job_success_start_idx = len(all_success_data)
                 has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
                 
                 if job.get("isPass3Patch", False):
@@ -186,6 +199,43 @@ async def websocket_migration(websocket: WebSocket):
                 else:
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
                     await execute_upload(p_load, op_mode, "Standard Sync")
+
+                # ==========================================
+                # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
+                # Runs once per job, right after that job's own records have
+                # synced, using only the old_id -> new_id pairs THIS job produced.
+                # ==========================================
+                if migrate_attachments or migrate_files:
+                    if job.get("isPass3Patch", False):
+                        await send_log(f"[{target_object}] File migration skipped for this pass (reference patch pass, not the primary sync).")
+                    elif source_crm != "salesforce" or target_crm != "salesforce":
+                        await send_log(f"[{target_object}] File migration skipped: only Salesforce -> Salesforce is supported right now (got {source_crm} -> {target_crm}).")
+                    else:
+                        job_success_records = all_success_data[job_success_start_idx:]
+                        await send_log(f"[{target_object}] {len(job_success_records)} record(s) synced this pass, checking for Id/Target_Id to build the file map...")
+
+                        id_map = {
+                            rec["Id"]: rec["Target_Id"]
+                            for rec in job_success_records
+                            if rec.get("Id") and rec.get("Target_Id")
+                        }
+
+                        if not id_map:
+                            await send_log(
+                                f"[{target_object}] File migration skipped: no source Id was found on synced records. "
+                                f"Sample record keys: {list(job_success_records[0].keys()) if job_success_records else 'N/A'}"
+                            )
+                        else:
+                            await send_log(f"[{target_object}] Starting file/attachment migration for {len(id_map)} synced record(s)...")
+                            file_results = await FILE_MIGRATOR.migrate_files_for_batch(
+                                client, source_creds, target_creds, user_id, id_map,
+                                migrate_attachments, migrate_files, send_log
+                            )
+                            await send_log(
+                                f"[{target_object}] Files complete — "
+                                f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
+                                f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
+                            )
 
             await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
             
