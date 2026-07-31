@@ -77,7 +77,7 @@ class SalesforceMigrator:
     # UPLOAD (Push to Salesforce)
     # ==========================================
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
         
         target_object = options["targetObject"]
         target_ext_id_field = options["targetExtIdField"]
@@ -87,15 +87,25 @@ class SalesforceMigrator:
         source_records = options["sourceRecords"]
         user_id = options["userId"]
 
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
 
         await send_log(f"[{target_object}] {pass_name}: Initializing {op_mode.upper()} to Salesforce...")
         sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
         bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
 
-        job_config = {"operation": op_mode, "object": target_object, "contentType": "JSON"}
-        if op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
+        # --- FIX: Salesforce Bulk API has NO native "update only, matched by an
+        # external ID, skip if no match" operation. A plain "update" job only ever
+        # matches on the standard Id field and ignores/rejects externalIdFieldName,
+        # so every row in a true "update" op_mode job used to fail outright.
+        # We now run it on the wire as an "upsert" (the only op that can match on
+        # target_ext_id_field), then police the "don't create new records" promise
+        # ourselves below using the "created" flag Salesforce returns per row.
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        job_config = {"operation": wire_op_mode, "object": target_object, "contentType": "JSON"}
+        if wire_op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
 
         job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
         
@@ -107,8 +117,16 @@ class SalesforceMigrator:
             job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
 
         if job_res.status_code != 201:
-            await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
-            return 0, len(payload), [], [r for r in source_records]
+            error_text = job_res.text
+            if wire_op_mode == "upsert" and "does not match an External ID" in error_text:
+                await send_log(
+                    f"[{target_object}] Salesforce Job Failed: '{target_ext_id_field}' is not marked as an "
+                    f"External ID, Salesforce Id, or indexed/lookup field on {target_object} in Salesforce. "
+                    f"Mark it as an External ID field in Salesforce Setup, or choose a different field for matching."
+                )
+            else:
+                await send_log(f"[{target_object}] Salesforce Job Failed: {error_text}")
+            return 0, len(payload), 0, [], [r for r in source_records], []
             
         job_id = job_res.json().get("id")
         chunks = list(chunk_dataset(payload, batch_size))
@@ -136,6 +154,8 @@ class SalesforceMigrator:
                 break
             poll_delay = min(poll_delay * 1.5, 4.0)
 
+        ids_to_revert = []  # records Salesforce inserted that "update" mode must not keep
+
         for i, b_id in enumerate(batch_ids):
             res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
             results = res.json()
@@ -145,6 +165,19 @@ class SalesforceMigrator:
                 orig_record = source_records[row_data["originalIndex"]]
                 
                 if sf_result.get("success"):
+                    # --- FIX: "update" mode must skip (not create) unmatched records.
+                    # Since we ran this as a real upsert on the wire, Salesforce will
+                    # happily insert rows with no external-id match. Catch that here.
+                    if is_update_only and sf_result.get("created"):
+                        orig_record["Target_SkipReason"] = (
+                            f"[{target_ext_id_field}] No matching record found in Salesforce. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        ids_to_revert.append(sf_result.get("id"))
+                        continue
+
                     orig_record["Target_Id"] = sf_result.get("id")
                     all_success_data.append(orig_record)
                     total_success += 1
@@ -161,5 +194,37 @@ class SalesforceMigrator:
                     orig_record["Target_Error"] = err_msg
                     all_error_data.append(orig_record)
                     total_error += 1
-                    
-        return total_success, total_error, all_success_data, all_error_data
+
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Salesforce auto-created for them..."
+            )
+            await self._delete_records(client, sf_instance, sf_headers, bulk_base_url, target_object, ids_to_revert, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, sf_instance, sf_headers, bulk_base_url, target_object, record_ids, send_log):
+        """Runs a small Bulk API delete job to undo records that 'update' mode
+        should never have created in the first place."""
+        try:
+            job_res = await client.post(
+                f"{bulk_base_url}/job",
+                json={"operation": "delete", "object": target_object, "contentType": "JSON"},
+                headers=sf_headers
+            )
+            if job_res.status_code != 201:
+                await send_log(f"[{target_object}] Revert Failed: could not open delete job: {job_res.text}")
+                return
+
+            job_id = job_res.json().get("id")
+            delete_rows = [{"Id": rid} for rid in record_ids if rid]
+
+            for chunk in chunk_dataset(delete_rows, 5000):
+                b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=chunk, headers=sf_headers)
+                if b_res.status_code != 201:
+                    await send_log(f"[{target_object}] Revert batch failed: {b_res.text}")
+
+            await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
+        except Exception as e:
+            await send_log(f"[{target_object}] Revert Failed: {str(e)}")

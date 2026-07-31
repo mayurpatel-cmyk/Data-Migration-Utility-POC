@@ -20,6 +20,9 @@ interface FieldMeta {
   isRequired?: boolean;
   referenceTo?: string[];
   relationshipName?: string;
+  externalId?: boolean;
+  unique?: boolean;
+  idLookup?: boolean;
 }
 
 interface MappingRow {
@@ -127,6 +130,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   successData: any[] = [];
   isQueueMinimized: boolean = false;
   errorData: any[] = [];
+  skippedData: any[] = []; // Records "update" mode intentionally skipped (no matching record found)
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
   validationResults: any = null;
   isValidating = false;
@@ -777,6 +781,22 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     if (!fieldName) return '';
     const field = this.targetFields.find((f) => f.name === fieldName);
     return field ? `${field.label} (${field.name})` : fieldName;
+  }
+
+  // Salesforce Bulk API's externalIdFieldName only accepts the standard "Id"
+  // field or a custom field explicitly marked "External ID" (or "Is Lookup" /
+  // idLookup) in Setup. Fields that are merely mapped/mirrored -- like
+  // Person Account "__pc" fields -- or just "Unique" without "External ID"
+  // are rejected by Salesforce at job-creation time with an InvalidJob error.
+  // Filtering the picker to this list prevents that failure up front instead
+  // of discovering it after a full extraction + job-creation round trip.
+  isExternalIdEligible(field: FieldMeta): boolean {
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup;
+  }
+
+  getExternalIdEligibleFields(): FieldMeta[] {
+    if (!this.targetFields) return [];
+    return this.targetFields.filter((f) => this.isExternalIdEligible(f));
   }
 
   toggleSourceDropdown(event: Event) {
@@ -1689,6 +1709,20 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     if (
       (this.operationMode === 'update' || this.operationMode === 'upsert') &&
       this.externalIdField &&
+      !this.isExternalIdEligible(this.targetFields.find((f) => f.name === this.externalIdField) || { name: '', label: '' })
+    ) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(
+        `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID (or indexed/lookup) field in ${this.targetSystem}, ` +
+        `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
+        'Field Not Usable for Matching'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
       !this.mappings.some((m) => m.targetField === this.externalIdField)
     ) {
       this.jobStatus = 'Validation Failed';
@@ -2046,6 +2080,20 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     if (
       (this.operationMode === 'update' || this.operationMode === 'upsert') &&
       this.externalIdField &&
+      !this.isExternalIdEligible(this.targetFields.find((f) => f.name === this.externalIdField) || { name: '', label: '' })
+    ) {
+      this.jobStatus = 'Failed';
+      this.toastr.error(
+        `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID (or indexed/lookup) field in ${this.targetSystem}, ` +
+        `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
+        'Field Not Usable for Matching'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
       !activeMappings.some((m) => m.targetField === this.externalIdField)
     ) {
       this.jobStatus = 'Failed';
@@ -2137,6 +2185,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
     this.errorData = [];
+    this.skippedData = [];
     this.jobStatus = 'Initializing...';
     this.logMessages = [];
     this.isGlobalLoading = true;
@@ -2223,16 +2272,22 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
             this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
             const errorCount = data.errorData ? data.errorData.length : 0;
+            const skippedCount = data.skippedData ? data.skippedData.length : 0;
 
             let swalIcon: 'success' | 'warning' | 'error' = 'success';
             let swalTitle = 'Migration Complete!';
 
+            // Skipped records (Update mode intentionally not creating new records)
+            // are expected behavior, not failures -- they never trigger the
+            // warning/error icon on their own.
             if (errorCount > 0 && successCount > 0) {
               swalIcon = 'warning';
               swalTitle = 'Migration Finished with Errors';
             } else if (errorCount > 0 && successCount === 0) {
               swalIcon = 'error';
               swalTitle = 'Migration Failed';
+            } else if (skippedCount > 0) {
+              swalTitle = 'Migration Complete (Some Records Skipped)';
             }
 
             Swal.fire({
@@ -2244,12 +2299,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
                       <h2 class="text-success mb-0 fw-bold">${successCount}</h2>
                       <span class="small fw-bold text-success-emphasis text-uppercase">Successful</span>
                     </div>
+                    ${skippedCount > 0 ? `
+                    <div class="p-3 border rounded border-warning-subtle bg-warning-subtle w-100 shadow-sm">
+                      <h2 class="text-warning-emphasis mb-0 fw-bold">${skippedCount}</h2>
+                      <span class="small fw-bold text-warning-emphasis text-uppercase">Skipped (No Match)</span>
+                    </div>` : ''}
                     <div class="p-3 border rounded border-danger-subtle bg-danger-subtle w-100 shadow-sm">
                       <h2 class="text-danger mb-0 fw-bold">${errorCount}</h2>
                       <span class="small fw-bold text-danger-emphasis text-uppercase">Rejected</span>
                     </div>
                   </div>
-                  <p class="text-muted small mb-0">Check the terminal logs or download the error reports to review rejected records.</p>
+                  <p class="text-muted small mb-0">Check the terminal logs or download the reports below to review the details.</p>
                 </div>
               `,
               icon: swalIcon,
@@ -2262,6 +2322,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
         if (data.successData) this.successData = data.successData;
         if (data.errorData) this.errorData = data.errorData;
+        if (data.skippedData) this.skippedData = data.skippedData;
 
         this.cdr.detectChanges();
         setTimeout(() => {

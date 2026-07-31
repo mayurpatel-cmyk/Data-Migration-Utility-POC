@@ -676,10 +676,16 @@
                 </span>
                 <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
                   <option value="" selected>-- Select Field --</option>
-                  @for (field of targetFields; track field.name) {
+                  @for (field of (operationMode === 'insert' ? targetFields : getExternalIdEligibleFields()); track field.name) {
                   <option [value]="field.name">{{ field.label }}</option>
                   }
                 </select>
+                @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
+                <div class="small text-danger mt-1">
+                  No fields on {{ selectedTargetObject }} are marked External ID or ID Lookup in {{ targetSystem }}.
+                  Mark one in {{ targetSystem }} Setup before running {{ operationMode.toUpperCase() }}.
+                </div>
+                }
               </div>
             </div>
             }
@@ -1259,6 +1265,14 @@
                 style="font-size: 0.7rem; padding: 2px 8px;"
                 (click)="downloadCSV(successData, 'migration_success_log.csv')">
                 <i class="feather icon-download"></i> Success ({{ successData.length }})
+              </button>
+              }
+
+              @if (skippedData?.length > 0) {
+              <button class="btn btn-xs btn-outline-warning d-flex align-items-center gap-1 btn-hover-lift"
+                style="font-size: 0.7rem; padding: 2px 8px;"
+                (click)="downloadCSV(skippedData, 'migration_skipped_log.csv')">
+                <i class="feather icon-skip-forward"></i> Skipped ({{ skippedData.length }})
               </button>
               }
 

@@ -131,7 +131,7 @@ async def websocket_migration(websocket: WebSocket):
         execution_queue = sort_jobs_by_dependency(raw_queue)
 
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
-            all_success_data, all_error_data = [], []
+            all_success_data, all_error_data, all_skipped_data = [], [], []
 
             for job in execution_queue:
                 target_object = job.get("targetObject")
@@ -178,9 +178,22 @@ async def websocket_migration(websocket: WebSocket):
 
                 async def execute_upload(payload_data, current_op, pass_name):
                     options_pass = dict(options_base)
-                    _, _, succ, err = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
+                    result = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
+
+                    # SalesforceMigrator.upload() now returns a 6-tuple (adds a
+                    # "skipped" bucket for Update-mode records with no match).
+                    # Other CRM migrators haven't been updated yet and still
+                    # return the original 4-tuple -- support both here so this
+                    # stays working regardless of which target_migrator is active.
+                    if len(result) == 6:
+                        _, _, _, succ, err, skipped = result
+                    else:
+                        _, _, succ, err = result
+                        skipped = []
+
                     all_success_data.extend(succ)
                     all_error_data.extend(err)
+                    all_skipped_data.extend(skipped)
 
                 job_success_start_idx = len(all_success_data)
                 has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
@@ -282,6 +295,34 @@ async def websocket_migration(websocket: WebSocket):
                     "error": error_msg
                 })
                 #  Generate PDF, CSVs, and Save History ---
+
+            # --- FIX: sanitize "Update mode skipped this (no match found)" records
+            # the same way as errors, so the frontend's Skipped download button
+            # gets clean, flattened rows instead of raw Python objects.
+            formatted_skipped = []
+            for rec in all_skipped_data:
+                if not isinstance(rec, dict):
+                    rec = {"Raw_Data": str(rec), "Target_SkipReason": "Unknown skip reason."}
+
+                skip_reason = rec.get("Target_SkipReason", "Skipped: no matching record found.")
+
+                safe_record = {}
+                for k, v in rec.items():
+                    if k == "Target_SkipReason":
+                        continue
+
+                    if isinstance(v, float) and math.isnan(v):
+                        safe_record[k] = None
+                    elif hasattr(v, "isoformat"):
+                        safe_record[k] = v.isoformat()
+                    else:
+                        safe_record[k] = str(v) if v is not None else ""
+
+                formatted_skipped.append({
+                    "record": safe_record,
+                    "reason": skip_reason
+                })
+
         # Generate PDF, CSVs, and Save History ---
         report_urls = {}
         try:
@@ -303,10 +344,13 @@ async def websocket_migration(websocket: WebSocket):
         
         await websocket.send_json({
             "status": "Finished",
-            "log": f"Migration completed! {len(safe_success_data)} records successful, {len(formatted_errors)} failed.",
+            "log": f"Migration completed! {len(safe_success_data)} records successful, "
+                   f"{len(formatted_skipped)} skipped (no match), {len(formatted_errors)} failed.",
             "successData": safe_success_data,
             "errorData": formatted_errors,
+            "skippedData": formatted_skipped,
             "reportUrls": report_urls  # Send the PDF URLs back to the frontend
+
         })
         
         await websocket.close()
