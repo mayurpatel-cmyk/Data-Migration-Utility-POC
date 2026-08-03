@@ -2029,8 +2029,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
         const stringVal = String(val !== undefined && val !== null ? val : '');
 
-        // FIX: The Invisible Excel Text Hack!
-        // Adding a tab character (\t) forces Excel to read the ID as text without showing ugly formulas.
         if (/^\d{16,}$/.test(stringVal)) {
           return `"\t${stringVal}"`;
         }
@@ -2054,14 +2052,13 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     document.body.removeChild(a);
   }
 
-  runMigration() {
+   runMigration() {
+    // 1. Preliminary UI Checks (Immediate feedback)
     if (this.hasPendingEdits) {
       this.toastr.warning(
         'You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.',
         'Action Required'
       );
-
-      // Flash the Re-Validate button to draw the user's attention
       const revalBtn = document.querySelector('.btn-danger.fw-bold') as HTMLElement;
       if (revalBtn) {
         revalBtn.classList.add('animate__animated', 'animate__headShake');
@@ -2069,114 +2066,120 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       }
       return;
     }
-    if (this.customQuery && !this.validateQuery()) {
-      this.jobStatus = 'Validation Failed';
-      this.toastr.error('Please fix your query criteria before running.', 'Query Error');
+
+    // 2. Fetch validation state (Hard errors vs Soft warnings)
+    const { errors, warnings } = this.getValidationIssues();
+
+    // Handle Hard Errors immediately
+    if (errors.length > 0) {
+      this.jobStatus = 'Failed';
+      this.toastr.error(errors[0], 'Migration Error'); // Show the primary error encountered
       return;
     }
 
     const activeMappings = this.mappings.filter((m) => m.targetField !== '');
 
-    if (activeMappings.length === 0) {
-      this.jobStatus = 'Failed';
-      this.toastr.warning('Please map at least one field before running the migration.', 'No Mappings');
-      return;
-    }
-
-    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.externalIdField) {
-      this.jobStatus = 'Failed';
-      this.toastr.error(
-        `Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`,
-        'External ID Required'
-      );
-      return;
-    }
-
-    if (
-      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
-      this.externalIdField &&
-      !this.isExternalIdEligible(this.targetFields.find((f) => f.name === this.externalIdField) || { name: '', label: '' })
-    ) {
-      this.jobStatus = 'Failed';
-      this.toastr.error(
-        `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID (or indexed/lookup) field in ${this.targetSystem}, ` +
-        `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
-        'Field Not Usable for Matching'
-      );
-      return;
-    }
-
-    if (
-      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
-      this.externalIdField &&
-      !activeMappings.some((m) => m.targetField === this.externalIdField)
-    ) {
-      this.jobStatus = 'Failed';
-      this.toastr.error(
-        `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would be sent with a blank value and fail to match. Map a source field to it first.`,
-        'External ID Not Mapped'
-      );
-      return;
-    }
-
-    if (!this.selectedSourceObject || !this.selectedTargetObject) {
-      this.jobStatus = 'Failed';
-      this.toastr.error('Source and Target objects must be selected.', 'Missing Setup');
-      return;
-    }
-
-    const missingFields = this.getMissingRequiredFields();
-    const incompleteRefs = this.getIncompleteReferenceMappings();
-
-    if (missingFields.length > 0 || incompleteRefs.length > 0) {
-      let warningHtml = '<div class="text-start mt-2">';
-
-      if (missingFields.length > 0) {
-        warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
-                        <ul class="small mb-3 text-muted"><li>${missingFields.join('</li><li>')}</li></ul>`;
-      }
-
-      if (incompleteRefs.length > 0) {
-        warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
-                        <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (It will default to 'Id'):</p>
-                        <ul class="small mb-0 text-muted"><li>${incompleteRefs.join('</li><li>')}</li></ul>`;
-      }
-      warningHtml += '</div>';
-
-      Swal.fire({
-        title: 'Mapping Warnings',
-        html: warningHtml,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Run Anyway',
-        cancelButtonText: 'Fix Mapping',
-        confirmButtonColor: '#dc3545',
-        customClass: { popup: 'rounded-4 shadow-lg border-0' }
-      }).then((result) => {
-        if (result.isConfirmed) {
-          this.executeMigrationJob(activeMappings);
-        } else {
-          this.jobStatus = 'Idle';
-        }
-      });
+    // 3. Decide whether to show a "Warning" Modal or a "Success Confirmation" Modal
+    if (warnings.missingFields.length > 0 || warnings.incompleteRefs.length > 0) {
+      this.show_warning_modal(warnings);
     } else {
-      // If validation passes perfectly, run it directly
-      Swal.fire({
-        title: 'Ready to Migrate!',
-        text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
-        icon: 'info',
-        showCancelButton: true,
-        confirmButtonColor: '#198754',
-        cancelButtonColor: '#6c757d',
-        confirmButtonText: 'Yes, Run Job!'
-      }).then((result) => {
-        if (result.isConfirmed) {
-          this.executeMigrationJob(activeMappings);
-        } else {
-          this.jobStatus = 'Idle';
-        }
-      });
+      this.show_confirmation_modal(activeMappings);
     }
+  }
+
+  private getValidationIssues() {
+    const errors: string[] = [];
+    const warnings = {
+      missingFields: this.getMissingRequiredFields(), // Returns string[]
+      incompleteRefs: this.getIncompleteReferenceMappings() // Returns string[]
+    };
+
+    // Query Validation (Hard Error)
+    if (this.customQuery && !this.validateQuery()) {
+      errors.push('Please fix your query criteria before running.');
+    }
+
+    // Mapping Count Check
+    const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+    if (activeMappings.length === 0) {
+      errors.push('Please map at least one field before running the migration.');
+    }
+
+    // Update/Upsert Specific Logic
+    const isUpdateMode = this.operationMode === 'update' || this.operationMode === 'upsert';
+    if (isUpdateMode) {
+      if (!this.externalIdField) {
+        errors.push(`Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`);
+      } else {
+        const targetFieldMeta = this.targetFields.find((f) => f.name === this.externalIdField);
+        const isEligible = this.isExternalIdEligible(targetFieldMeta || { name: '', label: '' });
+
+        if (!isEligible) {
+          errors.push(`"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID in ${this.targetSystem}. Mark it in Setup or choose another field.`);
+        } else if (!activeMappings.some((m) => m.targetField === this.externalIdField)) {
+          errors.push(`The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column.`);
+        }
+      }
+    }
+
+    // Object Existence Check
+    if (!this.selectedSourceObject || !this.selectedTargetObject) {
+      errors.push('Source and Target objects must be selected.');
+    }
+
+    return { errors, warnings };
+  }
+
+  private show_warning_modal(warnings: { missingFields: string[], incompleteRefs: string[] }) {
+    let warningHtml = '<div class="text-start mt-2">';
+
+    if (warnings.missingFields.length > 0) {
+      warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
+                       <ul class="small mb-3 text-muted"><li class="mb-0">${warnings.missingFields.join('</li><li_item>')}</li></ul>`;
+    }
+
+    if (warnings.incompleteRefs.length > 0) {
+      warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
+                       <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (Defaults to 'Id'):</p>
+                       <ul class="small mb-0 text-muted"><li class="mb-0">${warnings.incompleteRefs.join('</li><li_item>')}</li></ul>`;
+    }
+    warningHtml += '</div>';
+
+    Swal.fire({
+      title: 'Mapping Warnings',
+      html: warningHtml,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Run Anyway',
+      cancelButtonText: 'Fix Mapping',
+      confirmButtonColor: '#dc3545',
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+        this.executeMigrationJob(activeMappings);
+      } else {
+        this.jobStatus = 'Idle';
+      }
+    });
+  }
+
+  private show_confirmation_modal(activeMappings: any[]) {
+    Swal.fire({
+      title: 'Ready to Migrate!',
+      text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+      icon: 'info',
+      showCancelButton: true,
+      confirmButtonColor: '#198754',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, Run Job!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.executeMigrationJob(activeMappings);
+      } else {
+        this.jobStatus = 'Idle';
+      }
+    });
   }
 
   downloadAudit(type: 'valid' | 'invalid') {

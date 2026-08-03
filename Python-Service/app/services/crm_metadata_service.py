@@ -197,12 +197,6 @@ class CrmMetadataService:
                                     "isRequired": f.get("required", False) or f.get("required_in_portal", False),
                                     "custom": is_custom,
                                     "referenceTo": None,
-                                    # --- FIX: Zendesk has no per-field "unique"/"external ID"
-                                    # describe flag like Salesforce. Its bulk create-or-update
-                                    # endpoint can only match on a small, fixed set of
-                                    # genuinely unique identifiers: the record's own id,
-                                    # external_id (Users/Organizations/Tickets), and email
-                                    # (Users only). Flag those explicitly here.
                                     "externalId": api_name in ("id", "external_id") or (api_name == "email" and singular_name == "user")
                                 }
                                 
@@ -386,12 +380,6 @@ class CrmMetadataService:
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
                         "isRequired": f.get("system_mandatory", False) or f.get("required", False),
-                        # --- FIX: Zoho has no "External ID" concept like Salesforce.
-                        # Its upsert API's duplicate_check_fields instead requires the
-                        # field be marked Unique in the module layout (present as a
-                        # non-null "unique" object on the field describe). Surface that
-                        # here so the frontend can filter the Ext ID picker the same
-                        # way it does for Salesforce.
                         "unique": f.get("unique") is not None,
                         "externalId": api_name == "id"
                     })
@@ -525,10 +513,6 @@ class CrmMetadataService:
                         "isRequired": False, # HubSpot doesn't strictly enforce schema-level required fields like SF
                         "custom": not f.get("hubspotDefined", True),
                         "referenceTo": f.get("referencedObjectType"),
-                        # --- FIX: HubSpot's batch upsert (idProperty) requires the
-                        # matching property to have unique values enabled (e.g. the
-                        # default "email" on Contacts). HubSpot's describe response
-                        # exposes this directly as "hasUniqueValue".
                         "unique": f.get("hasUniqueValue", False),
                         "externalId": api_name in ("hs_object_id", "id")
                     })

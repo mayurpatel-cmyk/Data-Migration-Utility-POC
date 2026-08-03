@@ -119,15 +119,6 @@ class HubspotMigrator:
 
         chunks = list(chunk_dataset(payload, 100))
 
-        # --- FIX: HubSpot's "batch/update" endpoint can ONLY match records by
-        # HubSpot's own internal "id" -- it has no way to match by a custom Ext ID
-        # property. Since our payloads are keyed by whatever field the user chose
-        # (e.g. "email"), a real "update" call here would reject/skip every row
-        # for lacking an "id". HubSpot's "batch/upsert" endpoint is the only one
-        # that supports matching via idProperty, so -- same fix as the other three
-        # CRMs -- we run "update" on the wire as an upsert, then police the
-        # "don't create new records" promise ourselves using HubSpot's per-record
-        # "new" flag (true when HubSpot had to create the record).
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
@@ -140,11 +131,6 @@ class HubspotMigrator:
 
         async def process_chunk(chunk):
             async with semaphore:
-                # Track which original `chunk` position each hs_record came from,
-                # since rows missing the id/dedupe value get filtered out below.
-                # Without this, HubSpot's response indices (which only count
-                # included rows) get zipped against the full chunk further down,
-                # silently misattributing success/error results to the wrong rows.
                 hs_records = []
                 included_indices = []
 

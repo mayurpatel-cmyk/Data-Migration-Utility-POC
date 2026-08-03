@@ -149,20 +149,6 @@ class ZendeskMigrator:
 
         chunks = list(chunk_dataset(payload, 100))
 
-        # --- FIX: Zendesk's "update_many.json" (PUT) can ONLY match records by
-        # Zendesk's own internal "id" -- it has no way to match by a custom Ext
-        # ID field. Since our payloads are keyed by whatever field the user chose,
-        # a real "update" call here would reject every row for lacking an "id".
-        # Only "create_or_update_many.json" matches on other identifying fields
-        # (e.g. email/external_id for Users). So -- same fix as the other three
-        # CRMs -- we run "update" on the wire as create-or-update, then police
-        # the "don't create new records" promise ourselves using Zendesk's
-        # per-record "action" field ("create" vs "update").
-        #
-        # NOTE: create_or_update_many is documented for Users and Organizations.
-        # If you're running Update mode against Tickets (which has no native
-        # create-or-update-many endpoint), verify this endpoint is actually
-        # valid for your Zendesk plan/object before relying on it.
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
@@ -236,9 +222,7 @@ class ZendeskMigrator:
 
                     is_success = z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]
 
-                    # --- FIX: "update" mode must skip (not create) records with no
-                    # existing match. Zendesk's create_or_update_many job results
-                    # include an "action" field ("create" vs "update") per record.
+   
                     if is_success and is_update_only and z_res.get("action") == "create":
                         orig_record["Target_SkipReason"] = (
                             f"No matching record found in Zendesk. "

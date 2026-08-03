@@ -114,15 +114,6 @@ class ZohoMigrator:
         
         chunks = list(chunk_dataset(payload, 100))
 
-        # --- FIX: Zoho's plain "update" (PUT) endpoint can ONLY match records by
-        # Zoho's own internal "id" field -- it has no way to match by a custom
-        # external key. Only the "/upsert" endpoint supports duplicate_check_fields.
-        # Since our payloads are keyed by the user's chosen Ext ID field (not
-        # Zoho's internal id), a real "update" call here would reject every row.
-        # So -- same fix as Salesforce -- we run "update" on the wire as an
-        # upsert (the only endpoint that can match on the Ext ID field), then
-        # police the "don't create new records" promise ourselves below using
-        # Zoho's per-record "action" flag (insert vs update).
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
@@ -172,9 +163,7 @@ class ZohoMigrator:
                         if z_res.get("status") == "success":
                             raw_id = z_res.get("details", {}).get("id")
 
-                            # --- FIX: "update" mode must skip (not create) records with
-                            # no existing match. Zoho's upsert response tells us which
-                            # action it actually took per record via "action".
+
                             if is_update_only and z_res.get("action") == "insert":
                                 orig_record["Target_SkipReason"] = (
                                     f"[{options.get('targetExtIdField')}] No matching record found in Zoho. "
