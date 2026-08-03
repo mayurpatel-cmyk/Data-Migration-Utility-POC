@@ -131,7 +131,7 @@ class ZendeskMigrator:
 
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
         # 2. NO HARDCODING: Uses exactly what the frontend passes (e.g., "users", "tickets")
         target_object = options["targetObject"].strip().lower()
@@ -143,16 +143,32 @@ class ZendeskMigrator:
         await send_log(f"[{target_object}] {pass_name}: Injecting data stream into Zendesk...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []  # records Zendesk inserted that "update" mode must not keep
 
         chunks = list(chunk_dataset(payload, 100))
 
+        # --- FIX: Zendesk's "update_many.json" (PUT) can ONLY match records by
+        # Zendesk's own internal "id" -- it has no way to match by a custom Ext
+        # ID field. Since our payloads are keyed by whatever field the user chose,
+        # a real "update" call here would reject every row for lacking an "id".
+        # Only "create_or_update_many.json" matches on other identifying fields
+        # (e.g. email/external_id for Users). So -- same fix as the other three
+        # CRMs -- we run "update" on the wire as create-or-update, then police
+        # the "don't create new records" promise ourselves using Zendesk's
+        # per-record "action" field ("create" vs "update").
+        #
+        # NOTE: create_or_update_many is documented for Users and Organizations.
+        # If you're running Update mode against Tickets (which has no native
+        # create-or-update-many endpoint), verify this endpoint is actually
+        # valid for your Zendesk plan/object before relying on it.
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
         # 3. DYNAMIC URL BUILDER 
-        if op_mode == "upsert":
+        if wire_op_mode == "upsert":
             endpoint = "create_or_update_many.json"
-        elif op_mode == "update":
-            endpoint = "update_many.json"
         else:
             endpoint = "create_many.json"
             
@@ -164,10 +180,7 @@ class ZendeskMigrator:
             req_payload = {target_object: zendesk_data_rows}
 
             while True:
-                if op_mode == "update":
-                    res = await client.put(api_path, json=req_payload, headers=headers)
-                else:
-                    res = await client.post(api_path, json=req_payload, headers=headers)
+                res = await client.post(api_path, json=req_payload, headers=headers)
 
                 if res.status_code == 429:
                     await send_log(" ⏳ Zendesk API Rate Limit reached. Pausing 30s...")
@@ -220,8 +233,25 @@ class ZendeskMigrator:
             else:
                 for item, z_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
-                    
-                    if z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]:
+
+                    is_success = z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]
+
+                    # --- FIX: "update" mode must skip (not create) records with no
+                    # existing match. Zendesk's create_or_update_many job results
+                    # include an "action" field ("create" vs "update") per record.
+                    if is_success and is_update_only and z_res.get("action") == "create":
+                        orig_record["Target_SkipReason"] = (
+                            f"No matching record found in Zendesk. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        raw_id = z_res.get("id")
+                        if raw_id:
+                            ids_to_revert.append(str(raw_id))
+                        continue
+
+                    if is_success:
                         # --- FIX: Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
@@ -240,4 +270,26 @@ class ZendeskMigrator:
                         all_success_data.append(orig_record)
                         total_success += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Zendesk auto-created for them..."
+            )
+            await self._delete_records(client, domain, headers, target_object, ids_to_revert, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, domain, headers, target_object, record_ids, send_log):
+        """Bulk-deletes records Zendesk auto-created that 'update' mode should
+        never have created in the first place (destroy_many accepts <=100
+        ids per call)."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                ids_param = ",".join(chunk)
+                url = f"https://{domain}.zendesk.com/api/v2/{target_object}/destroy_many.json?ids={ids_param}"
+                res = await client.delete(url, headers=headers)
+
+                if res.status_code not in [200, 202, 204]:
+                    await send_log(f"[{target_object}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{target_object}] Revert Failed: {str(e)}")

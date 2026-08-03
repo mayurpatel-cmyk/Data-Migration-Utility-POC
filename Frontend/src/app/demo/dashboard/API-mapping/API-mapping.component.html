@@ -682,7 +682,7 @@
                 </select>
                 @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
                 <div class="small text-danger mt-1">
-                  No fields on {{ selectedTargetObject }} are marked External ID or ID Lookup in {{ targetSystem }}.
+                  No fields on {{ selectedTargetObject }} are marked as a matchable unique/external key in {{ targetSystem }}.
                   Mark one in {{ targetSystem }} Setup before running {{ operationMode.toUpperCase() }}.
                 </div>
                 }

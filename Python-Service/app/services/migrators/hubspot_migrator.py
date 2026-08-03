@@ -99,7 +99,7 @@ class HubspotMigrator:
             raise e
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
         target_object = options["targetObject"]
         token = options["token"]
@@ -109,8 +109,9 @@ class HubspotMigrator:
         
         user_id = options.get("userId") # <-- Needed for refresh
 
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []  # records HubSpot inserted that "update" mode must not keep
 
         await send_log(f"[{target_object}] {pass_name}: Pushing data to HubSpot (Concurrent Mode)...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -118,10 +119,19 @@ class HubspotMigrator:
 
         chunks = list(chunk_dataset(payload, 100))
 
-        if op_mode == "update":
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/update"
-        elif op_mode == "upsert":
-            # FIXED: Removed the query string. HubSpot v3 requires this in the body.
+        # --- FIX: HubSpot's "batch/update" endpoint can ONLY match records by
+        # HubSpot's own internal "id" -- it has no way to match by a custom Ext ID
+        # property. Since our payloads are keyed by whatever field the user chose
+        # (e.g. "email"), a real "update" call here would reject/skip every row
+        # for lacking an "id". HubSpot's "batch/upsert" endpoint is the only one
+        # that supports matching via idProperty, so -- same fix as the other three
+        # CRMs -- we run "update" on the wire as an upsert, then police the
+        # "don't create new records" promise ourselves using HubSpot's per-record
+        # "new" flag (true when HubSpot had to create the record).
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        if wire_op_mode == "upsert":
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert" 
         else:
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
@@ -138,12 +148,7 @@ class HubspotMigrator:
                 hs_records = []
                 included_indices = []
 
-                if op_mode == "update":
-                    for i, c in enumerate(chunk):
-                        if "id" in c["targetRecord"]:
-                            hs_records.append({"id": c["targetRecord"].pop("id"), "properties": c["targetRecord"]})
-                            included_indices.append(i)
-                elif op_mode == "upsert":
+                if wire_op_mode == "upsert":
                     for i, c in enumerate(chunk):
                         dedupe_val = c["targetRecord"].get(dedupe_key)
                         if dedupe_val:
@@ -159,7 +164,7 @@ class HubspotMigrator:
                     included_indices = list(range(len(chunk)))
 
                 skipped_indices = [i for i in range(len(chunk)) if i not in set(included_indices)]
-                missing_field_label = "id" if op_mode == "update" else dedupe_key
+                missing_field_label = dedupe_key
 
                 if not hs_records:
                     return {
@@ -214,10 +219,21 @@ class HubspotMigrator:
                                 "details": error_map[idx_str].get("message", "Validation failed")
                             }
                         elif idx_str in success_map:
-                            results_by_index[orig_idx] = {
-                                "success": True,
-                                "id": success_map[idx_str].get("id")
-                            }
+                            s = success_map[idx_str]
+                            # --- FIX: "update" mode must skip (not create) records with
+                            # no existing match. HubSpot's batch upsert response tells us
+                            # via "new": true whether it had to create the record.
+                            if is_update_only and s.get("new") is True:
+                                results_by_index[orig_idx] = {
+                                    "success": True,
+                                    "skipped": True,
+                                    "id": s.get("id")
+                                }
+                            else:
+                                results_by_index[orig_idx] = {
+                                    "success": True,
+                                    "id": s.get("id")
+                                }
                         else:
                             results_by_index[orig_idx] = {"success": True, "id": "Success"}
 
@@ -250,6 +266,19 @@ class HubspotMigrator:
             else:
                 for item, hs_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
+
+                    if hs_res.get("skipped"):
+                        orig_record["Target_SkipReason"] = (
+                            f"[{dedupe_key}] No matching record found in HubSpot. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        raw_id = hs_res.get("id")
+                        if raw_id:
+                            ids_to_revert.append(str(raw_id))
+                        continue
+
                     if hs_res.get("success"):
                         # --- FIX: Strict String Cast ---
                         raw_id = hs_res.get("id")
@@ -262,4 +291,31 @@ class HubspotMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records HubSpot auto-created for them..."
+            )
+            await self._archive_records(client, domain, headers, safe_obj, ids_to_revert, user_id, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _archive_records(self, client, domain, headers, safe_obj, record_ids, user_id, send_log):
+        """Archives (soft-deletes) records HubSpot auto-created that 'update'
+        mode should never have created in the first place. HubSpot's batch
+        archive endpoint accepts up to 100 ids per call."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                url = f"{domain}/crm/v3/objects/{safe_obj}/batch/archive"
+                req_payload = {"inputs": [{"id": rid} for rid in chunk]}
+                res = await client.post(url, json=req_payload, headers=headers)
+
+                if res.status_code == 401:
+                    token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
+                    headers["Authorization"] = f"Bearer {token}"
+                    res = await client.post(url, json=req_payload, headers=headers)
+
+                if res.status_code not in [204, 200]:
+                    await send_log(f"[{safe_obj}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{safe_obj}] Revert Failed: {str(e)}")

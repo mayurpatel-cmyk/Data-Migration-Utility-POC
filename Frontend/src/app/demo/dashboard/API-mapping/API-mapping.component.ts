@@ -783,14 +783,29 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
-  // Salesforce Bulk API's externalIdFieldName only accepts the standard "Id"
-  // field or a custom field explicitly marked "External ID" (or "Is Lookup" /
-  // idLookup) in Setup. Fields that are merely mapped/mirrored -- like
-  // Person Account "__pc" fields -- or just "Unique" without "External ID"
-  // are rejected by Salesforce at job-creation time with an InvalidJob error.
-  // Filtering the picker to this list prevents that failure up front instead
-  // of discovering it after a full extraction + job-creation round trip.
+  // What each CRM's bulk match/upsert operation actually accepts differs:
+  //  - Salesforce: only the standard Id, or a field explicitly flagged
+  //    External ID / ID Lookup. A field that's merely "Unique" is NOT enough
+  //    and Salesforce rejects it at job-creation time (InvalidJob).
+  //  - Zoho: has no "External ID" concept at all -- it requires the field be
+  //    marked Unique in the module layout. That's the correct (and only)
+  //    signal there.
+  //  - HubSpot: batch upsert's idProperty requires the property to have
+  //    unique values enabled (hasUniqueValue), or be the standard id.
+  //  - Zendesk: only a small fixed set of fields are genuinely matchable --
+  //    the record's own id, external_id, and (for Users) email.
   isExternalIdEligible(field: FieldMeta): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    if (crm === 'zoho') {
+      return field.name === 'id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'hubspot') {
+      return field.name === 'id' || field.name === 'hs_object_id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'zendesk') {
+      return !!field.externalId;
+    }
+    // Salesforce and default fallback
     return field.name === 'Id' || !!field.externalId || !!field.idLookup;
   }
 
