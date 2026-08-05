@@ -84,8 +84,8 @@ class CrmMetadataService:
                         "isRequired": is_required,
                         "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None,
                         "externalId": f.get("externalId", False),
-        "unique": f.get("unique", False),
-        "idLookup": f.get("idLookup", False)
+                        "unique": f.get("unique", False),
+                        "idLookup": f.get("idLookup", False)
                     })
 
                 # 2. Fetch Sample Data

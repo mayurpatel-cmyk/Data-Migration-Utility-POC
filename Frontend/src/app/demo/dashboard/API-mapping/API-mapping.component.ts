@@ -362,7 +362,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           //  ZENDESK MODE
           // ------------------------------------
           if (crm === 'zendesk') {
-            // --- NEW: Context-Aware Value Suggestions ---
+            // --- Context-Aware Value Suggestions ---
             const lineContent = model.getLineContent(position.lineNumber);
             const textBeforeCursor = lineContent.substring(0, position.column - 1);
 
@@ -378,7 +378,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
                   detail: 'Zendesk Ticket Status'
                 })
               );
-              return { suggestions: suggestions }; // Return early so ONLY statuses show up
+              return { suggestions: suggestions };
             }
 
             // 2. If typing a Priority
@@ -555,7 +555,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           const wordInfo = model.getWordAtPosition(position);
           if (!wordInfo) return null;
 
-          // CLEANUP: Strip out Zendesk operators (:, <, >) so we can match the pure field name
+          //Strip out Zendesk operators (:, <, >) so we can match the pure field name
           const cleanWord = wordInfo.word.replace(/[:<>]/g, '').toLowerCase();
 
           const field = this.sourceFields.find((f) => f.name.toLowerCase() === cleanWord);
@@ -665,7 +665,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         }
         this.customQuery = `type:${singularName} `;
       } else {
-        // --- UPGRADED: Auto-inject the custom layout instructions ---
+        // ---Auto-inject the custom layout instructions ---
         this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE;
       }
     } else if (crm === 'hubspot') {
@@ -783,17 +783,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
-  // What each CRM's bulk match/upsert operation actually accepts differs:
-  //  - Salesforce: only the standard Id, or a field explicitly flagged
-  //    External ID / ID Lookup. A field that's merely "Unique" is NOT enough
-  //    and Salesforce rejects it at job-creation time (InvalidJob).
-  //  - Zoho: has no "External ID" concept at all -- it requires the field be
-  //    marked Unique in the module layout. That's the correct (and only)
-  //    signal there.
-  //  - HubSpot: batch upsert's idProperty requires the property to have
-  //    unique values enabled (hasUniqueValue), or be the standard id.
-  //  - Zendesk: only a small fixed set of fields are genuinely matchable --
-  //    the record's own id, external_id, and (for Users) email.
   isExternalIdEligible(field: FieldMeta): boolean {
     const crm = (this.targetCrmId || '').toLowerCase();
     if (crm === 'zoho') {
@@ -835,22 +824,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   selectSourceEntity(entityName: string) {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
-
-    // const crm = this.sourceCrmId.toLowerCase();
-
-    // if (crm === 'zendesk') {
-    //   let singularName = entityName.toLowerCase();
-    //   if (singularName.endsWith('s') && singularName !== 'macros') {
-    //     singularName = singularName.slice(0, -1);
-    //   }
-    //   this.customQuery = `type:${singularName} `;
-
-    // } else if (crm === 'salesforce') {
-    //   this.customQuery = `SELECT * FROM ${entityName}`;
-
-    // } else {
-    //   this.customQuery = `SELECT * FROM ${entityName} WHERE `;
-    // }
 
     this.buildDefaultQuery(entityName);
 
@@ -1465,13 +1438,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     // =========================================================
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
-    // Track every target field that is already claimed (either mapped
-    // manually before Auto Map was clicked, or claimed earlier in this
-    // same loop) so the same target can never be assigned to two
-    // different source fields. Without this, two source fields can
-    // independently score highest against the same target and both get
-    // mapped to it, which inflates the "mapped" count without actually
-    // producing that many usable mappings.
     const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
 
     this.mappings.forEach((m) => {
@@ -1615,7 +1581,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
               this.reviewFilter = 'unmapped';
             }
 
-            // Opens review panel ONLY when AI is completely finished
             this.showReviewPanel = true;
             this.reviewPanelMinimized = false;
 
@@ -1633,12 +1598,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
             if (response && Array.isArray(response.mappings)) {
               response.mappings.forEach((backendMap: any) => {
                 const localRow = this.mappings.find((m) => m.sourceField === backendMap.sourceField);
-
-                // Guard against the AI suggesting a target field that has
-                // already been claimed by another row (via the rule pass,
-                // a previous AI chunk, or a manual selection). Applying it
-                // anyway would silently overwrite/duplicate a mapping and
-                // throw off the mapped-field count shown in the UI.
                 const targetAlreadyClaimed = this.mappings.some(
                   (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
                 );
@@ -1776,7 +1735,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
-    // --- CRITICAL FIX: Add sourceField, targetField, and isRequired so the backend can enforce it ---
     const activeMappings = this.mappings
       .filter((m) => m.targetField)
       .map((m) => {
@@ -1798,13 +1756,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
     let safeQuery = this.customQuery.trim();
     const crmContext = this.sourceCrmId.toLowerCase();
-    // --- ADD THIS CLEANING BLOCK FOR VALIDATION STREAM ---
     if (crmContext === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
       safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
 
       const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       if (safeQuery === cleanBlankTemplate) {
-        safeQuery = ''; // Default to pulling all records if template unmodified
+        safeQuery = '';
       }
     }
 
@@ -1993,7 +1950,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
         // 3. Notify and Redirect
         this.toastr.success('You have been securely logged out.', 'Goodbye!');
-        this.router.navigate(['/login']); // Change '/login' to your actual auth route if different
+        this.router.navigate(['/login']);
       }
     });
   }
@@ -2073,7 +2030,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     // Handle Hard Errors immediately
     if (errors.length > 0) {
       this.jobStatus = 'Failed';
-      this.toastr.error(errors[0], 'Migration Error'); // Show the primary error encountered
+      this.toastr.error(errors[0], 'Migration Error');
       return;
     }
 
@@ -2285,7 +2242,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         if (data.status) {
           this.jobStatus = data.status;
 
-          // --- THE NEW POST-MIGRATION POPUP ---
+          // --- POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
             this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
@@ -2296,8 +2253,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
             let swalTitle = 'Migration Complete!';
 
             // Skipped records (Update mode intentionally not creating new records)
-            // are expected behavior, not failures -- they never trigger the
-            // warning/error icon on their own.
             if (errorCount > 0 && successCount > 0) {
               swalIcon = 'warning';
               swalTitle = 'Migration Finished with Errors';
