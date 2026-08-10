@@ -120,6 +120,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   isStrictMapping = false;
   hideMappedFields = false;
 
+  currentUser: any = null;
+isProfileDropdownOpen = false;
+
   // Execution Variables
   jobStatus = 'Idle';
   logMessages: string[] = [];
@@ -179,6 +182,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     // 1. Securely pull the intended CRMs
+    this.getUserData();
+this.fetchRecoverableSessions();
+this.preloadEntirePage();
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
@@ -288,6 +294,27 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
     return filtered;
   }
+
+  getUserData(): void {
+  const storedUser = localStorage.getItem('supabase_user');
+  if (!storedUser) {
+    this.currentUser = null;
+    return;
+  }
+  try {
+    this.currentUser = JSON.parse(storedUser);
+  } catch (error) {
+    console.error('Failed to parse user data from local storage', error);
+    this.currentUser = null;
+  }
+}
+
+toggleProfileDropdown(event: Event): void {
+  event.stopPropagation();
+  const wasOpen = this.isProfileDropdownOpen;
+  this.closeAllDropdowns();
+  this.isProfileDropdownOpen = !wasOpen;
+}
 
   changePreviewLimit(newLimit: number) {
     // Force JavaScript to treat the dropdown value as a number
@@ -617,11 +644,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   }
 
   closeAllDropdowns() {
-    this.mappings.forEach((m) => (m.isDropdownOpen = false));
-    this.isSourceDropdownOpen = false;
-    this.isTargetDropdownOpen = false;
-    this.isHistoryDropdownOpen = false;
-  }
+  this.mappings.forEach((m) => (m.isDropdownOpen = false));
+  this.isSourceDropdownOpen = false;
+  this.isTargetDropdownOpen = false;
+  this.isHistoryDropdownOpen = false;
+  this.isProfileDropdownOpen = false;
+}
 
   // --- ADD THIS TEMPLATE CONSTANT ---
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
