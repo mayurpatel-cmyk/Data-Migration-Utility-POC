@@ -190,7 +190,7 @@ td .form-select {
   font-size: 0.95rem !important;
 }
 
-/* Fix Icons (the feather icons were also looking light) */
+/*  Icons (the feather icons were also looking light) */
 .badge i {
   color: inherit !important; /* Icon takes the same dark color as the text */
   font-weight: 800 !important;
@@ -220,7 +220,7 @@ td .form-select {
   z-index: 10;
 }
 
-/* Fix for the record identifier column to make it pop */
+/*  for the record identifier column to make it pop */
 .table td.fw-bold {
     background-color: #ffffff;
     color: #212529 !important;

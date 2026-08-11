@@ -99,7 +99,7 @@ class CrmQueryService:
         
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
-        # FIX: Zoho strictly rejects COQL queries over 200 records.
+        #  Zoho strictly rejects COQL queries over 200 records.
         if limit > 200:
             limit = 200
             
@@ -112,7 +112,7 @@ class CrmQueryService:
                         fields_str = ",".join(safe_fields)
                         coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
                         
-                    # FIX: Inject WHERE clause properly so it doesn't break ORDER BY
+                    #  Inject WHERE clause properly so it doesn't break ORDER BY
                     if " where " not in coql_query.lower():
                         if " order by " in coql_query.lower():
                             coql_query = re.sub(r'(?i)(\border\s+by\b)', r'where id is not null \1', coql_query, count=1)

@@ -24,7 +24,6 @@ class CrmMetadataService:
                 
                 data = response.json()
                 
-                # Node.js Logic Applied: Map all objects directly, add keyPrefix, and identify custom/metadata types
                 objects = [
                     {
                         "name": obj["name"], 
@@ -241,7 +240,9 @@ class CrmMetadataService:
                                 "type": f.get("type", "string"),
                                 "isRequired": False,
                                 "custom": True,
-                                "referenceTo": None
+                                "referenceTo": None,
+                                "externalId": api_name in ("id", "external_id"),
+                                "unique": False
                             }
                             
                     # 2. Fetch Sample Data using the modern records endpoint

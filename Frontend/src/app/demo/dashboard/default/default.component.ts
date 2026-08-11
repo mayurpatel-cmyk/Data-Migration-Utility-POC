@@ -362,17 +362,7 @@ export class DefaultComponent implements OnInit {
   // Dynamically gets valid fields for the Upsert Key dropdown
   get validUpsertKeys(): any[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    
-    const crm = (this.targetCrmId || '').toLowerCase();
-
-    if (crm === 'salesforce') {
-      // Salesforce explicitly flags External IDs
-      return this.sfFields.filter(f => f.externalId || f.unique || f.idLookup || f.name === 'Id');
-    } else {
-      // Zoho, HubSpot, and Zendesk do not reliably send unique flags via standard metadata.
-      // Return ALL fields so the user can manually select their custom ID (e.g., Legacy_ID).
-      return this.sfFields;
-    }
+    return this.sfFields.filter(f => f.externalId || f.unique || f.idLookup || f.name === 'Id' || f.name === 'id');
   }
 
   getFilteredSfFields(query?: string): any[] {
@@ -988,8 +978,8 @@ export class DefaultComponent implements OnInit {
       return;
     }
 
-    if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
-      this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+    if (this.operationMode === 'update' && !this.targetExtIdField) {
+      this.toastr.error('Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.', 'Missing Configuration');
       return;
     }
 
@@ -1142,8 +1132,8 @@ export class DefaultComponent implements OnInit {
         this.toastr.error(`Delete operation requires the ${this.targetCrmId.toUpperCase()} "Id" field to be mapped.`, 'Missing ID');
         return;
       }
-      if (this.operationMode === 'update' && !this.targetExtIdField && !hasSfId) {
-        this.toastr.error('Update requires either a Primary Upsert Key or the standard "Id" field mapped.', 'Missing ID');
+      if (this.operationMode === 'update' && !this.targetExtIdField) {
+        this.toastr.error('Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.', 'Missing Configuration');
         return;
       }
       if (this.operationMode === 'upsert' && !this.targetExtIdField) {

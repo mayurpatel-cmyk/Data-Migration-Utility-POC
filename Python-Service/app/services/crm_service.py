@@ -79,6 +79,18 @@ class CrmService:
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")
 
+            elif crm == "zendesk":
+                subdomain = creds.get("subdomain")
+                res = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
+                    "grant_type": "refresh_token",
+                    "client_id": os.getenv("ZD_CLIENT_ID"),
+                    "client_secret": os.getenv("ZD_CLIENT_SECRET"),
+                    "refresh_token": refresh_token,
+                    "scope": "read write"
+                })
+                if res.status_code == 200:
+                    new_access_token = res.json().get("access_token")
+
             elif crm == "hubspot":
                 res = await client.post("https://api.hubapi.com/oauth/v1/token", data={
                     "grant_type": "refresh_token",

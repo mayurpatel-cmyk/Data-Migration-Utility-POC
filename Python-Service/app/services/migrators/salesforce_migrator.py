@@ -94,15 +94,14 @@ class SalesforceMigrator:
         sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
         bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
 
-        # --- FIX: Salesforce Bulk API has NO native "update only, matched by an
-        # external ID, skip if no match" operation. A plain "update" job only ever
-        # matches on the standard Id field and ignores/rejects externalIdFieldName,
-        # so every row in a true "update" op_mode job used to fail outright.
-        # We now run it on the wire as an "upsert" (the only op that can match on
-        # target_ext_id_field), then police the "don't create new records" promise
-        # ourselves below using the "created" flag Salesforce returns per row.
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
 
         job_config = {"operation": wire_op_mode, "object": target_object, "contentType": "JSON"}
         if wire_op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
@@ -126,7 +125,7 @@ class SalesforceMigrator:
                 )
             else:
                 await send_log(f"[{target_object}] Salesforce Job Failed: {error_text}")
-            return 0, len(payload), 0, [], [r for r in source_records], []
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
             
         job_id = job_res.json().get("id")
         chunks = list(chunk_dataset(payload, batch_size))

@@ -81,7 +81,7 @@ async def validate_batch(
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
     
-    # --- FIX 1: Extract Dynamic CRM ---
+    # ---  1: Extract Dynamic CRM ---
     target_crm = payload.get("targetCrmId", "salesforce")
 
     ext = os.path.splitext(file.filename)[1].lower()
@@ -104,7 +104,7 @@ async def validate_batch(
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 chunk_records = chunk_df.to_dict(orient="records")
                 
-                # --- FIX 2: Pass target_rules and target_crm to the processor ---
+                # --- 2: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
                     records=chunk_records, mappings=mappings, dedupe_key=dedupe_key,  
                     target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -136,7 +136,7 @@ async def validate_batch(
                     chunk_df = pd.DataFrame(chunk_records)
                     chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                     
-                    # --- FIX 3: Pass target_rules and target_crm to the processor ---
+                    # --- 3: Pass target_rules and target_crm to the processor ---
                     result = process_validation_batch(
                         records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
                         target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -155,7 +155,7 @@ async def validate_batch(
                 chunk_df = pd.DataFrame(chunk_records)
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 
-                # --- FIX 4: Pass target_rules and target_crm to the processor ---
+                # --- 4: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
                     records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
                     target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -205,10 +205,10 @@ async def revalidate_batch_json(request: Request):
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
     
-    # --- FIX 5: Extract Dynamic CRM ---
+    # --- 5: Extract Dynamic CRM ---
     target_crm = payload.get("targetCrmId", "salesforce")
 
-    # --- FIX 6: Pass target_rules and target_crm to the processor ---
+    # --- 6: Pass target_rules and target_crm to the processor ---
     result = process_validation_batch(
         records=records, 
         mappings=mappings, 

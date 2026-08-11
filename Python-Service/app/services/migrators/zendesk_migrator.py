@@ -2,6 +2,7 @@ import urllib.parse
 import re
 import asyncio
 import json
+from app.services.crm_service import CrmService
 
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
@@ -12,6 +13,7 @@ class ZendeskMigrator:
     async def extract(self, client, creds, obj_name, query, mappings, send_log):
         token = creds.get("access_token")
         subdomain = creds.get("subdomain")
+        user_id = creds.get("user_id")
         if not subdomain and creds.get("api_domain"):
             subdomain = creds.get("api_domain").replace(".zendesk.com", "").replace("https://", "")
         
@@ -39,6 +41,11 @@ class ZendeskMigrator:
                 while url:
                     while True:
                         res = await client.get(url, headers=headers)
+                        if res.status_code == 401:
+                            await send_log(" Zendesk token expired. Silently refreshing...")
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "source")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
                         if res.status_code == 429:
                             await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
                             await asyncio.sleep(30)
@@ -93,6 +100,11 @@ class ZendeskMigrator:
                         else:
                             res = await client.get(url, headers=headers)
 
+                        if res.status_code == 401:
+                            await send_log(" Zendesk token expired. Silently refreshing...")
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "source")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
                         if res.status_code == 429:
                             await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
                             await asyncio.sleep(30)
@@ -133,40 +145,65 @@ class ZendeskMigrator:
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, 0, [], [], []
 
-        # 2. NO HARDCODING: Uses exactly what the frontend passes (e.g., "users", "tickets")
         target_object = options["targetObject"].strip().lower()
-        
+
         token = options["token"]
         domain = options.get("instance_url", "").replace(".zendesk.com", "").replace("https://", "").strip('/')
         source_records = options["sourceRecords"]
+        target_ext_id_field = options.get("targetExtIdField", "")
+        user_id = options.get("userId")
 
         await send_log(f"[{target_object}] {pass_name}: Injecting data stream into Zendesk...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
+
         total_success, total_error, total_skipped = 0, 0, 0
         all_success_data, all_error_data, all_skipped_data = [], [], []
-        ids_to_revert = []  # records Zendesk inserted that "update" mode must not keep
+        ids_to_revert = []
 
         chunks = list(chunk_dataset(payload, 100))
 
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
-        # 3. DYNAMIC URL BUILDER 
-        if wire_op_mode == "upsert":
-            endpoint = "create_or_update_many.json"
+        # Zendesk's create_or_update_many matches on whatever unique attribute
+        # (email, external_id, etc.) is present in each record body -- it isn't
+        # passed as a separate param. Still require it to be configured so a
+        # misconfigured mapping fails loudly instead of quietly inserting dupes.
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        standard_objects = {"tickets", "users", "organizations", "groups", "macros", "triggers", "views"}
+        is_standard_object = target_object in standard_objects or f"{target_object}s" in standard_objects
+
+        if is_standard_object:
+            endpoint = "create_or_update_many.json" if wire_op_mode == "upsert" else "create_many.json"
+            api_path = f"https://{domain}.zendesk.com/api/v2/{target_object}/{endpoint}"
         else:
-            endpoint = "create_many.json"
-            
-        api_path = f"https://{domain}.zendesk.com/api/v2/{target_object}/{endpoint}"
+            job_action = "create_or_update_by_external_id" if wire_op_mode == "upsert" else "create"
+            api_path = f"https://{domain}.zendesk.com/api/v2/custom_objects/{target_object}/jobs"
 
         async def process_chunk(chunk):
-            # 4. DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
-            zendesk_data_rows = [c["targetRecord"] for c in chunk]
-            req_payload = {target_object: zendesk_data_rows}
+            if is_standard_object:
+                # DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
+                zendesk_data_rows = [c["targetRecord"] for c in chunk]
+                req_payload = {target_object: zendesk_data_rows}
+            else:
+                items = [c["targetRecord"] for c in chunk]
+                req_payload = {"job": {"action": job_action, "items": items}}
 
+            nonlocal token
             while True:
                 res = await client.post(api_path, json=req_payload, headers=headers)
+
+                if res.status_code == 401:
+                    await send_log(" Zendesk token expired mid-migration. Silently refreshing...")
+                    token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
+                    headers["Authorization"] = f"Bearer {token}"
+                    continue
 
                 if res.status_code == 429:
                     await send_log(" ⏳ Zendesk API Rate Limit reached. Pausing 30s...")
@@ -194,8 +231,10 @@ class ZendeskMigrator:
                         
                         await asyncio.sleep(3) # Poll every 3 seconds
                 else:
-                    # Synchronous response (fallback)
-                    return {"chunk": chunk, "status": "completed", "results": data.get(target_object, [])}
+                    # Synchronous response (fallback) -- both bulk endpoints are
+                    # documented as always-async, but fall back defensively.
+                    fallback_results = data.get(target_object, []) if is_standard_object else data.get("results", [])
+                    return {"chunk": chunk, "status": "completed", "results": fallback_results}
             else:
                 return {"chunk": chunk, "status": "error", "message": res.text}
 
@@ -206,7 +245,14 @@ class ZendeskMigrator:
             results = await asyncio.gather(*[process_chunk(chunk) for chunk in concurrent_batch])
             batch_results.extend(results)
 
-        # Map Results back to original UI rows
+        # Map Results back to original UI rows.
+        # NOTE: this parsing (success/status/action/id/error keys) is confirmed
+        # against the standard-object create_many/create_or_update_many job
+        # result shape. Zendesk's public docs don't show the exact per-item
+        # result schema for the custom_objects/{key}/jobs endpoint -- verify
+        # against a real response before relying on custom-object migrations
+        # in production; the generic key-checking below is defensive but may
+        # need adjusting once you've seen a live payload.
         for batch_res in batch_results:
             chunk = batch_res["chunk"]
             

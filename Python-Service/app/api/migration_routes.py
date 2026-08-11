@@ -15,8 +15,8 @@ from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
 from app.services.migrators.hubspot_migrator import HubspotMigrator
 from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
-from app.services.payload_builder import PayloadBuilderService  
-from app.services.audit_service import AuditService 
+from app.services.payload_builder import PayloadBuilderService
+from app.services.audit_service import AuditService
 
 import uuid
 import sqlite3
@@ -180,11 +180,6 @@ async def websocket_migration(websocket: WebSocket):
                     options_pass = dict(options_base)
                     result = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
 
-                    # SalesforceMigrator.upload() now returns a 6-tuple (adds a
-                    # "skipped" bucket for Update-mode records with no match).
-                    # Other CRM migrators haven't been updated yet and still
-                    # return the original 4-tuple -- support both here so this
-                    # stays working regardless of which target_migrator is active.
                     if len(result) == 6:
                         _, _, _, succ, err, skipped = result
                     else:
@@ -195,23 +190,43 @@ async def websocket_migration(websocket: WebSocket):
                     all_error_data.extend(err)
                     all_skipped_data.extend(skipped)
 
+                async def dedupe_and_execute(payload_data, current_op, pass_name):
+                    """CRM-agnostic guard applied before any UPDATE/UPSERT hits the wire.
+                    Keeps the last row for any unique-key value that appears more than
+                    once in the same batch, and reports the earlier duplicates as
+                    skipped instead of letting the CRM API silently drop/overwrite one
+                    of them."""
+                    if current_op in ("update", "upsert") and ext_id_field:
+                        clean_payload, dup_skips = PayloadBuilderService.dedupe_by_unique_key(
+                            payload_data, source_records, ext_id_field
+                        )
+                        if dup_skips:
+                            await send_log(
+                                f"[{target_object}] {pass_name}: {len(dup_skips)} record(s) shared the same "
+                                f"'{ext_id_field}' value within this batch -- keeping the last one, skipping the rest."
+                            )
+                            all_skipped_data.extend(dup_skips)
+                        await execute_upload(clean_payload, current_op, pass_name)
+                    else:
+                        await execute_upload(payload_data, current_op, pass_name)
+
                 job_success_start_idx = len(all_success_data)
                 has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
                 
                 if job.get("isPass3Patch", False):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "onlyReferencesTo": job.get("onlyReferencesTo", []), "operationMode": "upsert"}, target_crm)
-                    await execute_upload(p_load, "upsert", "Pass 3 (Patch)")
+                    await dedupe_and_execute(p_load, "upsert", "Pass 3 (Patch)")
                 elif op_mode == "delete":
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "operationMode": "delete"}, target_crm)
                     await execute_upload(p_load, "delete", "Deletion")
                 elif has_self_ref:
                     p1_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "skipSelfReferencing": True, "operationMode": op_mode}, target_crm)
-                    await execute_upload(p1_load, op_mode, "Pass 1")
+                    await dedupe_and_execute(p1_load, op_mode, "Pass 1")
                     p2_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "onlySelfReferencing": True, "operationMode": "upsert"}, target_crm)
-                    await execute_upload(p2_load, "upsert", "Pass 2")
+                    await dedupe_and_execute(p2_load, "upsert", "Pass 2")
                 else:
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
-                    await execute_upload(p_load, op_mode, "Standard Sync")
+                    await dedupe_and_execute(p_load, op_mode, "Standard Sync")
 
                 # ==========================================
                 # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)

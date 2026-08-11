@@ -119,7 +119,7 @@ class ZohoMigrator:
 
         if not options.get("targetExtIdField") and op_mode in ("update", "upsert"):
             await send_log(f"[{normalized_obj}] {pass_name}: No External ID field configured -- cannot match existing records for {op_mode.upper()}.")
-            return 0, len(payload), 0, [], [r for r in source_records], []
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
 
         if wire_op_mode == "upsert":
             api_path = f"{domain}/crm/v6/{normalized_obj}/upsert"

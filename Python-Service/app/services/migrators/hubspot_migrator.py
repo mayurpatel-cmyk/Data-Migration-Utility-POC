@@ -105,13 +105,13 @@ class HubspotMigrator:
         token = options["token"]
         domain = (options.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         source_records = options["sourceRecords"]
-        dedupe_key = options.get("targetExtIdField") or options.get("dedupeKey") or "email"
-        
-        user_id = options.get("userId") # <-- Needed for refresh
+        target_ext_id_field = options.get("targetExtIdField") or options.get("dedupeKey")
+
+        user_id = options.get("userId")
 
         total_success, total_error, total_skipped = 0, 0, 0
         all_success_data, all_error_data, all_skipped_data = [], [], []
-        ids_to_revert = []  # records HubSpot inserted that "update" mode must not keep
+        ids_to_revert = []
 
         await send_log(f"[{target_object}] {pass_name}: Pushing data to HubSpot (Concurrent Mode)...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -122,8 +122,17 @@ class HubspotMigrator:
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        dedupe_key = target_ext_id_field
+
         if wire_op_mode == "upsert":
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert" 
+            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert"
         else:
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
 

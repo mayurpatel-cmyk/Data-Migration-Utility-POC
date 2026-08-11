@@ -1282,7 +1282,7 @@
             </span>
             <div class="d-flex gap-2">
 
-              <!-- FIX 1: Add Safe Navigation (?.) to prevent length errors on undefined data -->
+              <!-- 1: Add Safe Navigation (?.) to prevent length errors on undefined data -->
               @if (successData?.length > 0) {
               <button class="btn btn-xs btn-outline-success d-flex align-items-center gap-1 btn-hover-lift"
                 style="font-size: 0.7rem; padding: 2px 8px;"
@@ -1314,14 +1314,14 @@
           <div class="bg-light border rounded p-3 font-monospace small text-dark flex-grow-1 overflow-auto shadow-inner"
             style="font-size: 0.8rem; min-height: 200px; box-shadow: inset 0 2px 4px rgba(0,0,0,.05);">
 
-            <!-- FIX 2: Convert legacy *ngIf to the new @if syntax -->
+            <!--  2: Convert legacy *ngIf to the new @if syntax -->
             @if (!logMessages || logMessages.length === 0) {
             <div class="text-center mt-4 text-muted">
               Awaiting job execution...
             </div>
             }
 
-            <!-- FIX 3: Convert legacy *ngFor to the new @for syntax -->
+            <!-- 3: Convert legacy *ngFor to the new @for syntax -->
             @for (log of logMessages; track $index) {
             <div class="mb-1" [ngClass]="{
                    'text-danger fw-bold': log.toLowerCase().includes('error') || log.toLowerCase().includes('fail'),
