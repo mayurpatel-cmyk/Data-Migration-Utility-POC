@@ -44,7 +44,7 @@ class ZohoMigrator:
 
                 await send_log(f"Extracting data from Zoho using COQL...")
                 
-                # CRITICAL FIX: This must be client.post() for the /coql endpoint
+                # This must be client.post() for the /coql endpoint
                 res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
                 
                 if res.status_code != 200:

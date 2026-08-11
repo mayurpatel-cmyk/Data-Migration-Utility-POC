@@ -165,10 +165,6 @@ class ZendeskMigrator:
         is_update_only = (op_mode == "update")
         wire_op_mode = "upsert" if is_update_only else op_mode
 
-        # Zendesk's create_or_update_many matches on whatever unique attribute
-        # (email, external_id, etc.) is present in each record body -- it isn't
-        # passed as a separate param. Still require it to be configured so a
-        # misconfigured mapping fails loudly instead of quietly inserting dupes.
         if wire_op_mode == "upsert" and not target_ext_id_field:
             await send_log(
                 f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
@@ -231,8 +227,7 @@ class ZendeskMigrator:
                         
                         await asyncio.sleep(3) # Poll every 3 seconds
                 else:
-                    # Synchronous response (fallback) -- both bulk endpoints are
-                    # documented as always-async, but fall back defensively.
+
                     fallback_results = data.get(target_object, []) if is_standard_object else data.get("results", [])
                     return {"chunk": chunk, "status": "completed", "results": fallback_results}
             else:
@@ -245,14 +240,6 @@ class ZendeskMigrator:
             results = await asyncio.gather(*[process_chunk(chunk) for chunk in concurrent_batch])
             batch_results.extend(results)
 
-        # Map Results back to original UI rows.
-        # NOTE: this parsing (success/status/action/id/error keys) is confirmed
-        # against the standard-object create_many/create_or_update_many job
-        # result shape. Zendesk's public docs don't show the exact per-item
-        # result schema for the custom_objects/{key}/jobs endpoint -- verify
-        # against a real response before relying on custom-object migrations
-        # in production; the generic key-checking below is defensive but may
-        # need adjusting once you've seen a live payload.
         for batch_res in batch_results:
             chunk = batch_res["chunk"]
             
@@ -282,7 +269,7 @@ class ZendeskMigrator:
                         continue
 
                     if is_success:
-                        # --- FIX: Strict String Cast ---
+                        # --- Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         
@@ -293,7 +280,7 @@ class ZendeskMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
                     else: 
-                        # --- FIX: Strict String Cast ---
+                        # ---  Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         

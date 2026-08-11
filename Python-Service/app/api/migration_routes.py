@@ -311,9 +311,7 @@ async def websocket_migration(websocket: WebSocket):
                 })
                 #  Generate PDF, CSVs, and Save History ---
 
-            # --- FIX: sanitize "Update mode skipped this (no match found)" records
-            # the same way as errors, so the frontend's Skipped download button
-            # gets clean, flattened rows instead of raw Python objects.
+
             formatted_skipped = []
             for rec in all_skipped_data:
                 if not isinstance(rec, dict):

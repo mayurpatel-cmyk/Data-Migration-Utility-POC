@@ -19,7 +19,7 @@ class HubspotMigrator:
         safe_obj = obj_name.lower()
         source_records = []
         
-        # --- THE FIX: Support both UI mapping formats ---
+        # --- Support both UI mapping formats ---
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
@@ -72,7 +72,7 @@ class HubspotMigrator:
                     props = rec.get("properties", {})
                     if props:
                         for k, v in props.items(): 
-                            # --- FIX: Safeguard against nested objects in HubSpot ---
+                            # --- Safeguard against nested objects in HubSpot ---
                             if isinstance(v, dict):
                                 flat_rec[k] = str(v)
                             elif isinstance(v, list):
@@ -171,7 +171,7 @@ class HubspotMigrator:
                 req_payload = {"inputs": hs_records}
                 
                 try:
-                    # --- FIX: Silent Retry Loop for Uploads ---
+                    # ---  Silent Retry Loop for Uploads ---
                     while True:
                         res = await client.post(endpoint, json=req_payload, headers=headers)
                         
@@ -203,8 +203,6 @@ class HubspotMigrator:
                     errors = data.get("errors", [])
                     error_map = {str(e.get("index")): e for e in errors}
                     
-                    # Map HubSpot's response (indexed within the filtered hs_records
-                    # array) back to the correct ORIGINAL chunk position.
                     results_by_index = {}
                     for hs_pos, orig_idx in enumerate(included_indices):
                         idx_str = str(hs_pos)
@@ -215,9 +213,6 @@ class HubspotMigrator:
                             }
                         elif idx_str in success_map:
                             s = success_map[idx_str]
-                            # --- FIX: "update" mode must skip (not create) records with
-                            # no existing match. HubSpot's batch upsert response tells us
-                            # via "new": true whether it had to create the record.
                             if is_update_only and s.get("new") is True:
                                 results_by_index[orig_idx] = {
                                     "success": True,
@@ -232,8 +227,7 @@ class HubspotMigrator:
                         else:
                             results_by_index[orig_idx] = {"success": True, "id": "Success"}
 
-                    # Rows we never sent must be reported as explicit errors, not
-                    # silently defaulted to "success".
+
                     for orig_idx in skipped_indices:
                         results_by_index[orig_idx] = {
                             "success": False,
@@ -275,7 +269,7 @@ class HubspotMigrator:
                         continue
 
                     if hs_res.get("success"):
-                        # --- FIX: Strict String Cast ---
+                        # ---  Strict String Cast ---
                         raw_id = hs_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         

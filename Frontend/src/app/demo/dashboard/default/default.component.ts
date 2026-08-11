@@ -9,7 +9,7 @@ import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { AuthService } from '../../Services/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
-import { firstValueFrom } from 'rxjs'; 
+import { firstValueFrom } from 'rxjs';
 import { DataTransferService } from 'src/app/services/data-transfer.service';
 
 interface MappingMeta {
@@ -120,7 +120,6 @@ export class DefaultComponent implements OnInit {
 
     // Check if we have an array of jobs transferred from Validation
     if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
-
       const newWorkbook = utils.book_new();
       this.availableSheets = [];
 
@@ -135,10 +134,14 @@ export class DefaultComponent implements OnInit {
 
       // Bind the new workbook and file to the UI
       this.workbook = newWorkbook;
-      this.selectedFile = new File([write(newWorkbook, { type: 'array', bookType: 'xlsx' })], transferred.fileName || 'Cleaned_Batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      this.selectedFile = new File(
+        [write(newWorkbook, { type: 'array', bookType: 'xlsx' })],
+        transferred.fileName || 'Cleaned_Batch.xlsx',
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+      );
 
       // --- AUTO-BUILD THE ENTIRE MIGRATION QUEUE ---
-      this.migrationQueue = []; 
+      this.migrationQueue = [];
 
       transferred.data.forEach((job: any, index: number) => {
         const enhancedMappings: MappingMeta[] = job.mappings.map((m: any) => ({
@@ -154,7 +157,7 @@ export class DefaultComponent implements OnInit {
           targetObject: job.targetObject,
           csvHeaders: Object.keys(job.results.validRecords[0] || {}),
           mappings: enhancedMappings,
-          operationMode: 'insert', 
+          operationMode: job.operationMode || 'insert',
           targetExtIdField: job.dedupeKey || ''
         });
       });
@@ -164,7 +167,6 @@ export class DefaultComponent implements OnInit {
 
       this.toastr.success('Data imported and mapped successfully! Review your queue.', 'Auto-Mapped');
       this.cdr.detectChanges();
-
     } else {
       setTimeout(() => {
         this.showMigrationInstructions();
@@ -202,7 +204,7 @@ export class DefaultComponent implements OnInit {
           this.toastr.error('Session expired. Please log in again.');
           this.authService.logout();
         } else {
-          // FIX: Removed invalid bitwise | operator that crashed the TypeScript build!
+          //  Removed invalid bitwise | operator that crashed the TypeScript build!
           this.toastr.error(`Could not load objects for ${this.targetCrmId.toUpperCase()}.`, 'Connection Error');
         }
       }
@@ -218,7 +220,7 @@ export class DefaultComponent implements OnInit {
   }
 
   get isDeleteOnlyBatch(): boolean {
-    return this.migrationQueue.length > 0 && this.migrationQueue.every(job => job.operationMode === 'delete');
+    return this.migrationQueue.length > 0 && this.migrationQueue.every((job) => job.operationMode === 'delete');
   }
 
   // Dynamically returns which operation modes the selected CRM supports
@@ -255,20 +257,19 @@ export class DefaultComponent implements OnInit {
   get filteredUpsertKeys(): any[] {
     if (!this.upsertSearchQuery) return this.validUpsertKeys;
     const query = this.upsertSearchQuery.toLowerCase();
-    return this.validUpsertKeys.filter(f => 
-      (f.label || '').toLowerCase().includes(query) || 
-      (f.name || '').toLowerCase().includes(query)
+    return this.validUpsertKeys.filter(
+      (f) => (f.label || '').toLowerCase().includes(query) || (f.name || '').toLowerCase().includes(query)
     );
   }
 
   getUpsertKeyLabel(fieldName: string): string {
     if (!fieldName) return '';
-    const field = this.validUpsertKeys.find(f => f.name === fieldName);
+    const field = this.validUpsertKeys.find((f) => f.name === fieldName);
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
   get hasDeleteInBatch(): boolean {
-    return this.migrationQueue.some(job => job.operationMode === 'delete');
+    return this.migrationQueue.some((job) => job.operationMode === 'delete');
   }
 
   get batchConfig() {
@@ -362,7 +363,7 @@ export class DefaultComponent implements OnInit {
   // Dynamically gets valid fields for the Upsert Key dropdown
   get validUpsertKeys(): any[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
-    return this.sfFields.filter(f => f.externalId || f.unique || f.idLookup || f.name === 'Id' || f.name === 'id');
+    return this.sfFields.filter((f) => f.externalId || f.unique || f.idLookup || f.name === 'Id' || f.name === 'id');
   }
 
   getFilteredSfFields(query?: string): any[] {
@@ -476,7 +477,7 @@ export class DefaultComponent implements OnInit {
 
     // Helper to safely suggest a field only if it actually exists in their schema
     const addIfInSchema = (fieldName: string) => {
-      if (this.sfFields.some(f => f.name === fieldName) && !requiredFields.includes(fieldName)) {
+      if (this.sfFields.some((f) => f.name === fieldName) && !requiredFields.includes(fieldName)) {
         requiredFields.push(fieldName);
       }
     };
@@ -491,7 +492,7 @@ export class DefaultComponent implements OnInit {
         addIfInSchema('hs_pipeline');
         addIfInSchema('hs_pipeline_stage');
       }
-      
+
       // HubSpot Companies Special Rule: Requires EITHER domain OR name
       if (objLower === 'companies') {
         if (!currentlyMappedFields.includes('domain') && !currentlyMappedFields.includes('name')) {
@@ -534,7 +535,7 @@ export class DefaultComponent implements OnInit {
   onSheetChangeInMapping(newSheet: string) {
     setTimeout(() => {
       this.onSheetSelect(newSheet);
-      this.mappings = this.csvHeaders.map(header => ({
+      this.mappings = this.csvHeaders.map((header) => ({
         csvField: header,
         sfField: '',
         relationalExtIdField: ''
@@ -549,7 +550,6 @@ export class DefaultComponent implements OnInit {
     const objLower = (this.selectedObject || '').toLowerCase();
 
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      
       // CRM-SPECIFIC UPSERT LOGIC
       if (crm === 'hubspot' && objLower === 'contacts') {
         this.selectUpsertKey('email');
@@ -557,16 +557,15 @@ export class DefaultComponent implements OnInit {
         this.selectUpsertKey('domain');
       } else if (crm === 'zendesk') {
         // Zendesk commonly upserts via external_id
-        const hasExtId = this.sfFields.find(f => f.name === 'external_id');
+        const hasExtId = this.sfFields.find((f) => f.name === 'external_id');
         if (hasExtId) this.selectUpsertKey('external_id');
       } else {
         // Default Salesforce/Zoho Logic: Auto-select if there's only 1 external ID field
-        const extIds = this.sfFields.filter(f => f.externalId || f.unique || f.idLookup);
+        const extIds = this.sfFields.filter((f) => f.externalId || f.unique || f.idLookup);
         if (extIds.length === 1) {
           this.selectUpsertKey(extIds[0].name);
         }
       }
-
     } else if (this.operationMode === 'delete') {
       this.targetExtIdField = '';
     }
@@ -576,11 +575,15 @@ export class DefaultComponent implements OnInit {
   get targetFieldLabel(): string {
     const crm = (this.targetCrmId || '').toLowerCase();
     switch (crm) {
-      case 'hubspot': return 'HubSpot Property';
-      case 'zoho': return 'Zoho Module Field';
-      case 'zendesk': return 'Zendesk Ticket Field';
+      case 'hubspot':
+        return 'HubSpot Property';
+      case 'zoho':
+        return 'Zoho Module Field';
+      case 'zendesk':
+        return 'Zendesk Ticket Field';
       case 'salesforce':
-      default: return 'Salesforce Field';
+      default:
+        return 'Salesforce Field';
     }
   }
 
@@ -588,19 +591,21 @@ export class DefaultComponent implements OnInit {
   get targetObjectLabel(): string {
     const crm = (this.targetCrmId || '').toLowerCase();
     switch (crm) {
-      case 'zoho': return 'Zoho Module';
+      case 'zoho':
+        return 'Zoho Module';
       case 'hubspot':
       case 'zendesk':
         return 'Target Object';
       case 'salesforce':
-      default: return 'Salesforce Object';
+      default:
+        return 'Salesforce Object';
     }
   }
 
   // Dynamically determines if the CRM supports complex nested External ID lookups
   get supportsRelationalLookups(): boolean {
     const crm = (this.targetCrmId || '').toLowerCase();
-    // Currently, only Salesforce natively supports mapping parent relationships 
+    // Currently, only Salesforce natively supports mapping parent relationships
     // via dynamic External IDs inside a standard bulk payload.
     return crm === 'salesforce' || crm === 'zoho';
   }
@@ -627,7 +632,7 @@ export class DefaultComponent implements OnInit {
 
   // --- SAVED MAPPING TEMPLATES ---
   async saveMappingTemplate() {
-    const activeMappings = this.mappings.filter(m => m.sfField !== '');
+    const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
       this.toastr.warning('Map at least one field to save a template.', 'Cannot Save');
       return;
@@ -673,7 +678,9 @@ export class DefaultComponent implements OnInit {
     }
 
     const options: any = {};
-    objectTemplates.forEach((t: any) => { options[t.name] = t.name; });
+    objectTemplates.forEach((t: any) => {
+      options[t.name] = t.name;
+    });
 
     const { value: selectedName } = await Swal.fire({
       title: 'Load Template',
@@ -689,10 +696,14 @@ export class DefaultComponent implements OnInit {
       this.operationMode = t.operationMode;
       this.targetExtIdField = t.targetExtIdField;
 
-      this.mappings.forEach(m => { m.sfField = ''; m.parentObjectName = undefined; m.relationalExtIdField = ''; });
+      this.mappings.forEach((m) => {
+        m.sfField = '';
+        m.parentObjectName = undefined;
+        m.relationalExtIdField = '';
+      });
 
       t.mappings.forEach((savedMap: any) => {
-        const match = this.mappings.find(m => m.csvField === savedMap.csvField);
+        const match = this.mappings.find((m) => m.csvField === savedMap.csvField);
         if (match) {
           match.sfField = savedMap.sfField;
           match.parentObjectName = savedMap.parentObjectName;
@@ -720,7 +731,10 @@ export class DefaultComponent implements OnInit {
   private getSimilarity(s1: string, s2: string): number {
     let longer = s1;
     let shorter = s2;
-    if (s1.length < s2.length) { longer = s2; shorter = s1; }
+    if (s1.length < s2.length) {
+      longer = s2;
+      shorter = s1;
+    }
     const longerLength = longer.length;
     if (longerLength === 0) return 1.0;
 
@@ -732,8 +746,7 @@ export class DefaultComponent implements OnInit {
         else {
           if (j > 0) {
             let newValue = costs[j - 1];
-            if (longer.charAt(i - 1) != shorter.charAt(j - 1))
-              newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+            if (longer.charAt(i - 1) != shorter.charAt(j - 1)) newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
             costs[j - 1] = lastValue;
             lastValue = newValue;
           }
@@ -755,16 +768,20 @@ export class DefaultComponent implements OnInit {
       const pastMappings = savedMappingData ? JSON.parse(savedMappingData) : {};
 
       const normalizeString = (str: string) => {
-        return String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
+        return String(str)
+          .toLowerCase()
+          .replace(/__c$/g, '')
+          .replace(/id$/g, '')
+          .replace(/[^a-z0-9]/g, '');
       };
 
-      this.mappings.forEach(mapping => {
+      this.mappings.forEach((mapping) => {
         if (!mapping.sfField) {
           const rawCsv = mapping.csvField;
           const normalCsv = normalizeString(rawCsv);
 
           if (pastMappings[rawCsv]) {
-            const savedSfField = this.sfFields.find(f => f.name === pastMappings[rawCsv]);
+            const savedSfField = this.sfFields.find((f) => f.name === pastMappings[rawCsv]);
             if (savedSfField) {
               mapping.sfField = savedSfField.name;
               memoryCount++;
@@ -815,7 +832,7 @@ export class DefaultComponent implements OnInit {
   clearAllMappings() {
     Swal.fire({
       title: 'Are you sure?',
-      text: "You will lose all your currently mapped fields!",
+      text: 'You will lose all your currently mapped fields!',
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#dc3545',
@@ -823,7 +840,7 @@ export class DefaultComponent implements OnInit {
       confirmButtonText: 'Yes, clear them!'
     }).then((result) => {
       if (result.isConfirmed) {
-        this.mappings.forEach(m => {
+        this.mappings.forEach((m) => {
           m.sfField = '';
           m.relationalExtIdField = '';
           m.parentObjectName = undefined;
@@ -843,12 +860,15 @@ export class DefaultComponent implements OnInit {
           this.sfFields = this.sortFieldsAlphabetically(fieldsArray);
 
           if (!isEditMode) {
-            this.mappings.forEach(m => { m.sfField = ''; m.relationalExtIdField = ''; });
+            this.mappings.forEach((m) => {
+              m.sfField = '';
+              m.relationalExtIdField = '';
+            });
           } else {
-            this.mappings.forEach(m => {
+            this.mappings.forEach((m) => {
               if (m.parentObjectName && !this.parentObjectFieldsCache[m.parentObjectName]) {
                 m.isLoadingParentFields = true;
-                
+
                 this.migrationService.getObjectFields(this.targetCrmId, m.parentObjectName, 'target').subscribe({
                   next: (pRes: any) => {
                     setTimeout(() => {
@@ -893,27 +913,26 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '').length;
   }
 
- onSfFieldChange(mapping: MappingMeta) {
+  onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
     // Check if it's a lookup field (reference)
     if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
-      
       // 1. Try to get parent object from standard metadata (Works perfectly for Salesforce)
-      let parentObj = (fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0) ? fieldMeta.referenceTo[0] : null;
+      let parentObj = fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0 ? fieldMeta.referenceTo[0] : null;
 
       // 2. FULLY DYNAMIC SMART FALLBACK: Guess parent module by scanning all loaded CRM objects!
       // (Change 'this.sfObjects' to 'this.targetObjects' if that's what your array is named)
       if (!parentObj && this.sfObjects && this.sfObjects.length > 0) {
         const fieldLower = mapping.sfField.toLowerCase().replace(/[^a-z0-9]/g, ''); // Clean field name
 
-        const matchedObj = this.sfObjects.find(obj => {
+        const matchedObj = this.sfObjects.find((obj) => {
           const objNameLower = (obj.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
           if (!objNameLower) return false;
-          
+
           // Create a singular version for matching (e.g., 'accounts' -> 'account')
           const singularName = objNameLower.endsWith('s') ? objNameLower.slice(0, -1) : objNameLower;
-          
+
           // Match if the field name contains the object name or its singular form
           return fieldLower.includes(singularName) || fieldLower.includes(objNameLower);
         });
@@ -928,8 +947,11 @@ export class DefaultComponent implements OnInit {
         mapping.parentObjectName = parentObj;
 
         if (!this.parentObjectFieldsCache[parentObj]) {
-          setTimeout(() => { mapping.isLoadingParentFields = true; this.cdr.detectChanges(); });
-          
+          setTimeout(() => {
+            mapping.isLoadingParentFields = true;
+            this.cdr.detectChanges();
+          });
+
           this.migrationService.getObjectFields(this.targetCrmId, parentObj, 'target').subscribe({
             next: (response: any) => {
               setTimeout(() => {
@@ -962,7 +984,10 @@ export class DefaultComponent implements OnInit {
   queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {
-      this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
+      this.toastr.error(
+        `The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`,
+        'Duplicate Object'
+      );
       return;
     }
 
@@ -979,7 +1004,10 @@ export class DefaultComponent implements OnInit {
     }
 
     if (this.operationMode === 'update' && !this.targetExtIdField) {
-      this.toastr.error('Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.', 'Missing Configuration');
+      this.toastr.error(
+        'Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.',
+        'Missing Configuration'
+      );
       return;
     }
 
@@ -1005,7 +1033,9 @@ export class DefaultComponent implements OnInit {
     });
 
     const mapToSave: any = {};
-    activeMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
+    activeMappings.forEach((m) => {
+      mapToSave[m.csvField] = m.sfField;
+    });
     localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
     this.migrationQueue.push({
@@ -1133,7 +1163,10 @@ export class DefaultComponent implements OnInit {
         return;
       }
       if (this.operationMode === 'update' && !this.targetExtIdField) {
-        this.toastr.error('Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.', 'Missing Configuration');
+        this.toastr.error(
+          'Update requires a Primary Upsert Key (External ID / unique field) to match existing records against.',
+          'Missing Configuration'
+        );
         return;
       }
       if (this.operationMode === 'upsert' && !this.targetExtIdField) {
@@ -1143,7 +1176,10 @@ export class DefaultComponent implements OnInit {
 
       const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
       if (isDuplicate) {
-        this.toastr.error(`The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`, 'Duplicate Object');
+        this.toastr.error(
+          `The object "${this.selectedObject}" is already in the queue. Please edit the existing entry instead of adding it again.`,
+          'Duplicate Object'
+        );
         return;
       }
 
@@ -1158,7 +1194,9 @@ export class DefaultComponent implements OnInit {
       });
 
       const mapToSave: any = {};
-      this.confirmedMappings.forEach(m => { mapToSave[m.csvField] = m.sfField; });
+      this.confirmedMappings.forEach((m) => {
+        mapToSave[m.csvField] = m.sfField;
+      });
       localStorage.setItem(`${this.targetCrmId}_map_${this.selectedObject}`, JSON.stringify(mapToSave));
 
       this.migrationQueue.push({
@@ -1196,10 +1234,10 @@ export class DefaultComponent implements OnInit {
 
     let csvContent = 'Target Object,Source Sheet,Operation Mode,External ID Key,CSV Column,Destination Field,Relational Lookup Key\n';
 
-    this.migrationQueue.forEach(job => {
-      const activeMappings = job.mappings.filter(m => m.sfField && m.sfField !== '');
+    this.migrationQueue.forEach((job) => {
+      const activeMappings = job.mappings.filter((m) => m.sfField && m.sfField !== '');
 
-      activeMappings.forEach(m => {
+      activeMappings.forEach((m) => {
         const safeCsvCol = `"${m.csvField.replace(/"/g, '""')}"`;
         const safeSfField = `"${m.sfField.replace(/"/g, '""')}"`;
         const relation = m.type === 'reference' && m.relationalExtIdField ? `Linked via ${m.relationalExtIdField}` : 'N/A';
@@ -1227,7 +1265,7 @@ export class DefaultComponent implements OnInit {
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;
-    
+
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('Please map at least one field before migrating.', 'No Mappings');
       return;
@@ -1235,7 +1273,7 @@ export class DefaultComponent implements OnInit {
 
     let totalRows = 0;
     if (this.workbook) {
-      this.migrationQueue.forEach(job => {
+      this.migrationQueue.forEach((job) => {
         const worksheet = this.workbook!.Sheets[job.sheetName];
         const rawData: any[] = utils.sheet_to_json(worksheet);
         totalRows += rawData.length;
@@ -1247,7 +1285,9 @@ export class DefaultComponent implements OnInit {
 
     const popupTitle = isDeleteOnly
       ? '<strong class="text-danger">Ready for Data Deletion?</strong>'
-      : (hasDelete ? '<strong>Ready for Migration & Deletion?</strong>' : '<strong>Ready for Data Migration?</strong>');
+      : hasDelete
+        ? '<strong>Ready for Migration & Deletion?</strong>'
+        : '<strong>Ready for Data Migration?</strong>';
 
     const confirmBtnText = isDeleteOnly
       ? '<i class="feather icon-trash-2 me-1"></i> Execute Deletion'
@@ -1290,7 +1330,6 @@ export class DefaultComponent implements OnInit {
       }
     }).then((result) => {
       if (result.isConfirmed) {
-        
         this.isMigrating = true;
         this.completedJobsCount = 0;
         this.activeJobStatus = `Initializing live connection to server...`;
@@ -1298,100 +1337,99 @@ export class DefaultComponent implements OnInit {
 
         this.authService.refreshToken().subscribe({
           next: () => {
-            const baseUrl = 'http://localhost:8000'; 
+            const baseUrl = 'http://localhost:8000';
             const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
             const ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          this.activeJobStatus = `Connection established. Preparing payload...`;
-          this.cdr.detectChanges();
+            ws.onopen = () => {
+              this.activeJobStatus = `Connection established. Preparing payload...`;
+              this.cdr.detectChanges();
 
-          const token = localStorage.getItem('supabase_token') || '';
+              const token = localStorage.getItem('supabase_token') || '';
 
-          const payload = {
-            authToken: token,
-            queue: this.migrationQueue.map(job => {
-                let parsedSourceRecords = undefined;
+              const payload = {
+                authToken: token,
+                queue: this.migrationQueue.map((job) => {
+                  let parsedSourceRecords = undefined;
 
-                if (this.sourceCrmId === 'csv' && this.workbook) {
+                  if (this.sourceCrmId === 'csv' && this.workbook) {
                     const worksheet = this.workbook.Sheets[job.sheetName];
                     parsedSourceRecords = utils.sheet_to_json(worksheet);
-                }
+                  }
 
-                return {
+                  return {
                     ...job,
-                    sourceCrmId: this.sourceCrmId, 
-                    targetCrmId: this.targetCrmId, 
+                    sourceCrmId: this.sourceCrmId,
+                    targetCrmId: this.targetCrmId,
                     batchSize: this.batchSize,
                     externalIdField: job.targetExtIdField,
                     sourceRecords: parsedSourceRecords
-                };
-            })
-          };
+                  };
+                })
+              };
 
-          ws.send(JSON.stringify(payload));
-        };
+              ws.send(JSON.stringify(payload));
+            };
 
-        ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          
-          this.activeJobStatus = data.log;
-          
-          if (data.log.includes('Completed:')) {
-            this.completedJobsCount++;
-          }
-          
-          this.cdr.detectChanges();
+            ws.onmessage = (event) => {
+              const data = JSON.parse(event.data);
 
-          if (data.status === 'Finished' || data.status === 'Failed') {
-              this.isMigrating = false;
-              
-              if (data.successData || data.errorData) {
+              this.activeJobStatus = data.log;
+
+              if (data.log.includes('Completed:')) {
+                this.completedJobsCount++;
+              }
+
+              this.cdr.detectChanges();
+
+              if (data.status === 'Finished' || data.status === 'Failed') {
+                this.isMigrating = false;
+
+                if (data.successData || data.errorData) {
                   this.successfulRecords = data.successData || [];
                   this.failedRecords = data.errorData || [];
-                  this.migrationSummary = { 
-                      success: this.successfulRecords.length, 
-                      failed: this.failedRecords.length 
+                  this.migrationSummary = {
+                    success: this.successfulRecords.length,
+                    failed: this.failedRecords.length
                   };
-              }
+                }
 
-              if (data.status === 'Finished') {
+                if (data.status === 'Finished') {
                   this.toastr.success('Migration sequence complete.', 'Done');
-              } else {
+                } else {
                   this.toastr.error('Migration encountered a fatal error. Check logs.', 'Failed');
+                }
+
+                this.currentStep = 5;
+                this.autoNavigate();
+                this.cdr.detectChanges();
+
+                ws.close();
               }
+            };
 
-              this.currentStep = 5;
-              this.autoNavigate();
+            ws.onerror = (error) => {
+              this.isMigrating = false;
+              this.toastr.error('Lost connection to the migration server.', 'Network Error');
+              this.activeJobStatus = 'Connection Error';
               this.cdr.detectChanges();
-              
-              ws.close();
-          }
-        };
+            };
 
-        ws.onerror = (error) => {
-          this.isMigrating = false;
-          this.toastr.error('Lost connection to the migration server.', 'Network Error');
-          this.activeJobStatus = 'Connection Error';
-          this.cdr.detectChanges();
-        };
-
-        ws.onclose = (event) => {
-          if (this.isMigrating) {
-             this.isMigrating = false;
-             this.toastr.warning('The server closed the connection unexpectedly.', 'Disconnected');
-             this.cdr.detectChanges();
-          }
-        };
-      },
-      error: () => {
+            ws.onclose = (event) => {
+              if (this.isMigrating) {
+                this.isMigrating = false;
+                this.toastr.warning('The server closed the connection unexpectedly.', 'Disconnected');
+                this.cdr.detectChanges();
+              }
+            };
+          },
+          error: () => {
             this.isMigrating = false;
             this.toastr.error('Authentication expired. Please log in again.');
             this.router.navigate(['/login']);
           }
         });
       }
-
     });
   }
 
@@ -1572,7 +1610,7 @@ export class DefaultComponent implements OnInit {
     for (const mapping of this.mappings) {
       if (mapping.relationalExtIdField && mapping.relationalExtIdField !== 'Id') {
         const parentName = mapping.parentObjectName;
-        const isParentInQueue = this.migrationQueue.some(q => q.targetObject === parentName);
+        const isParentInQueue = this.migrationQueue.some((q) => q.targetObject === parentName);
 
         if (!isParentInQueue) {
           return `You are linking to ${parentName} via Legacy ID (${mapping.relationalExtIdField}). Ensure these ${parentName} records already exist in your Target CRM, or add a ${parentName} sheet to your queue.`;
@@ -1598,7 +1636,6 @@ export class DefaultComponent implements OnInit {
   }
 
   overrideGoToReview() {
-
     if (this.operationMode === 'upsert') {
       if (this.hasOrderingIssue()) {
         this.toastr.error('Complex circular dependency detected. Please check your external IDs.', 'Sequence Error');

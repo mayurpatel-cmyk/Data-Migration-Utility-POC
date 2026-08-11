@@ -19,7 +19,7 @@ class PayloadBuilderService:
             has_patch_data = False
 
             for mapping in mappings:
-                # --- FIX: Support BOTH API Mapping and CSV Mapping formats ---
+                # ---  Support BOTH API Mapping and CSV Mapping formats ---
                 target_field = mapping.get("targetField") or mapping.get("sfField")
                 if not target_field: continue
 
@@ -129,7 +129,7 @@ class PayloadBuilderService:
                 elif target_crm == "zoho":
                     rel_ext_id = mapping.get("relationalExtIdField")
                     
-                    # BULLETPROOF FIX: If rel_ext_id exists, always treat it as a lookup dictionary
+                    #  If rel_ext_id exists, always treat it as a lookup dictionary
                     if rel_ext_id:
                         if rel_ext_id.lower() == "id":
                             target_record[target_field] = csv_val

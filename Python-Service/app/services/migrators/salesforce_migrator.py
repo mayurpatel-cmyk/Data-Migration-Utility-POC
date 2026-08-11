@@ -164,9 +164,7 @@ class SalesforceMigrator:
                 orig_record = source_records[row_data["originalIndex"]]
                 
                 if sf_result.get("success"):
-                    # --- FIX: "update" mode must skip (not create) unmatched records.
-                    # Since we ran this as a real upsert on the wire, Salesforce will
-                    # happily insert rows with no external-id match. Catch that here.
+     
                     if is_update_only and sf_result.get("created"):
                         orig_record["Target_SkipReason"] = (
                             f"[{target_ext_id_field}] No matching record found in Salesforce. "
@@ -181,7 +179,7 @@ class SalesforceMigrator:
                     all_success_data.append(orig_record)
                     total_success += 1
                 else:
-                    # --- FIX: Extract Exact Salesforce Field ---
+                    # --- Extract Exact Salesforce Field ---
                     err_obj = sf_result.get("errors", [{}])[0]
                     err_msg = err_obj.get("message", "Unknown Error")
                     fields = err_obj.get("fields", [])

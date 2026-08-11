@@ -20,6 +20,7 @@ interface ValidationJob {
   csvHeaders: string[];
   mappings: any[];
   dedupeKey: string;
+  operationMode: string;
   results?: any;
   status?: 'pending' | 'validating' | 'done' | 'error';
 }
@@ -53,6 +54,7 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
+  operationMode: string = 'insert';
   selectedDateFormat = '';
   targetCrmId: string = 'salesforce';
 
@@ -194,6 +196,29 @@ export class DataValidationComponent implements OnInit {
   getSfFieldMeta(fieldName: string): any {
     if (!fieldName) return null;
     return this.sfFields.find((f) => f.name === fieldName);
+  }
+
+  onOperationModeChange() {
+    if (this.operationMode === 'insert') {
+      this.dedupeKey = '';
+    }
+  }
+
+  private isExternalIdEligible(field: any): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    if (crm === 'hubspot') {
+      return field.name === 'id' || field.name === 'hs_object_id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'zendesk') {
+      return !!field.externalId;
+    }
+    // Salesforce, Zoho, and default fallback
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup || !!field.unique;
+  }
+
+  getExternalIdEligibleFields(): any[] {
+    if (!this.sfFields) return [];
+    return this.sfFields.filter((f) => this.isExternalIdEligible(f));
   }
 
   getTotalRequiredFieldsCount(): number {
@@ -552,6 +577,14 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
+    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.dedupeKey) {
+      this.toastr.warning(
+        `Please select an External ID field to match existing ${this.targetCrmId.toUpperCase()} records for ${this.operationMode.toUpperCase()}.`,
+        'Missing External ID'
+      );
+      return;
+    }
+
     const cleanMappings = activeMappings.map(m => {
       const meta = this.getSfFieldMeta(m.sfField);
       const isReq = meta ? (meta.isRequired === true) : false;
@@ -582,13 +615,15 @@ export class DataValidationComponent implements OnInit {
       csvHeaders: [...this.csvHeaders],
       mappings: cleanMappings,
       dedupeKey: this.dedupeKey,
+      operationMode: this.operationMode,
       status: 'pending'
     });
 
-    this.toastr.success(`${this.selectedObject} added to validation queue!`, 'Queued');
+    this.toastr.success(`${this.selectedObject} added to validation queue (${this.operationMode.toUpperCase()})!`, 'Queued');
 
     this.selectedObject = '';
     this.dedupeKey = '';
+    this.operationMode = 'insert';
     this.mappings = this.csvHeaders.map(header => ({
       csvField: header, sfField: '', type: 'string',
       dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: ''
@@ -603,6 +638,7 @@ export class DataValidationComponent implements OnInit {
     this.rawData = [...itemToEdit.rawData];
     this.csvHeaders = [...itemToEdit.csvHeaders];
     this.dedupeKey = itemToEdit.dedupeKey || '';
+    this.operationMode = itemToEdit.operationMode || 'insert';
 
     this.isLoadingObjects = true;
     this.migrationService.getObjectFields(this.targetCrmId, this.selectedObject, 'target').subscribe({
