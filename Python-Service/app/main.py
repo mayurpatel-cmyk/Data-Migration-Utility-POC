@@ -44,3 +44,7 @@ app.include_router(migration_history)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
 app.include_router(validation_router)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}

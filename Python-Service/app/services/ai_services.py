@@ -1,11 +1,12 @@
 import httpx
+import os
 import math
 import re
 from fastapi import HTTPException
 from typing import Dict, List, Any
 
-OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
-EMBEDDING_MODEL = "mxbai-embed-large" 
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/api")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large") 
 
 # In-memory cache to prevent re-embedding the same target fields
 _TARGET_CACHE: Dict[str, List[float]] = {}

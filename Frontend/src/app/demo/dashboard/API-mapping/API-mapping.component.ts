@@ -3,8 +3,6 @@ import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnD
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { forkJoin } from 'rxjs';
-import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
-import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
@@ -46,7 +44,7 @@ interface CrmEntity {
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent, EditorComponent],
+  imports: [CommonModule, FormsModule, EditorComponent],
   templateUrl: './API-mapping.component.html',
   styleUrls: ['./API-mapping.component.scss']
 })

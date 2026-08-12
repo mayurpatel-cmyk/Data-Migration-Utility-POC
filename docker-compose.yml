@@ -1,37 +1,78 @@
-version: '3.8'
-
 services:
   angular-frontend:
-    build: 
+    build:
       context: ./frontend
       dockerfile: Dockerfile.prod
     ports:
       - "80:80"
     networks:
       - migration-net
-
-  node-backend:
-    build: ./backend-node
-    environment:
-      - NODE_ENV=production
-      - SF_CONSUMER_KEY=${SF_CONSUMER_KEY}
-      - SF_CONSUMER_SECRET=${SF_CONSUMER_SECRET}
-      # Point to the internal Docker Python service
-      - PYTHON_SERVICE_URL=http://python-engine:8000 
-    networks:
-      - migration-net
+    depends_on:
+      python-engine:
+        condition: service_healthy
+    restart: unless-stopped
 
   python-engine:
     build: ./backend-python
+    ports:
+      - "8000:8000"
     environment:
       - FASTAPI_ENV=production
-    deploy:
-      resources:
-        limits:
-          memory: 4G
+      - OLLAMA_BASE_URL=http://ollama:11434/api
+      - EMBEDDING_MODEL=mxbai-embed-large
+      - CORS_ALLOWED_ORIGINS=http://localhost,http://localhost:4200
     networks:
       - migration-net
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"          # remove if you don't need host access to Ollama directly
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - migration-net
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # Uncomment if the host has an NVIDIA GPU + nvidia-container-toolkit installed
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    networks:
+      - migration-net
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "ollama pull mxbai-embed-large"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    restart: "no"
 
 networks:
   migration-net:
     driver: bridge
+
+volumes:
+  ollama-data:
