@@ -2,7 +2,8 @@ import os
 import tempfile
 import csv
 from fpdf import FPDF
-from app.utils.config import supabase
+from supabase import create_client
+from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY  # verify these constant names against your actual app.utils.config
 
 class AuditService:
     @staticmethod
@@ -91,10 +92,10 @@ class AuditService:
         # ==========================================
         # 4. SAVE TO DATABASE
         # ==========================================
-        supabase.auth.set_session(access_token=auth_token, refresh_token="")
+        scoped_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        scoped_client.auth.set_session(access_token=auth_token, refresh_token="")
 
-        
-        supabase.table("migration_history").insert({
+        scoped_client.table("migration_history").insert({
             "user_id": user_id,
             "session_id": session_id,
             "source_crm": source_crm,

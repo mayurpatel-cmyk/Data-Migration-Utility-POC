@@ -29,7 +29,7 @@ class CrmQueryService:
         safe_soql = urllib.parse.quote(soql)
         url = f"{sf_instance}/services/data/v60.0/query?q={safe_soql}"
         
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.get(url, headers={"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"})
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"Salesforce rejected query: {res.text}")
@@ -49,7 +49,7 @@ class CrmQueryService:
         standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
         is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             if is_standard:
                 if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
                 clean_query = re.sub(r'(?i)^(select\s+.*\s+from\s+[a-zA-Z0-9_]+\s*(where\s+)?)', '', query).strip()
@@ -103,7 +103,7 @@ class CrmQueryService:
         if limit > 200:
             limit = 200
             
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             if query:
                 coql_query = query.strip()
                 if coql_query.lower().startswith("select "):
@@ -158,7 +158,7 @@ class CrmQueryService:
             "Content-Type": "application/json"
         }
         
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             properties = headers_list[:50] if headers_list else ["hs_object_id", "createdate", "lastmodifieddate"]
             url = f"{domain}/crm/v3/objects/{obj_name}/search"
             

@@ -1,7 +1,8 @@
 import asyncio
 import httpx
 import traceback
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from app.api.dependencies.auth import get_current_user
 from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
 from app.services.crm_service import CrmService
@@ -28,6 +29,8 @@ import csv
 from datetime import datetime
 from fastapi.responses import StreamingResponse
 
+import re
+
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
 
@@ -41,7 +44,15 @@ MIGRATORS = {
 # Files/Attachments migration is Salesforce -> Salesforce only for now
 FILE_MIGRATOR = SalesforceFileMigrator()
 
+_SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+def _require_valid_session_id(session_id: str) -> str:
+    if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    return session_id
+
 def get_db_path(session_id: str):
+    session_id = _require_valid_session_id(session_id)
     parts = session_id.split('_')
     crm_folder = parts[0] if len(parts) > 0 else "uncategorized"
     obj_folder = parts[1] if len(parts) > 1 else "unknown_object"
@@ -130,7 +141,7 @@ async def websocket_migration(websocket: WebSocket):
 
         execution_queue = sort_jobs_by_dependency(raw_queue)
 
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             all_success_data, all_error_data, all_skipped_data = [], [], []
 
             for job in execution_queue:
@@ -387,6 +398,14 @@ async def websocket_validate_stream(websocket: WebSocket):
     
     try:
         payload = await websocket.receive_json()
+        auth_token = payload.get("authToken")
+        user_res = supabase.auth.get_user(auth_token)
+        if not user_res or not user_res.user:
+            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
+            await websocket.close()
+            return
+        user_id = user_res.user.id
+
         is_revalidation = payload.get("isRevalidation", False)
         session_id = payload.get("sessionId", "")
 
@@ -446,14 +465,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             return
 
         # --- INITIAL VALIDATION ROUTE (DYNAMIC) ---
-        auth_token = payload.get("authToken")
-        user_res = supabase.auth.get_user(auth_token)
-        if not user_res or not user_res.user:
-            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
-            await websocket.close()
-            return
-        
-        user_id = user_res.user.id
         source_crm = payload.get("crmId", "").lower()
         target_crm = payload.get("targetCrmId", "salesforce").lower()
         obj_name = payload.get("objectName", "")
@@ -478,7 +489,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
         await send_log(f"System: Initializing Streaming Validation...", "Connecting")
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
                 raw_records = await source_migrator.extract(client, source_creds, obj_name, query, mappings, send_log)
@@ -542,7 +553,7 @@ async def websocket_validate_stream(websocket: WebSocket):
 # ROUTE: DOWNLOAD FULL AUDIT REPORT (CSV)
 # ==========================================
 @router.get("/api/audit/download/{session_id}")
-async def download_validation_audit(session_id: str, type: str = 'valid'):
+async def download_validation_audit(session_id: str, type: str = 'valid', current_user = Depends(get_current_user)):
     db_path = get_db_path(session_id)
     
     if not os.path.exists(db_path):

@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.api.dependencies.auth import get_current_user
 from app.utils.config import supabase
+
+logger = logging.getLogger(__name__)
 
 # 1. Initialize the router here so FastAPI knows what 'router' is
 router = APIRouter()
@@ -16,4 +19,5 @@ def get_migration_history(current_user = Depends(get_current_user)):
             .execute()
         return {"success": True, "history": response.data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to fetch migration history for user %s: %s", current_user.id, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch migration history.")

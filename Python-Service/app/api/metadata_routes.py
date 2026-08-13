@@ -1,13 +1,18 @@
-from fastapi import APIRouter, Depends, Request, HTTPException
+import logging
+import re
+import difflib
+from typing import List, Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
 from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
 from app.services.crm_metadata_service import CrmMetadataService
 from app.services.crm_query_service import CrmQueryService
 from app.services.ai_services import LocalAiService
-import traceback
-import re
-import difflib
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # =========================================================
@@ -16,7 +21,7 @@ router = APIRouter()
 @router.get("/api/metadata/{crm_id}/objects")
 async def get_crm_objects(crm_id: str, role: str = "source", current_user = Depends(get_current_user)):
     crm_lower = crm_id.lower()
-    
+
     # Securely grab credentials from Database using Supabase Auth token
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_lower, role)
 
@@ -73,16 +78,22 @@ async def get_crm_fields(crm_id: str, object_name: str, role: str = "source", cu
 # =========================================================
 # RUN PREVIEW QUERY DYNAMICALLY (With Silent Token Refresh)
 # =========================================================
+class PreviewFilterPayload(BaseModel):
+    crmId: str
+    objectName: str
+    query: str = ""
+    headers: List[str] = Field(default_factory=list)
+    limit: int = 5
+    role: str = "source"
+
 @router.post("/api/metadata/preview-filter")
-async def get_filtered_preview(request: Request, current_user = Depends(get_current_user)):
-    payload = await request.json()
-    
-    crm_id = payload.get("crmId", "").lower()
-    obj_name = payload.get("objectName", "")
-    query = payload.get("query", "").strip()
-    headers_list = payload.get("headers", [])
-    limit = int(payload.get("limit", 5))
-    role = payload.get("role", "source")
+async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Depends(get_current_user)):
+    crm_id = payload.crmId.lower()
+    obj_name = payload.objectName
+    query = payload.query.strip()
+    headers_list = payload.headers
+    limit = payload.limit
+    role = payload.role
 
     if not obj_name:
         raise HTTPException(status_code=400, detail="Object name is required.")
@@ -92,8 +103,8 @@ async def get_filtered_preview(request: Request, current_user = Depends(get_curr
 
     async def _fetch(token):
         # Temporarily inject the new token into the creds dictionary for the query service
-        creds["access_token"] = token 
-        
+        creds["access_token"] = token
+
         if crm_id == "salesforce":
             return await CrmQueryService.execute_salesforce_query(creds, obj_name, query, headers_list, limit)
         elif crm_id == "zendesk":
@@ -132,7 +143,7 @@ def tokenize_field(name: str) -> set:
     s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', name)
     s2 = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1)
     words = re.sub(r'[^a-zA-Z0-9]', ' ', s2).lower().split()
-    
+
     # Stemming: Truncate words to their base roots to align variations (e.g., billing/bill -> bill)
     roots = []
     for w in words:
@@ -145,19 +156,27 @@ def tokenize_field(name: str) -> set:
             roots.append(w)
     return set(roots)
 
+class FieldMeta(BaseModel):
+    name: str
+    type: str = "string"
+
+class AiAutoMapPayload(BaseModel):
+    sourceFields: List[FieldMeta]
+    targetFields: List[FieldMeta]
+
 @router.post("/api/metadata/ai-auto-map")
-async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_user)):
+async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(get_current_user)):
     """
-    Advanced Token-Heuristic Pipeline. Instantly resolves field layouts using 
+    Advanced Token-Heuristic Pipeline. Instantly resolves field layouts using
     in-memory word mechanics, leaving only deep semantic anomalies for the local SLM.
     """
     try:
-        source_fields = payload.get("sourceFields")
-        raw_target_fields = payload.get("targetFields")
-        
+        source_fields = [f.model_dump() for f in payload.sourceFields]
+        raw_target_fields = [f.model_dump() for f in payload.targetFields]
+
         if not source_fields or not raw_target_fields:
             raise HTTPException(status_code=400, detail="Both sourceFields and targetFields arrays are required.")
-            
+
         # ====================================================
         #  FILTER OUT RESTRICTED SYSTEM FIELDS FOR THE HYBRID ENGINE
         # ====================================================
@@ -172,7 +191,7 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
 
         # Safe Target Fields (Overwrites the raw list)
         target_fields = [
-            t for t in raw_target_fields 
+            t for t in raw_target_fields
             if t.get("name", "").lower() not in restricted_targets
             and t.get("type", "").lower() not in ['reference', 'id']
         ]
@@ -184,30 +203,30 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
 
         final_mappings = []
         unmapped_source = []
-        
+
         # Pre-calculate target catalogs for fast lookup loops
         target_names = [t.get("name") for t in target_fields]
         target_lookup = {normalize_field_name(t.get("name")): t.get("name") for t in target_fields}
-        
+
         target_tokens = []
         for t in target_fields:
             t_name = t.get("name")
             target_tokens.append({
                 "name": t_name,
                 "tokens": tokenize_field(t_name)
-            })        
-       # 1. RUN FAST HEURISTIC ALIGNMENT
+            })
+        # 1. RUN FAST HEURISTIC ALIGNMENT
         for src in source_fields:
             src_name = src.get("name")
             src_type = src.get("type", "string")
             src_norm = normalize_field_name(src_name)
             src_tok = tokenize_field(src_name)
-            
+
             # Pass A: Perfect Text Normalization + Type Check
             if src_norm in target_lookup:
                 tgt_name = target_lookup[src_norm]
                 tgt_meta = next((t for t in target_fields if t.get("name") == tgt_name), {})
-                
+
                 # Verify types match before auto-assigning 1.0 confidence
                 if src_type == tgt_meta.get("type", "string"):
                     final_mappings.append({
@@ -216,7 +235,7 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
                         "confidence": 1.0
                     })
                     continue
-                
+
             # Pass B: Strict Token Intersect Overlap (Require more than just 1 generic match)
             best_token_match = None
             max_overlap = 0
@@ -225,13 +244,12 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
                 # Skip if types are wildly mismatched
                 if src_type != tgt_meta.get("type", "string"):
                     continue
-                    
+
                 overlap = len(src_tok.intersection(tgt["tokens"]))
                 if overlap > max_overlap:
                     max_overlap = overlap
                     best_token_match = tgt["name"]
-            
-        
+
             if max_overlap >= 2 and best_token_match:
                 final_mappings.append({
                     "sourceField": src_name,
@@ -240,8 +258,7 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
                 })
                 continue
 
-        
-            close_matches = difflib.get_close_matches(src_name, target_names, n=1, cutoff=0.75) 
+            close_matches = difflib.get_close_matches(src_name, target_names, n=1, cutoff=0.75)
             if close_matches:
                 tgt_meta = next((t for t in target_fields if t.get("name") == close_matches[0]), {})
                 if src_type == tgt_meta.get("type", "string"):
@@ -251,38 +268,41 @@ async def ai_auto_map_fields(payload: dict, current_user = Depends(get_current_u
                         "confidence": 0.75
                     })
                     continue
-                
-            unmapped_source.append({"name": src_name, "type": src_type})
-                
-        print(f"[HYBRID ENGINE]: Resolved {len(final_mappings)} fields instantly via fast token algorithms.")
-        print(f"[HYBRID ENGINE]: Passing remaining {len(unmapped_source)} complex fields to local SLM...")
 
+            unmapped_source.append({"name": src_name, "type": src_type})
+
+        logger.info(
+            "[HYBRID ENGINE] Resolved %d fields via fast token algorithms; %d remain for local SLM.",
+            len(final_mappings), len(unmapped_source)
+        )
 
         if unmapped_source:
             # OPTIMIZATION: Only send target fields that haven't been mapped yet!
             mapped_target_names = [m["targetField"] for m in final_mappings if "targetField" in m]
-            
+
             minimized_target = [
-                {"name": f.get("name"), "type": f.get("type", "string")} 
-                for f in target_fields 
+                {"name": f.get("name"), "type": f.get("type", "string")}
+                for f in target_fields
                 if f.get("name") not in mapped_target_names
             ]
-            
+
             CHUNK_SIZE = 10
             source_chunks = [unmapped_source[i:i + CHUNK_SIZE] for i in range(0, len(unmapped_source), CHUNK_SIZE)]
-            
+
             for index, chunk in enumerate(source_chunks):
-                print(f"[AI BATCH LOG]: Running local inference on batch {index + 1}...")
+                logger.debug("[AI BATCH] Running local inference on batch %d...", index + 1)
                 res = await LocalAiService.generate_mapping(chunk, minimized_target)
-                
+
                 if isinstance(res, dict) and "mappings" in res:
                     final_mappings.extend(res["mappings"])
 
-        print(f"[HYBRID ENGINE]: Complete! Safely returning {len(final_mappings)} mappings.")
+        logger.info("[HYBRID ENGINE] Complete: returning %d mappings.", len(final_mappings))
         return {"mappings": final_mappings}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print("\n=== FATAL AI ROUTE CRASH ===")
-        traceback.print_exc()
-        print("============================\n")
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        # Log the full traceback server-side; don't echo internal exception
+        # text (which can include field names/data shape) back to the client.
+        logger.exception("AI auto-map route crashed")
+        raise HTTPException(status_code=500, detail="Internal Server Error while generating field mappings.")

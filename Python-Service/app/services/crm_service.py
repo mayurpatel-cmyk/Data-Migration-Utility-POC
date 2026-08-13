@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.utils.config import supabase
 import os
 import httpx
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+client = httpx.AsyncClient(timeout=30.0)
 
 class CrmService:
     @staticmethod
@@ -56,7 +56,7 @@ class CrmService:
         crm = crm_type.lower()
         new_access_token = None
         
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             if crm == "salesforce":
                 domain = "test.salesforce.com" if creds.get("environment") == "sandbox" else "login.salesforce.com"
                 res = await client.post(f"https://{domain}/services/oauth2/token", data={

@@ -23,6 +23,17 @@
     color: #0d6efd !important;
     border-color: #cce3ff;
   }
+  /* Sidebar nav items are real <button> elements now (keyboard-accessible),
+     styled to look identical to the old <a> version. */
+  .docs-sidebar-nav .nav-link {
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+  .docs-sidebar-nav .nav-link:focus-visible {
+    outline: 2px solid #0d6efd;
+    outline-offset: 2px;
+  }
   
   .step-number {
     display: flex;
@@ -83,10 +94,10 @@
       </div>
       
       <div class="mt-3 mt-sm-0 d-flex gap-2">
-        <button class="btn btn-outline-primary bg-white shadow-sm d-flex align-items-center gap-2 rounded-pill px-3 pdf-hide-btn" 
+        <!-- <button class="btn btn-outline-primary bg-white shadow-sm d-flex align-items-center gap-2 rounded-pill px-3 pdf-hide-btn" 
                 (click)="downloadPDF()">
           <i class="feather icon-download"></i> Save as PDF
-        </button>
+        </button> -->
         <span class="badge bg-primary-subtle text-primary border border-primary-subtle py-2 px-3 rounded-pill d-none d-sm-flex align-items-center gap-2">
           <i class="feather icon-book-open"></i> Resource Center
         </span>
@@ -98,36 +109,44 @@
 
 <div class="row">
   <div class="col-lg-3 col-md-4 mb-4 docs-sidebar">
-    <div class="bg-white rounded shadow-sm border p-3 sticky-top" style="top: 20px;">
+    <div class="bg-white rounded shadow-sm border p-3 sticky-top docs-sidebar-nav" style="top: 20px;" role="tablist" aria-label="Documentation sections">
       <h6 class="text-uppercase text-muted fw-bold small mb-3 px-2">Getting Started</h6>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'overview' && !isPrinting" (click)="setActiveTab('overview')">
+      <button type="button" id="tab-overview" role="tab" [attr.aria-selected]="activeTab === 'overview' && !isPrinting" aria-controls="panel-overview"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'overview' && !isPrinting" (click)="setActiveTab('overview')">
         <i class="feather icon-compass"></i> Overview & How to Use
-      </a>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'specs' && !isPrinting" (click)="setActiveTab('specs')">
+      </button>
+      <button type="button" id="tab-specs" role="tab" [attr.aria-selected]="activeTab === 'specs' && !isPrinting" aria-controls="panel-specs"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'specs' && !isPrinting" (click)="setActiveTab('specs')">
         <i class="feather icon-cpu"></i> Technical Specs
-      </a>
+      </button>
 
       <h6 class="text-uppercase text-muted fw-bold small mt-4 mb-3 px-2">CRM Configurations</h6>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'salesforce' && !isPrinting" (click)="setActiveTab('salesforce')">
+      <button type="button" id="tab-salesforce" role="tab" [attr.aria-selected]="activeTab === 'salesforce' && !isPrinting" aria-controls="panel-salesforce"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'salesforce' && !isPrinting" (click)="setActiveTab('salesforce')">
         <i class="feather icon-cloud"></i> Salesforce
-      </a>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'zendesk' && !isPrinting" (click)="setActiveTab('zendesk')">
+      </button>
+      <button type="button" id="tab-zendesk" role="tab" [attr.aria-selected]="activeTab === 'zendesk' && !isPrinting" aria-controls="panel-zendesk"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'zendesk' && !isPrinting" (click)="setActiveTab('zendesk')">
         <i class="feather icon-headphones"></i> Zendesk
-      </a>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'hubspot' && !isPrinting" (click)="setActiveTab('hubspot')">
+      </button>
+      <button type="button" id="tab-hubspot" role="tab" [attr.aria-selected]="activeTab === 'hubspot' && !isPrinting" aria-controls="panel-hubspot"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'hubspot' && !isPrinting" (click)="setActiveTab('hubspot')">
         <i class="feather icon-share-2"></i> HubSpot
-      </a>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'zoho' && !isPrinting" (click)="setActiveTab('zoho')">
+      </button>
+      <button type="button" id="tab-zoho" role="tab" [attr.aria-selected]="activeTab === 'zoho' && !isPrinting" aria-controls="panel-zoho"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'zoho' && !isPrinting" (click)="setActiveTab('zoho')">
         <i class="feather icon-layout"></i> Zoho CRM
-      </a>
+      </button>
 
       <h6 class="text-uppercase text-muted fw-bold small mt-4 mb-3 px-2">Support & Guides</h6>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'dataprep' && !isPrinting" (click)="setActiveTab('dataprep')">
+      <button type="button" id="tab-dataprep" role="tab" [attr.aria-selected]="activeTab === 'dataprep' && !isPrinting" aria-controls="panel-dataprep"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'dataprep' && !isPrinting" (click)="setActiveTab('dataprep')">
         <i class="feather icon-file-text"></i> Data Preparation
-      </a>
-      <a class="nav-link cursor-pointer" [class.active]="activeTab === 'faq' && !isPrinting" (click)="setActiveTab('faq')">
+      </button>
+      <button type="button" id="tab-faq" role="tab" [attr.aria-selected]="activeTab === 'faq' && !isPrinting" aria-controls="panel-faq"
+              class="nav-link cursor-pointer" [class.active]="activeTab === 'faq' && !isPrinting" (click)="setActiveTab('faq')">
         <i class="feather icon-help-circle"></i> Troubleshooting & FAQ
-      </a>
+      </button>
     </div>
   </div>
 
@@ -135,7 +154,7 @@
     <app-card cardTitle="Documentation Resources">
 
       @if (activeTab === 'overview' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
         <h4 class="fw-bold text-dark mb-3">How to Use the Migration Engine</h4>
         <p class="text-muted mb-4">Our platform provides two primary pathways for data migration: <strong>Direct API Sync</strong> (System-to-System) and <strong>CSV/Excel Upload</strong>. Follow these core steps to execute a successful migration.</p>
 
@@ -175,7 +194,7 @@
       </div>
       }
       @if (activeTab === 'dataprep' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-dataprep" role="tabpanel" aria-labelledby="tab-dataprep" tabindex="0">
         <h4 class="fw-bold text-dark mb-3">Data Preparation Best Practices</h4>
         <p class="text-muted mb-4">Ensure your CSV or Excel files are properly formatted before uploading to prevent validation errors and data corruption.</p>
         
@@ -207,7 +226,7 @@
       }
 
       @if (activeTab === 'faq' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" tabindex="0">
         <h4 class="fw-bold text-dark mb-3">Troubleshooting & FAQ</h4>
         <p class="text-muted mb-4">Common issues encountered during migration and how to resolve them.</p>
 
@@ -285,7 +304,7 @@
       }
 
       @if (activeTab === 'specs' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-specs" role="tabpanel" aria-labelledby="tab-specs" tabindex="0">
         <h4 class="fw-bold text-dark mb-3">Technical Specifications</h4>
         <p class="text-muted mb-4">The migration engine is built to handle massive datasets securely without crashing your browser. It utilizes WebSockets for real-time streaming and asynchronous batch processing.</p>
         
@@ -338,7 +357,7 @@
       }
 
       @if (activeTab === 'salesforce' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-salesforce" role="tabpanel" aria-labelledby="tab-salesforce" tabindex="0">
         <h4 class="fw-bold text-dark mb-3"><i class="feather icon-cloud text-primary"></i> Salesforce Configuration & Rules</h4>
         
         <div class="alert alert-info border-info-subtle d-flex align-items-center gap-3 shadow-sm mb-4">
@@ -386,7 +405,7 @@
       }
 
       @if (activeTab === 'zendesk' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-zendesk" role="tabpanel" aria-labelledby="tab-zendesk" tabindex="0">
         <h4 class="fw-bold text-dark mb-3"><i class="feather icon-headphones text-primary"></i> Zendesk Configuration & Rules</h4>
         
         <div class="alert alert-info border-info-subtle d-flex align-items-center gap-3 shadow-sm mb-4">
@@ -431,7 +450,7 @@
       }
 
       @if (activeTab === 'hubspot' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-hubspot" role="tabpanel" aria-labelledby="tab-hubspot" tabindex="0">
         <h4 class="fw-bold text-dark mb-3"><i class="feather icon-share-2 text-primary"></i> HubSpot Configuration & Rules</h4>
         
         <div class="alert alert-info border-info-subtle d-flex align-items-center gap-3 shadow-sm mb-4">
@@ -473,7 +492,7 @@
       }
 
       @if (activeTab === 'zoho' || isPrinting) {
-      <div class="doc-section p-2">
+      <div class="doc-section p-2" id="panel-zoho" role="tabpanel" aria-labelledby="tab-zoho" tabindex="0">
         <h4 class="fw-bold text-dark mb-3"><i class="feather icon-layout text-primary"></i> Zoho CRM Configuration & Rules</h4>
         
         <div class="alert alert-info border-info-subtle d-flex align-items-center gap-3 shadow-sm mb-4">

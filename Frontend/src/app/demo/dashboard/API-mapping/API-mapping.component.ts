@@ -8,6 +8,7 @@ import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
+import { AuthService } from 'src/app/demo/Services/auth.service'; // Verify this path matches your project
 
 declare const monaco: any;
 interface FieldMeta {
@@ -54,6 +55,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private cdr = inject(ChangeDetectorRef);
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
+  private authService = inject(AuthService);
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
   private isStandardZendeskObject(name: string): boolean {
@@ -1948,6 +1950,10 @@ toggleProfileDropdown(event: Event): void {
     this.router.navigate(['/connection']);
   }
 
+  returnToHome(): void {
+    this.router.navigate(['/connection']);
+  }
+
   logout(): void {
     Swal.fire({
       title: 'Ready to Leave?',
@@ -1960,13 +1966,7 @@ toggleProfileDropdown(event: Event): void {
       customClass: { popup: 'rounded-4 shadow-lg border-0' }
     }).then((result) => {
       if (result.isConfirmed) {
-        // 1. Wipe secure tokens and session memory
-        localStorage.removeItem('supabase_token');
-        localStorage.removeItem('source_crm_slot');
-        localStorage.removeItem('target_crm_slot');
-        // Or use localStorage.clear(); if you want to wipe absolutely everything
-
-        // 2. Disconnect active websockets
+        // 1. Disconnect active websockets
         if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
           this.validationSocket.close();
         }
@@ -1974,9 +1974,17 @@ toggleProfileDropdown(event: Event): void {
           this.migrationSocket.close();
         }
 
-        // 3. Notify and Redirect
+        // 2. Clear this component's own local slots (not auth tokens —
+        // AuthService owns those)
+        localStorage.removeItem('source_crm_slot');
+        localStorage.removeItem('target_crm_slot');
+
+        // 3. Delegate actual session teardown to AuthService: it clears
+        // supabase_token/refresh/user, resets the currentUser signal that
+        // the route guard reads, calls the backend to kill the session,
+        // and navigates to /login with replaceUrl so Back can't return here.
         this.toastr.success('You have been securely logged out.', 'Goodbye!');
-        this.router.navigate(['/login']);
+        this.authService.logout();
       }
     });
   }

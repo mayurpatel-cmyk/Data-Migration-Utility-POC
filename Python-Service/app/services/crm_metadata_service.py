@@ -2,7 +2,7 @@ import httpx
 import urllib.parse 
 from fastapi import HTTPException
 
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+client = httpx.AsyncClient(timeout=30.0)
 
 class CrmMetadataService:
     
@@ -18,7 +18,7 @@ class CrmMetadataService:
         url = f"{instance_url.rstrip('/')}/services/data/v60.0/sobjects"
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 
@@ -51,7 +51,7 @@ class CrmMetadataService:
         base_url = instance_url.rstrip('/')
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Schema
                 describe_url = f"{base_url}/services/data/v60.0/sobjects/{object_name}/describe"
                 desc_res = await client.get(describe_url, headers=headers)
@@ -141,7 +141,7 @@ class CrmMetadataService:
         url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects"
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200:
                     for custom_obj in res.json().get("custom_objects", []):
@@ -164,7 +164,7 @@ class CrmMetadataService:
         safe_object_name = object_name.lower()
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 schema_fields_map = {}
                 sample_records = []
                 
@@ -308,7 +308,7 @@ class CrmMetadataService:
         url = f"{api_domain.rstrip('/')}/crm/v6/settings/modules"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
 
@@ -342,7 +342,7 @@ class CrmMetadataService:
         base_url = f"{api_domain.rstrip('/')}/crm/v6"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Field Metadata Schema
                 fields_url = f"{base_url}/settings/fields?module={module_name}"
                 fields_res = await client.get(fields_url, headers=headers)
@@ -430,7 +430,7 @@ class CrmMetadataService:
         objects = []
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 # 1. Fetch Standard Objects (HubSpot doesn't have a single /schemas endpoint for everything)
                 standard_objects = [
                     {"name": "contacts", "label": "Contacts"},
@@ -479,7 +479,7 @@ class CrmMetadataService:
         base_url = f"{api_domain.rstrip('/')}/crm/v3/properties/{object_name}"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Schema Properties
                 props_res = await client.get(base_url, headers=headers)
                 props_res.raise_for_status()

@@ -1,7 +1,8 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { HttpClient ,HttpHeaders} from '@angular/common/http';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, tap } from 'rxjs';
 import { Router } from '@angular/router';
+import { environment } from 'src/environments/environment';
 
 export interface AuthResponse {
   success: boolean;
@@ -21,10 +22,23 @@ export interface AuthResponse {
 export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
-  
-  private apiUrl = 'http://localhost:8000/api/auth';
+
+  private apiUrl = `${environment.apiUrl}/api/auth`;
 
   currentUser = signal<string | null>(localStorage.getItem('supabase_token'));
+
+  constructor() {
+    window.addEventListener('storage', (event: StorageEvent) => {
+      if (event.key !== 'supabase_token') {
+        return;
+      }
+      const newToken = event.newValue;
+      this.currentUser.set(newToken);
+      if (!newToken) {
+        this.router.navigate(['/login'], { replaceUrl: true });
+      }
+    });
+  }
 
   login(credentials: any): Observable<AuthResponse> {
     return this.http.post<AuthResponse>(`${this.apiUrl}/login`, credentials).pipe(
@@ -41,8 +55,8 @@ export class AuthService {
   }
 
   signup(data: { email: string; password: string; full_name: string }) {
-  return this.http.post<any>(`${this.apiUrl}/signup`, data);
-}
+    return this.http.post<any>(`${this.apiUrl}/signup`, data);
+  }
 
   // Use this method in your HTTP Interceptor when a 401 Unauthorized occurs
   refreshToken(): Observable<any> {
@@ -62,7 +76,7 @@ export class AuthService {
     const token = localStorage.getItem('supabase_token');
     const headers = new HttpHeaders().set('Authorization', `Bearer ${token}`);
 
-    return this.http.put('http://localhost:8000/update-email', 
+    return this.http.put(`${environment.apiUrl}/update-email`,
       { new_email: newEmail },
       { headers }
     );
@@ -72,15 +86,17 @@ export class AuthService {
     return !!this.currentUser();
   }
 
- forgotPassword(email: string): Observable<any> {
+  forgotPassword(email: string): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/forgot-password`, { email });
   }
 
   private clearLocalSession() {
     localStorage.removeItem('supabase_token');
     localStorage.removeItem('supabase_refresh');
+    localStorage.removeItem('supabase_user');
     this.currentUser.set(null);
-    this.router.navigate(['/login']);
+    // replaceUrl so the guarded page we just left isn't reachable via Back
+    this.router.navigate(['/login'], { replaceUrl: true });
   }
 
   logout() {

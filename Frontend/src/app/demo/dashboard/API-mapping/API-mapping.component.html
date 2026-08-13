@@ -23,6 +23,12 @@
     transition: box-shadow 0.3s ease;
   }
 
+  .api-mapping-logo {
+    height: 28px;
+    width: auto;
+    object-fit: contain;
+  }
+
   .btn-hover-lift-primary:hover:not(:disabled) {
     transform: translateY(-2px);
     box-shadow: 0 0.5rem 1rem rgba(13, 110, 253, 0.35) !important;
@@ -350,6 +356,9 @@
 <div class="card border-primary-subtle shadow-sm mb-3 sticky-header-card">
   <div class="card-body p-3 d-flex flex-wrap align-items-center gap-3">
     <div class="d-flex align-items-center gap-2 me-auto">
+      <a href="javascript:" (click)="returnToHome()" class="d-flex align-items-center me-2" title="Back to Home">
+        <img src="assets/images/gemini-svg.svg" alt="darkMode-logo" class="api-mapping-logo" />
+      </a>
       <button
         class="btn btn-sm btn-light border-secondary-subtle text-secondary me-2 btn-hover-lift d-flex align-items-center gap-1"
         (click)="goBackToConnection()" title="Back to Connections">
