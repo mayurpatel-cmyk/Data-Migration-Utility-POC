@@ -31,7 +31,6 @@ export class MigrationDocsComponent implements OnInit, OnDestroy {
         this.activeTab = requested;
       }
     });
-
     window.addEventListener('afterprint', this.onAfterPrint);
   }
 
@@ -46,6 +45,8 @@ export class MigrationDocsComponent implements OnInit, OnDestroy {
 
   setActiveTab(tabName: DocTab): void {
     this.activeTab = tabName;
+    // replaceUrl: switching sections isn't a "navigation" worth stacking in
+    // browser history -- Back shouldn't have to click through every tab.
     this.router.navigate([], {
       relativeTo: this.route,
       queryParams: { tab: tabName },

@@ -8,6 +8,7 @@ import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
+import { HttpClient } from '@angular/common/http';
 import { AuthService } from 'src/app/demo/Services/auth.service'; // Verify this path matches your project
 
 declare const monaco: any;
@@ -58,6 +59,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private authService = inject(AuthService);
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
+  private http = inject(HttpClient);
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -183,8 +185,8 @@ isProfileDropdownOpen = false;
   ngOnInit(): void {
     // 1. Securely pull the intended CRMs
     this.getUserData();
-this.fetchRecoverableSessions();
-this.preloadEntirePage();
+// this.fetchRecoverableSessions();
+// this.preloadEntirePage();
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
@@ -2174,21 +2176,38 @@ toggleProfileDropdown(event: Event): void {
   }
 
   downloadAudit(type: 'valid' | 'invalid') {
-    if (!this.currentSessionId) {
-      this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
-      return;
-    }
-
-    if (type === 'invalid' && this.validationResults?.invalidRecords) {
-      this.toastr.info(`Generating error audit report...`, 'Downloading');
-      this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
-    } else {
-      // Valid records are handled by the backend because they are too massive for browser RAM
-      this.toastr.info(`Generating valid audit report...`, 'Downloading');
-      const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
-      window.open(url, '_blank');
-    }
+  if (!this.currentSessionId) {
+    this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
+    return;
   }
+
+  if (type === 'invalid' && this.validationResults?.invalidRecords) {
+    this.toastr.info(`Generating error audit report...`, 'Downloading');
+    this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
+    return;
+  }
+
+  this.toastr.info(`Generating valid audit report...`, 'Downloading');
+  const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
+  const token = localStorage.getItem('supabase_token') || '';
+
+  this.http.get(url, {
+    responseType: 'blob',
+    headers: { Authorization: `Bearer ${token}` }
+  }).subscribe({
+    next: (blob) => {
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `Validation_Audit_${type}_${this.currentSessionId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    },
+    error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
+  });
+}
 
   // --- Separated execution logic for clean popup handling ---
   private executeMigrationJob(activeMappings: any[]) {

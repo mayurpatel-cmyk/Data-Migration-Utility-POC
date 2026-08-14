@@ -189,6 +189,14 @@
             <p class="text-muted small">Run the validation sequence. The engine will check your data against the Target CRM's strict schema rules without actually writing the data. Fix any errors in the grid, then click <strong>Run Job</strong> to push the live data.</p>
           </div>
         </div>
+
+        <div class="d-flex align-items-start gap-3 mb-2">
+          <div class="step-number">5</div>
+          <div>
+            <h5 class="fw-bold mb-1 text-dark">Fix & Re-Validate (No Re-Upload Needed)</h5>
+            <p class="text-muted small">If rows are flagged, correct them directly in the results grid and click <strong>Re-validate</strong> — the engine re-checks only the corrected rows against your original upload session. You don't need to start over from a fresh file upload.</p>
+          </div>
+        </div>
         
         @if (isPrinting) { <hr class="my-5"> }
       </div>
@@ -219,8 +227,12 @@
             <h6 class="fw-bold text-dark mb-1"><i class="feather icon-trash-2 text-secondary me-2"></i> "Null" and Empty Values</h6>
             <p class="text-muted small mb-0">Don't worry if your Excel export contains words like <code>#N/A</code>, <code>null</code>, <code>NaN</code>, or <code>&lt;na&gt;</code>. Our Payload Builder automatically detects and scrubs these out so the literal word "null" isn't pushed to your CRM.</p>
           </li>
+          <li class="list-group-item bg-white py-3">
+            <h6 class="fw-bold text-dark mb-1"><i class="feather icon-copy text-danger me-2"></i> Duplicate Key Values in One File</h6>
+            <p class="text-muted small mb-0">If your file has two or more rows with the same value in your Upsert/Update key field, only the <strong>last</strong> occurrence is sent — earlier duplicates are skipped and reported with a reason in your audit log, rather than being sent and letting the CRM's own (non-deterministic) duplicate handling decide. Dedupe your source data first if this isn't the behavior you want.</p>
+          </li>
         </ul>
-        
+
         @if (isPrinting) { <hr class="my-5"> }
       </div>
       }
@@ -297,6 +309,45 @@
             </div>
           </div>
 
+          <div class="accordion-item border-secondary-subtle">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed fw-bold text-dark bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#faq6">
+                I ran Update mode, but I don't see an error — did a new record get created anyway?
+              </button>
+            </h2>
+            <div id="faq6" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+              <div class="accordion-body text-muted small">
+                <strong>Update</strong> mode is only supposed to touch existing records, never create new ones. Some CRM APIs will auto-create a record anyway if no match is found on your key field. SureShift detects this and <strong>automatically reverts (deletes/archives) any record the CRM auto-created</strong> under Update mode, then reports that row as skipped with the reason. You won't see orphaned records left behind — but you will see a skip reason in your audit report, which is worth reviewing.
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item border-secondary-subtle">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed fw-bold text-dark bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#faq7">
+                My Update or Upsert job failed instantly with zero records processed. Why?
+              </button>
+            </h2>
+            <div id="faq7" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+              <div class="accordion-body text-muted small">
+                Update and Upsert modes <strong>require</strong> a mapped External ID / dedupe key field before any data is sent — without one, the CRM has no reliable way to match rows to existing records. If that field isn't configured, the engine fails the entire batch up front (before making any API calls) rather than guessing at a match. Go back to the mapping step and set a <strong>Target External ID Field</strong>.
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item border-secondary-subtle">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed fw-bold text-dark bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#faq8">
+                I fixed a few rows the validator flagged — do I have to re-upload the whole file?
+              </button>
+            </h2>
+            <div id="faq8" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+              <div class="accordion-body text-muted small">
+                No — the validator stages your upload server-side for the duration of your session. Fix the flagged rows directly in the results grid and click <strong>Re-validate</strong>; only the corrected rows are re-checked against the same session, and your original valid rows aren't touched. Staged sessions do expire after a period of inactivity, though — if you see "Staging session expired," you'll need to re-upload.
+              </div>
+            </div>
+          </div>
+
         </div>
         
         @if (isPrinting) { <hr class="my-5"> }
@@ -323,11 +374,19 @@
               </tr>
               <tr>
                 <td class="fw-bold px-4 text-dark">Security & Auth</td>
-                <td class="text-muted">Stateless OAuth 2.0 processing. Data is not stored permanently; it is streamed directly between endpoints via encrypted TLS 1.3 tunnels.</td>
+                <td class="text-muted">Stateless OAuth 2.0 processing over encrypted TLS. CRM credentials are stored (encrypted at rest) to enable silent token refresh across sessions. Validation runs are staged server-side per session to support pause/fix/re-validate without re-uploading; staging data and generated audit reports (PDF/CSV) are retained per your data-retention policy, not streamed-and-discarded.</td>
               </tr>
               <tr>
                 <td class="fw-bold px-4 text-dark">Batch Limits</td>
-                <td class="text-muted">Auto-chunking limits apply per CRM. Salesforce (10,000 max), Zendesk (100 max), HubSpot (100 max), Zoho (100 max).</td>
+                <td class="text-muted">Auto-chunking limits apply per CRM. Salesforce (5,000 default batch, configurable up to the platform's 10,000 ceiling), Zendesk (100 max), HubSpot (100 max), Zoho (100 max per batch; COQL query results additionally capped at 200 rows per request).</td>
+              </tr>
+              <tr>
+                <td class="fw-bold px-4 text-dark">Multi-Object Migrations</td>
+                <td class="text-muted">When migrating several related objects in one job (e.g., Accounts + Contacts), the engine automatically orders them by lookup/reference dependency — parent objects before the children that reference them — so relationship fields resolve correctly without you having to sequence the jobs manually. Circular references are handled with a deferred patch pass.</td>
+              </tr>
+              <tr>
+                <td class="fw-bold px-4 text-dark">Session Resilience</td>
+                <td class="text-muted">If your CRM access token expires mid-migration, the engine silently refreshes it and retries the in-flight request — a running migration will not stop or fail just because a token expired.</td>
               </tr>
               <tr>
                 <td class="fw-bold px-4 text-dark">Data Validation Module</td>
@@ -383,6 +442,12 @@
           </li>
           <li class="list-group-item bg-white py-2 small text-muted">
             <strong class="text-dark">Multi-Currency Orgs:</strong> If your Salesforce Org uses multiple currencies, you <strong>must</strong> map the <code>CurrencyIsoCode</code> column whenever mapping currency fields, or the row will fail.
+          </li>
+          <li class="list-group-item bg-white py-2 small text-muted">
+            <strong class="text-dark">Sandbox vs. Production:</strong> When connecting a Salesforce org, choose <strong>Production</strong> or <strong>Sandbox</strong> up front — this determines whether the engine authenticates against <code>login.salesforce.com</code> or <code>test.salesforce.com</code>. Connecting to the wrong environment is the most common cause of an org "not showing the objects I expect."
+          </li>
+          <li class="list-group-item bg-white py-2 small text-muted">
+            <strong class="text-dark">File & Attachment Migration:</strong> Migrating record attachments (legacy Attachments and modern Files) is currently supported <strong>Salesforce → Salesforce only</strong>. Moving files into or out of Zoho, Zendesk, or HubSpot is not yet supported — only the record data itself migrates for those CRMs.
           </li>
         </ul>
 
@@ -470,6 +535,9 @@
           </li>
           <li class="list-group-item bg-white py-2 small text-muted">
             <strong class="text-dark">Multiple Checkboxes:</strong> If mapping to a multiple checkbox property, use semicolons (<code>;</code>) to separate your values.
+          </li>
+          <li class="list-group-item bg-white py-2 small text-danger-emphasis bg-danger-subtle">
+            <strong class="text-dark"><i class="feather icon-alert-triangle text-danger me-1"></i> Associations Are Not Auto-Migrated:</strong> Unlike Salesforce/Zoho lookups, HubSpot links objects (e.g., Contact ↔ Company, Deal ↔ Contact) through a separate Associations API rather than a property on the record. Reference/lookup fields mapped to a HubSpot target are currently <strong>not</strong> written automatically — plan a manual or custom association pass after the object migration completes.
           </li>
         </ul>
 
