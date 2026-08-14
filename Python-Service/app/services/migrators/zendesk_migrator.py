@@ -175,23 +175,28 @@ class ZendeskMigrator:
         standard_objects = {"tickets", "users", "organizations", "groups", "macros", "triggers", "views"}
         is_standard_object = target_object in standard_objects or f"{target_object}s" in standard_objects
 
+        if is_standard_object:
+            zendesk_object_key = target_object if target_object in standard_objects else f"{target_object}s"
+        else:
+            zendesk_object_key = target_object  # custom object key is used verbatim
+
         bulk_write_capable = {"tickets", "users", "organizations"}
-        is_bulk_write_capable = target_object in bulk_write_capable or f"{target_object}s" in bulk_write_capable
+        is_bulk_write_capable = zendesk_object_key in bulk_write_capable
 
         if is_standard_object and not is_bulk_write_capable:
             await send_log(
                 f"[{target_object}] {pass_name}: Zendesk has no bulk-write endpoint for "
-                f"'{target_object}' (only tickets/users/organizations support create_many). "
+                f"'{zendesk_object_key}' (only tickets/users/organizations support create_many). "
                 f"Skipping this pass -- these records were not sent."
             )
             return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
 
         if is_standard_object:
             endpoint = "create_or_update_many.json" if wire_op_mode == "upsert" else "create_many.json"
-            api_path = f"https://{domain}.zendesk.com/api/v2/{target_object}/{endpoint}"
+            api_path = f"https://{domain}.zendesk.com/api/v2/{zendesk_object_key}/{endpoint}"
         else:
             job_action = "create_or_update_by_external_id" if wire_op_mode == "upsert" else "create"
-            api_path = f"https://{domain}.zendesk.com/api/v2/custom_objects/{target_object}/jobs"
+            api_path = f"https://{domain}.zendesk.com/api/v2/custom_objects/{zendesk_object_key}/jobs"
 
         await send_log(f"[{target_object}] {pass_name}: Target endpoint -> {api_path}")
 
