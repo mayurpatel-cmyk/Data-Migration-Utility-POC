@@ -208,8 +208,9 @@ async def websocket_migration(websocket: WebSocket):
                     skipped instead of letting the CRM API silently drop/overwrite one
                     of them."""
                     if current_op in ("update", "upsert") and ext_id_field:
+                        dedupe_key_field = "external_id" if target_crm == "zendesk" else ext_id_field
                         clean_payload, dup_skips = PayloadBuilderService.dedupe_by_unique_key(
-                            payload_data, source_records, ext_id_field
+                            payload_data, source_records, dedupe_key_field
                         )
                         if dup_skips:
                             await send_log(

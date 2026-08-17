@@ -148,7 +148,10 @@ class PayloadBuilderService:
                     zd_obj_lower = (target_object or "").strip().lower()
                     zd_is_standard = zd_obj_lower in zd_standard_objects or f"{zd_obj_lower}s" in zd_standard_objects
 
-                    if target_field.startswith("custom_field_"):
+                    if target_ext_id_field and target_field == target_ext_id_field:
+                        target_record["external_id"] = csv_val
+                        if is_patch_mode: has_patch_data = True
+                    elif target_field.startswith("custom_field_"):
                         if "custom_fields" not in target_record:
                             target_record["custom_fields"] = []
                         
