@@ -1,6 +1,8 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from 'src/environments/environment';
+import { AuthService } from '../demo/Services/auth.service';
 
 export interface CrmConnection {
   id?: string;
@@ -10,7 +12,7 @@ export interface CrmConnection {
   subdomain?: string;
   region?: string;
   instance_url?: string;
-  api_domain?: string;         // Fixed: Safe optional descriptor instead of string | undefined
+  api_domain?: string;
   accounts_server?: string;
   environment?: string;
 }
@@ -20,39 +22,24 @@ export interface CrmConnection {
 })
 export class CrmAuthService {
   private http = inject(HttpClient);
-  
-  // Point to your FastAPI backend base URL
-  private apiBaseUrl = 'http://localhost:8000/api/crm';
+  private authService = inject(AuthService);
 
-  // =========================================================
-  // HELPER: DYNAMIC TOKEN HUNTER
-  // =========================================================
-  /**
-   * Scans local storage for the Supabase session and builds the Authorization header.
-   */
-private getAuthHeaders(): HttpHeaders {
-    // We now know exactly where your auth.service.ts puts the token!
-    const token = localStorage.getItem('supabase_token') || '';
+  private apiBaseUrl = `${environment.apiUrl}/api/crm`;
 
-    // Attach the exact token FastAPI is waiting for
+  private getAuthHeaders(): HttpHeaders {
+    const token = this.authService.currentUser() ?? '';
     return new HttpHeaders().set('Authorization', `Bearer ${token}`);
   }
 
-  // =========================================================
-  // 1. FETCH ACTIVE CONNECTIONS FROM DATABASE
-  // =========================================================
   getUserConnections(): Observable<CrmConnection[]> {
-    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`, { 
-      headers: this.getAuthHeaders() 
+    return this.http.get<CrmConnection[]>(`${this.apiBaseUrl}/connections`, {
+      headers: this.getAuthHeaders()
     });
   }
 
-  // =========================================================
-  // 2. OAUTH LOGIN GENERATION & REDIRECT 
-  // =========================================================
   connectCrm(crmId: string, side: 'source' | 'target', subdomain?: string, region?: string, environment: string = 'production'): void {
     const safeCrmId = crmId.toLowerCase();
-    
+
     let requestUrl = `${this.apiBaseUrl}/auth/${safeCrmId}/login?side=${side}`;
 
     if (subdomain) {
@@ -62,14 +49,12 @@ private getAuthHeaders(): HttpHeaders {
       requestUrl += `&region=${encodeURIComponent(region)}`;
     }
     if (safeCrmId === 'salesforce') {
-      requestUrl += `&environment=${encodeURIComponent(environment)}`; // <-- ADD THIS
+      requestUrl += `&environment=${encodeURIComponent(environment)}`;
     }
 
-    // Securely fetch the URL using the authorization headers
     this.http.get<{ url: string }>(requestUrl, { headers: this.getAuthHeaders() }).subscribe({
       next: (response) => {
         if (response?.url) {
-          // Force the browser to leave Angular and hit the CRM login screen
           window.location.href = response.url;
         } else {
           console.error(`Backend failed to generate a valid OAuth URL for ${crmId}.`);
@@ -81,12 +66,9 @@ private getAuthHeaders(): HttpHeaders {
     });
   }
 
-  // =========================================================
-  // 3. DISCONNECT (Delete from Database)
-  // =========================================================
   disconnectCrm(side: 'source' | 'target'): Observable<any> {
-    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`, { 
-      headers: this.getAuthHeaders() 
+    return this.http.delete(`${this.apiBaseUrl}/connections/${side}`, {
+      headers: this.getAuthHeaders()
     });
   }
 }

@@ -94,8 +94,8 @@ class PayloadBuilderService:
                 if csv_val is None and target_field != target_ext_id_field: 
                     continue
 
-                is_self_ref = mapping.get("type") == "reference" and target_object in mapping.get("referenceTo", [])
-                refs_other = mapping.get("referenceTo", []) if mapping.get("type") == "reference" else []
+                is_self_ref = mapping.get("type") == "reference" and target_object in (mapping.get("referenceTo") or [])
+                refs_other = (mapping.get("referenceTo") or []) if mapping.get("type") == "reference" else []
 
                 is_excluded_cross = any(obj in refs_other for obj in exclude_refs)
                 is_only_target_cross = len(only_refs) > 0 and any(obj in refs_other for obj in only_refs)

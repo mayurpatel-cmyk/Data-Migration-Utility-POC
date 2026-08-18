@@ -223,7 +223,7 @@ async def websocket_migration(websocket: WebSocket):
                         await execute_upload(payload_data, current_op, pass_name)
 
                 job_success_start_idx = len(all_success_data)
-                has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
+                has_self_ref = any(m.get("type") == "reference" and target_object in (m.get("referenceTo") or []) for m in mappings)
                 
                 if job.get("isPass3Patch", False):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "onlyReferencesTo": job.get("onlyReferencesTo", []), "operationMode": "upsert"}, target_crm)
