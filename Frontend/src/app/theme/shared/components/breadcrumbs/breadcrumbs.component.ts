@@ -33,7 +33,7 @@ export class BreadcrumbComponent {
   navigations: NavigationItem[];
   breadcrumbList: Array<string> = [];
   
-  // <--- 2. THE FIX: Initialize this with an empty array instead of leaving it undefined
+  // <--- 2. THE Initialize this with an empty array instead of leaving it undefined
   navigationList: titleType[] = []; 
 
   // constructor

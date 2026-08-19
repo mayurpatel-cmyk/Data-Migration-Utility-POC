@@ -14,7 +14,7 @@ from app.utils.config import supabase
 router = APIRouter()
 
 FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200").replace("/connection", "").rstrip("/")
+ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200").rstrip("/")
 
 SF_CLIENT_ID = os.getenv("SF_CLIENT_ID")
 SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET")
@@ -91,7 +91,7 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
         "code_verifier": code_verifier
     }
 
-    async with httpx.AsyncClient(verify=False) as client:
+    async with httpx.AsyncClient() as client:
         response = await client.post(token_url, data=payload)
         if response.status_code != 200:
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
@@ -157,7 +157,7 @@ async def zoho_callback(code: str, state: str, request: Request):
     base_accounts_url = ZOHO_REGIONS.get(reg_key.lower(), ZOHO_REGIONS["us"])
     accounts_server = request.query_params.get("accounts-server", base_accounts_url)
     
-    async with httpx.AsyncClient(verify=False) as client:
+    async with httpx.AsyncClient() as client:
         response = await client.post(f"{accounts_server}/oauth/v2/token", data={
             "grant_type": "authorization_code",
             "code": code,
@@ -220,7 +220,7 @@ async def zendesk_callback(code: str, state: str):
     except ValueError:
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
-    async with httpx.AsyncClient(verify=False) as client:
+    async with httpx.AsyncClient() as client:
         response = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
             "grant_type": "authorization_code",
             "code": code,
@@ -287,7 +287,7 @@ async def hubspot_callback(code: str, state: str):
     HS_CLIENT_SECRET = os.getenv("HS_CLIENT_SECRET", "").strip()
     HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
 
-    async with httpx.AsyncClient(verify=False) as client:
+    async with httpx.AsyncClient() as client:
         response = await client.post("https://api.hubapi.com/oauth/v1/token", data={
             "grant_type": "authorization_code",
             "client_id": HS_CLIENT_ID,
@@ -296,8 +296,8 @@ async def hubspot_callback(code: str, state: str):
             "code": code
         })
         if response.status_code != 200:
-            errorBody =  response.text()
-            print(f"HubSpot token error: {errorBody}")
+            errorBody = response.text
+            print(f"HubSpot token error ({response.status_code}): {errorBody}")
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
         token_data = response.json()

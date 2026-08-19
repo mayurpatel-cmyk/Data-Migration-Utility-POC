@@ -44,7 +44,7 @@ class ZohoMigrator:
 
                 await send_log(f"Extracting data from Zoho using COQL...")
                 
-                # CRITICAL FIX: This must be client.post() for the /coql endpoint
+                # This must be client.post() for the /coql endpoint
                 res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
                 
                 if res.status_code != 200:
@@ -90,7 +90,7 @@ class ZohoMigrator:
 
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
         target_object = options["targetObject"]
         token = options["token"]
@@ -100,8 +100,9 @@ class ZohoMigrator:
 
         if not domain.startswith("http"): domain = f"https://{domain}"
         
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []  # records Zoho inserted that "update" mode must not keep
 
         normalized_obj = target_object.strip()
         if not normalized_obj.endswith('s') and normalized_obj.lower() != 'data':
@@ -112,13 +113,17 @@ class ZohoMigrator:
         headers = {"Authorization": f"Zoho-oauthtoken {token}", "Content-Type": "application/json"}
         
         chunks = list(chunk_dataset(payload, 100))
-        
-        if op_mode == "upsert":
+
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        if not options.get("targetExtIdField") and op_mode in ("update", "upsert"):
+            await send_log(f"[{normalized_obj}] {pass_name}: No External ID field configured -- cannot match existing records for {op_mode.upper()}.")
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        if wire_op_mode == "upsert":
             api_path = f"{domain}/crm/v6/{normalized_obj}/upsert"
             http_method = "POST"
-        elif op_mode == "update":
-            api_path = f"{domain}/crm/v6/{normalized_obj}"
-            http_method = "PUT"
         else: # insert
             api_path = f"{domain}/crm/v6/{normalized_obj}"
             http_method = "POST"
@@ -128,7 +133,7 @@ class ZohoMigrator:
             
             try:
                 req_payload = {"data": zoho_data_rows}
-                if op_mode == "upsert" and options.get("targetExtIdField"):
+                if wire_op_mode == "upsert" and options.get("targetExtIdField"):
                    req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
                 # --- Silent Retry Loop for Uploads (Token Refresh & Rate Limits) ---
@@ -156,8 +161,21 @@ class ZohoMigrator:
                         orig_record = source_records[item["originalIndex"]]
                         
                         if z_res.get("status") == "success":
-                            #  Force the ID into a string to protect it from JS precision limits
                             raw_id = z_res.get("details", {}).get("id")
+
+
+                            if is_update_only and z_res.get("action") == "insert":
+                                orig_record["Target_SkipReason"] = (
+                                    f"[{options.get('targetExtIdField')}] No matching record found in Zoho. "
+                                    f"Skipped because Update mode does not create new records."
+                                )
+                                all_skipped_data.append(orig_record)
+                                total_skipped += 1
+                                if raw_id:
+                                    ids_to_revert.append(str(raw_id))
+                                continue
+
+                            #  Force the ID into a string to protect it from JS precision limits
                             orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                             
                             all_success_data.append(orig_record)
@@ -198,4 +216,29 @@ class ZohoMigrator:
                     all_error_data.append(orig_record)
                     total_error += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{normalized_obj}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Zoho auto-created for them..."
+            )
+            await self._delete_records(client, domain, headers, normalized_obj, ids_to_revert, user_id, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, domain, headers, normalized_obj, record_ids, user_id, send_log):
+        """Deletes records Zoho auto-created that 'update' mode should never
+        have created in the first place (Zoho's bulk delete takes <=100 ids/call)."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                ids_param = ",".join(chunk)
+                res = await client.delete(f"{domain}/crm/v6/{normalized_obj}?ids={ids_param}", headers=headers)
+
+                if res.status_code == 401:
+                    token = await CrmService.refresh_crm_token(user_id, "zoho", "target")
+                    headers["Authorization"] = f"Zoho-oauthtoken {token}"
+                    res = await client.delete(f"{domain}/crm/v6/{normalized_obj}?ids={ids_param}", headers=headers)
+
+                if res.status_code not in [200, 202]:
+                    await send_log(f"[{normalized_obj}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{normalized_obj}] Revert Failed: {str(e)}")

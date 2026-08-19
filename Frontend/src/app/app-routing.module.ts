@@ -11,7 +11,7 @@ export const routes: Routes = [
     redirectTo: 'login',
     pathMatch: 'full'
   },
-  
+
   // 2. Guest routes (Unauthenticated)
   {
     path: '',
@@ -53,10 +53,15 @@ export const routes: Routes = [
     ]
   },
 
-  // 4. Standalone routes
   {
     path: 'api-mapping',
+    canActivate: [authGuard],
     loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+  },
+
+  {
+    path: '**',
+    redirectTo: 'login'
   }
 ];
 

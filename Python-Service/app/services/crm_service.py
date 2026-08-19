@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.utils.config import supabase
 import os
 import httpx
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+client = httpx.AsyncClient(timeout=30.0)
 
 class CrmService:
     @staticmethod
@@ -56,7 +56,7 @@ class CrmService:
         crm = crm_type.lower()
         new_access_token = None
         
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             if crm == "salesforce":
                 domain = "test.salesforce.com" if creds.get("environment") == "sandbox" else "login.salesforce.com"
                 res = await client.post(f"https://{domain}/services/oauth2/token", data={
@@ -75,6 +75,18 @@ class CrmService:
                     "client_id": os.getenv("ZOHO_CLIENT_ID"),
                     "client_secret": os.getenv("ZOHO_CLIENT_SECRET"),
                     "refresh_token": refresh_token
+                })
+                if res.status_code == 200:
+                    new_access_token = res.json().get("access_token")
+
+            elif crm == "zendesk":
+                subdomain = creds.get("subdomain")
+                res = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
+                    "grant_type": "refresh_token",
+                    "client_id": os.getenv("ZD_CLIENT_ID"),
+                    "client_secret": os.getenv("ZD_CLIENT_SECRET"),
+                    "refresh_token": refresh_token,
+                    "scope": "read write"
                 })
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")

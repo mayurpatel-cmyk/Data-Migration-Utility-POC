@@ -1,3 +1,56 @@
+<style>
+  /* Floating Review Panel (AI Auto-Map results) */
+  .floating-review-panel {
+    position: fixed;
+    bottom: 25px;
+    right: 25px;
+    width: 650px;
+    height: 550px;
+    max-height: 85vh;
+    background-color: #ffffff;
+    border-radius: 0.5rem;
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.3);
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    border: 1px solid #dee2e6;
+    resize: both;
+    overflow: hidden;
+    min-width: 450px;
+    min-height: 350px;
+  }
+
+  .floating-review-panel.expanded {
+    width: 90vw !important;
+    height: 90vh !important;
+    max-height: 90vh !important;
+    bottom: 5vh;
+    right: 5vw;
+    resize: none;
+  }
+
+  .floating-review-panel.minimized {
+    width: 280px;
+    height: 48px;
+    min-width: 280px;
+    min-height: 48px;
+    cursor: pointer;
+    resize: none;
+  }
+
+  .floating-review-panel.minimized:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+  }
+
+  .floating-review-panel .panel-body {
+    overflow-y: auto;
+    flex-grow: 1;
+    background-color: #f8f9fa;
+  }
+</style>
+
 <div class="row mb-4">
   <div class="col-sm-12">
     <app-card cardTitle="Step 1: Upload & Build Validation Queue">
@@ -84,11 +137,52 @@
             </button>
             }
             <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
-              (click)="autoMapFields()">
-              <i class="feather icon-cpu"></i> Auto-Map Fields
+              (click)="autoMapFields()" [disabled]="isAutoMapping">
+              <i class="feather fs-6" [ngClass]="isAutoMapping ? 'icon-loader fa-spin' : 'icon-cpu'"></i>
+              {{ isAutoMapping ? 'Mapping...' : 'Auto-Map Fields' }}
+            </button>
+            <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
+              (click)="showReviewPanel = true; reviewPanelMinimized = false"
+              [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
+              <i class="feather icon-eye"></i> Open Review
             </button>
           </div>
         </div>
+
+        <!-- MAPPING LEGEND -->
+        <div class="d-flex align-items-center gap-3 mb-2 px-1 animate__animated animate__fadeIn">
+          <span class="small fw-bold text-dark me-1"><i class="feather icon-help-circle"></i> Mapping Key:</span>
+          <div class="d-flex align-items-center gap-1">
+            <span class="badge bg-success text-white shadow-sm" style="font-size: 0.65rem;">Auto</span>
+            <span class="small text-dark fw-medium" style="font-size: 0.75rem;">Auto Map</span>
+          </div>
+          <div class="d-flex align-items-center gap-1">
+            <span class="badge bg-primary text-white shadow-sm" style="font-size: 0.65rem;">AI</span>
+            <span class="small text-dark fw-medium" style="font-size: 0.75rem;">AI Match</span>
+          </div>
+        </div>
+
+        <!-- AI AUTO-MAP PROGRESS -->
+        @if (isAutoMapping) {
+        <div
+          class="alert alert-info py-2 px-3 mb-3 d-flex align-items-center justify-content-between border-info-subtle shadow-sm animate__animated animate__fadeInDown"
+          style="border-radius: 0.5rem;">
+          <div class="d-flex align-items-center gap-2">
+            <div class="spinner-border text-info" style="border-width: 0.2em; width: 1.25rem; height: 1.25rem;"
+              role="status"></div>
+            <strong class="text-info-emphasis m-0 small">AI is mapping remaining fields...</strong>
+          </div>
+          <div class="progress flex-grow-1 mx-3 bg-white"
+            style="height: 8px; border-radius: 10px; border: 1px solid #cff4fc;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated bg-info"
+              [style.width.%]="(autoMapProgress.current / autoMapProgress.total) * 100" style="border-radius: 10px;">
+            </div>
+          </div>
+          <span class="fw-bold text-info small font-monospace">{{ autoMapProgress.current }} / {{
+            autoMapProgress.total }}</span>
+        </div>
+        }
+
           @if (sfFields.length === 0 || isLoadingObjects) {
           <div class="alert alert-secondary d-flex align-items-center shadow-sm py-2 px-3 mb-3 border-secondary-subtle">
             <span class="spinner-border spinner-border-sm me-2 text-primary"></span>
@@ -161,10 +255,36 @@
 
                 <td>
                   @if (mapping.isActive) {
+                    @if (mapping._isAiProcessing) {
+                    <div
+                      class="form-control form-control-sm bg-light border-info-subtle shadow-sm d-flex justify-content-between align-items-center">
+                      <span class="text-info small fw-bold d-flex align-items-center gap-2">
+                        <span class="spinner-border spinner-border-sm text-info"
+                          style="width: 0.9rem; height: 0.9rem; border-width: 0.15em;"></span>
+                        Analyzing semantic match...
+                      </span>
+                    </div>
+                    } @else {
                     <div class="position-relative" (click)="$event.stopPropagation()">
-                      <div class="form-select form-select-sm cursor-pointer bg-white"
+                      <div class="form-select form-select-sm cursor-pointer d-flex justify-content-between align-items-center"
+                        [ngClass]="{
+                          'bg-success-subtle border-success text-dark': mapping._mappedBy === 'rule',
+                          'bg-info-subtle border-info text-dark': mapping._mappedBy === 'ai',
+                          'bg-white': !mapping._mappedBy
+                        }"
                         (click)="toggleDropdown(mapping, $event)" [class.text-muted]="!mapping.sfField">
-                        {{ getSfFieldLabel(mapping.sfField) || '-- Select Field --' }}
+                        <span class="text-truncate">{{ getSfFieldLabel(mapping.sfField) || '-- Select Field --' }}</span>
+                        @if (mapping.sfField && mapping._mappedBy === 'rule') {
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1 ms-1"
+                          style="font-size: 0.6rem;" title="Matched by naming rules">
+                          <i class="feather icon-zap"></i> Rule
+                        </span>
+                        } @else if (mapping.sfField && mapping._mappedBy === 'ai') {
+                        <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1 ms-1"
+                          style="font-size: 0.6rem; background-color: #e0f2fe;" title="Matched by AI semantic match">
+                          <i class="feather icon-cpu"></i> AI
+                        </span>
+                        }
                       </div>
 
                       @if (mapping.isDropdownOpen) {
@@ -189,6 +309,7 @@
                         </div>
                       }
                     </div>
+                    }
 
                     @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type === 'reference' && mapping.parentObjectName) {
                       <div class="bg-primary-subtle p-2 rounded border border-primary-subtle mt-1 d-flex align-items-center gap-2">
@@ -293,6 +414,62 @@
           </table>
         </div>
 
+        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle shadow-sm mt-3">
+          <h6 class="fw-bold text-primary-emphasis m-0 mb-2"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
+
+          <div class="d-flex flex-wrap gap-3 mb-2">
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpInsert"
+                value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpInsert">Insert</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpdate"
+                value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpdate">Update</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpsert"
+                value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpsert">Upsert</label>
+            </div>
+          </div>
+
+          @if (operationMode === 'upsert') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Matches each row against {{ targetCrmId | titlecase }} using the Ext ID field below — updates it if found, inserts it if not.
+          </div>
+          } @else if (operationMode === 'update') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Only updates records that already exist in {{ targetCrmId | titlecase }}, matched by the Ext ID field below. Unmatched rows are skipped.
+          </div>
+          }
+
+          <div class="row g-2">
+            <div class="col-md-6">
+              <div class="input-group input-group-sm shadow-sm"
+                [title]="operationMode === 'insert' ? 'Optional: used only to flag duplicates during validation.' : 'Required: the unique field used to match existing records.'">
+                <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold">
+                  <i class="feather icon-key text-secondary me-1"></i> Ext ID
+                  @if (operationMode !== 'insert') {<span class="text-danger ms-1">*</span>}
+                </span>
+                <select class="form-select border-secondary-subtle" [(ngModel)]="dedupeKey">
+                  <option value="" selected>-- Select Field --</option>
+                  @for (field of (operationMode === 'insert' ? sfFields : getExternalIdEligibleFields()); track field.name) {
+                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+                  }
+                </select>
+              </div>
+              @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
+              <div class="small text-danger mt-1">
+                No fields on {{ selectedObject }} are marked as a matchable unique/external key in {{ targetCrmId | titlecase }}.
+                Mark one in {{ targetCrmId | titlecase }} Setup before running {{ operationMode.toUpperCase() }}.
+              </div>
+              }
+            </div>
+          </div>
+        </div>
+
         <div class="text-end mt-3">
           <button class="btn btn-outline-primary d-flex align-items-center gap-2 ms-auto shadow-sm"
             (click)="addToQueue()">
@@ -311,6 +488,7 @@
               <tr>
                 <th>Source Sheet</th>
                 <th>Target Object</th>
+                <th>Operation</th>
                 <th>Mapped Fields</th>
                 <th>Status</th>
                 <th class="text-end">Action</th>
@@ -321,6 +499,14 @@
               <tr>
                 <td class="fw-bold text-muted"><i class="feather icon-file-text me-1"></i> {{ job.sheetName }}</td>
                 <td><span class="badge bg-primary-subtle text-primary border border-primary-subtle py-1 px-2">{{ job.targetObject }}</span></td>
+                <td>
+                  <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle py-1 px-2">
+                    {{ job.operationMode | uppercase }}
+                  </span>
+                  @if (job.operationMode !== 'insert' && job.dedupeKey) {
+                  <div class="small text-muted mt-1" style="font-family: monospace;">Ext ID: {{ job.dedupeKey }}</div>
+                  }
+                </td>
                 <td class="small">{{ job.mappings.length }} mapped</td>
                 <td>
                   @if (job.status === 'pending') { <span class="badge bg-secondary">Pending</span> }
@@ -595,5 +781,158 @@
 
     </app-card>
   </div>
+</div>
+}
+
+<!-- ========================================================= -->
+<!-- FLOATING REVIEW PANEL (AUTO-MAP RESULTS)                   -->
+<!-- ========================================================= -->
+@if (showReviewPanel) {
+<div class="floating-review-panel animate__animated animate__fadeInUp" [class.minimized]="reviewPanelMinimized"
+  [class.expanded]="reviewPanelExpanded">
+
+  <!-- Panel Header -->
+  <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0"
+    style="border-radius: 8px 8px 0 0; cursor: pointer;"
+    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null">
+    <div class="d-flex align-items-center gap-2">
+      <i class="feather icon-check-circle text-success fs-5"></i>
+      <h6 class="m-0 fw-bold">Auto-Map Review</h6>
+      @if (reviewPanelMinimized) {
+      <span class="badge bg-primary ms-2">{{ getConfirmedCount() }} / {{ mappings.length }}</span>
+      }
+    </div>
+    <div class="d-flex gap-2">
+      @if (!reviewPanelMinimized) {
+      <button class="btn btn-sm btn-link text-white-50 p-0"
+        (click)="reviewPanelExpanded = !reviewPanelExpanded; $event.stopPropagation()" title="Toggle Fullscreen">
+        <i class="feather fs-5" [ngClass]="reviewPanelExpanded ? 'icon-minimize' : 'icon-maximize'"></i>
+      </button>
+      <button class="btn btn-sm btn-link text-white-50 p-0"
+        (click)="reviewPanelMinimized = true; reviewPanelExpanded = false; $event.stopPropagation()" title="Minimize">
+        <i class="feather icon-minus fs-5"></i>
+      </button>
+      <button class="btn btn-sm btn-link text-white-50 p-0"
+        (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
+        <i class="feather icon-x fs-5"></i>
+      </button>
+      } @else {
+      <button class="btn btn-sm btn-link text-white-50 p-0"><i class="feather icon-maximize-2 fs-5"></i></button>
+      }
+    </div>
+  </div>
+
+  @if (!reviewPanelMinimized) {
+  <!-- Tabs -->
+  <div class="bg-white p-2 border-bottom d-flex gap-2 flex-shrink-0 shadow-sm z-1">
+    <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2"
+      [class.btn-primary]="reviewFilter === 'mapped'" [class.btn-outline-primary]="reviewFilter !== 'mapped'"
+      (click)="reviewFilter = 'mapped'">
+      Mapped <span class="badge" [class.bg-white]="reviewFilter === 'mapped'"
+        [class.text-primary]="reviewFilter === 'mapped'" [class.bg-primary]="reviewFilter !== 'mapped'">{{
+        getConfirmedCount() }}</span>
+    </button>
+    <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2"
+      [class.btn-warning]="reviewFilter === 'unmapped'" [class.btn-outline-warning]="reviewFilter !== 'unmapped'"
+      (click)="reviewFilter = 'unmapped'">
+      Unmapped <span class="badge" [class.bg-white]="reviewFilter === 'unmapped'"
+        [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{
+        mappings.length - getConfirmedCount() }}</span>
+    </button>
+  </div>
+
+  <!-- Scrollable Mapping Area -->
+  <div class="panel-body p-0">
+    <table class="table table-hover table-borderless align-middle mb-0 w-100">
+      <tbody>
+        @for (mapping of mappings; track mapping.csvField) {
+        @if ((reviewFilter === 'mapped' && mapping.sfField) || (reviewFilter === 'unmapped' && !mapping.sfField)) {
+        <tr class="border-bottom">
+          <td class="px-3 py-2 w-50" title="{{ mapping.csvField }}">
+            <div
+              class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
+              <small class="fw-bold text-dark text-truncate">{{ mapping.csvField }}</small>
+            </div>
+          </td>
+          <td class="text-center text-muted px-0" style="width: 20px;">
+            <i class="feather icon-arrow-right small"></i>
+          </td>
+          <td class="px-3 py-2 w-50">
+            <div class="position-relative" (click)="$event.stopPropagation()">
+              <div
+                class="form-select form-select-sm cursor-pointer shadow-sm d-flex justify-content-between align-items-center"
+                [ngClass]="{
+                  'bg-success-subtle border-success text-dark': mapping._mappedBy === 'rule',
+                  'bg-info-subtle border-info text-dark': mapping._mappedBy === 'ai',
+                  'bg-white border-info': !mapping._mappedBy
+                }" (click)="toggleDropdown(mapping, $event)">
+
+                <div class="d-flex align-items-center gap-2 text-truncate">
+                  <span class="text-truncate" [class.text-muted]="!mapping.sfField">
+                    {{ getSfFieldLabel(mapping.sfField) || '-- Select Target --' }}
+                  </span>
+
+                  @if (mapping.sfField) {
+                  @if (mapping._mappedBy === 'rule') {
+                  <span
+                    class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1"
+                    style="font-size: 0.6rem;">
+                    <i class="feather icon-zap"></i> Rule
+                  </span>
+                  } @else if (mapping._mappedBy === 'ai') {
+                  <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1"
+                    style="font-size: 0.6rem; background-color: #e0f2fe;">
+                    <i class="feather icon-cpu"></i> AI
+                  </span>
+                  }
+                  }
+                </div>
+              </div>
+
+              @if (mapping.isDropdownOpen) {
+              <div
+                class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
+                style="max-height: 200px; overflow-y: auto; z-index: 9999; top: 100%;">
+                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+                  <input type="text" class="form-control form-control-sm" placeholder="Search..."
+                    [(ngModel)]="mapping.searchQuery" autofocus>
+                </div>
+                <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold small"
+                  (click)="selectField(mapping, '')">
+                  <i class="feather icon-slash"></i> -- Ignore --
+                </div>
+                @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
+                <div class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
+                  (click)="selectField(mapping, field.name)">
+                  <span class="fw-bold text-dark small">{{ field.label }}</span>
+                </div>
+                }
+              </div>
+              }
+            </div>
+          </td>
+          <td class="px-2 text-center">
+            <button
+              class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
+              (click)="clearMapping(mapping)">
+              <i class="feather icon-x"></i>
+            </button>
+          </td>
+        </tr>
+        }
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Footer Action -->
+  <div
+    class="p-3 bg-white border-top flex-shrink-0 text-end rounded-bottom d-flex justify-content-between align-items-center">
+    <span class="small text-muted fw-bold">Review mappings before validating.</span>
+    <button class="btn btn-sm btn-primary px-4 shadow-sm fw-bold" (click)="showReviewPanel = false">
+      Done Reviewing
+    </button>
+  </div>
+  }
 </div>
 }

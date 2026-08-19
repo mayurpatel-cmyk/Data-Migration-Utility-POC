@@ -3,13 +3,13 @@ import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnD
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { forkJoin } from 'rxjs';
-import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
-import { BreadcrumbComponent } from 'src/app/theme/shared/components/breadcrumbs/breadcrumbs.component';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
 import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
+import { HttpClient } from '@angular/common/http';
+import { AuthService } from 'src/app/demo/Services/auth.service'; // Verify this path matches your project
 
 declare const monaco: any;
 interface FieldMeta {
@@ -20,6 +20,9 @@ interface FieldMeta {
   isRequired?: boolean;
   referenceTo?: string[];
   relationshipName?: string;
+  externalId?: boolean;
+  unique?: boolean;
+  idLookup?: boolean;
 }
 
 interface MappingRow {
@@ -43,7 +46,7 @@ interface CrmEntity {
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent, EditorComponent],
+  imports: [CommonModule, FormsModule, EditorComponent],
   templateUrl: './API-mapping.component.html',
   styleUrls: ['./API-mapping.component.scss']
 })
@@ -53,8 +56,10 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private cdr = inject(ChangeDetectorRef);
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
+  private authService = inject(AuthService);
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
+  private http = inject(HttpClient);
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -116,17 +121,25 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   mappedCount = 0;
   isStrictMapping = false;
   hideMappedFields = false;
+  selectedSourceObjectCount: number | null = null;
+  isSourceCountLoading = false;
+  restrictMappingToQueryFields = true;
+
+  currentUser: any = null;
+isProfileDropdownOpen = false;
 
   // Execution Variables
   jobStatus = 'Idle';
   logMessages: string[] = [];
   customQuery: string = '';
+  isDefaultQuery: boolean = true; // true until the user hand-edits the query; controls when auto-rebuild is safe
   queryError: string | null = null;
   isPreviewLoading = false;
   sourceFields: FieldMeta[] = [];
   successData: any[] = [];
   isQueueMinimized: boolean = false;
   errorData: any[] = [];
+  skippedData: any[] = []; // Records "update" mode intentionally skipped (no matching record found)
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
   validationResults: any = null;
   isValidating = false;
@@ -175,6 +188,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     // 1. Securely pull the intended CRMs
+    this.getUserData();
+// this.fetchRecoverableSessions();
+// this.preloadEntirePage();
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
@@ -265,8 +281,63 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     }
   }
 
+  getQuerySelectedFields(): string[] | null {
+    const crm = (this.sourceCrmId || '').toLowerCase();
+    const query = (this.customQuery || '').trim();
+
+    if (!query) return null;
+    if (crm !== 'salesforce' && crm !== 'zoho') return null;
+
+    const queryLower = query.toLowerCase();
+    if (!queryLower.startsWith('select ')) return null;
+
+    const fromIdx = queryLower.indexOf(' from ');
+    if (fromIdx === -1) return null;
+
+    const selectClause = query.substring(7, fromIdx).trim(); // strip leading "SELECT "
+    if (selectClause === '*') return null; // wildcard -- no restriction
+
+    const fields = selectClause
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => f.length > 0)
+      // Strip relationship dot-notation to its root field, e.g. "Account.Name" -> "Account"
+      .map((f) => f.split('.')[0]);
+
+    return fields.length > 0 ? fields : null;
+  }
+
+  onQueryEdited() {
+    this.queryError = null;
+    this.isDefaultQuery = false;
+  }
+
+  private getQueryFieldFilterSet(): Set<string> | null {
+    if (!this.restrictMappingToQueryFields) return null;
+    const querySelectedFields = this.getQuerySelectedFields();
+    if (!querySelectedFields) return null;
+    return new Set(querySelectedFields.map((f) => f.toLowerCase()));
+  }
+
+  private restrictToQueryFields<T extends { sourceField: string }>(rows: T[]): T[] {
+    const fieldSet = this.getQueryFieldFilterSet();
+    if (!fieldSet) return rows;
+    return rows.filter((r) => fieldSet.has((r.sourceField || '').toLowerCase()));
+  }
+
   get visibleMappings() {
     let filtered = this.mappings;
+
+    // 0. Restrict to only the fields the query builder actually selects,
+    //    unless the user has opted to see the full object schema instead.
+    const queryFieldSet = this.getQueryFieldFilterSet();
+    if (queryFieldSet) {
+      filtered = filtered.filter(
+        (m) =>
+          queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
+          !!m.targetField // never hide a field the user already mapped, even if the query text changed since
+      );
+    }
 
     // 1. Filter out already mapped fields if toggled
     if (this.hideMappedFields) {
@@ -284,6 +355,73 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
     return filtered;
   }
+
+  /** True when the current query actually restricts which source fields are selected. */
+  get isQueryFieldFilterActive(): boolean {
+    return this.getQueryFieldFilterSet() !== null;
+  }
+
+  /** Count of fields the active query selects, for the UI badge. */
+  get queryFilteredFieldCount(): number {
+    return this.getQuerySelectedFields()?.length ?? 0;
+  }
+
+  /**
+   * Column headers that actually came back in the live preview/query
+   * results -- this is the ground truth of what your query selected,
+   * unlike the static object schema fetched once at load time. Falls
+   * back to the schema list only when there's no preview data yet.
+   */
+  private getLiveRecordHeaders(): string[] {
+    if (!this.previewRecords || this.previewRecords.length === 0) return [];
+    const headerSet = new Set<string>();
+    const sampleSize = Math.min(this.previewRecords.length, 25); // union across a few rows -- some CRMs omit null fields per-record
+    for (let i = 0; i < sampleSize; i++) {
+      Object.keys(this.previewRecords[i] || {}).forEach((k) => headerSet.add(k));
+    }
+    return Array.from(headerSet);
+  }
+
+  /**
+   * Data Preview table columns, narrowed to the fields the query builder
+   * actually SELECTs (same rule as visibleMappings). Sourced from the live
+   * query results whenever they're available, so a field you just added to
+   * your SELECT clause shows up immediately -- even if it wasn't part of
+   * the original object schema snapshot. Falls back to the schema list
+   * whenever there's no active field restriction, or when the live results
+   * and the SELECT list don't overlap at all.
+   */
+  get visiblePreviewHeaders(): string[] {
+    const liveHeaders = this.getLiveRecordHeaders();
+    const baseHeaders = liveHeaders.length > 0 ? liveHeaders : this.previewHeaders;
+
+    const fieldSet = this.getQueryFieldFilterSet();
+    if (!fieldSet) return baseHeaders;
+
+    const narrowed = baseHeaders.filter((h) => fieldSet.has(h.toLowerCase()));
+    return narrowed.length > 0 ? narrowed : baseHeaders;
+  }
+
+  getUserData(): void {
+  const storedUser = localStorage.getItem('supabase_user');
+  if (!storedUser) {
+    this.currentUser = null;
+    return;
+  }
+  try {
+    this.currentUser = JSON.parse(storedUser);
+  } catch (error) {
+    console.error('Failed to parse user data from local storage', error);
+    this.currentUser = null;
+  }
+}
+
+toggleProfileDropdown(event: Event): void {
+  event.stopPropagation();
+  const wasOpen = this.isProfileDropdownOpen;
+  this.closeAllDropdowns();
+  this.isProfileDropdownOpen = !wasOpen;
+}
 
   changePreviewLimit(newLimit: number) {
     // Force JavaScript to treat the dropdown value as a number
@@ -358,7 +496,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           //  ZENDESK MODE
           // ------------------------------------
           if (crm === 'zendesk') {
-            // --- NEW: Context-Aware Value Suggestions ---
+            // --- Context-Aware Value Suggestions ---
             const lineContent = model.getLineContent(position.lineNumber);
             const textBeforeCursor = lineContent.substring(0, position.column - 1);
 
@@ -374,7 +512,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
                   detail: 'Zendesk Ticket Status'
                 })
               );
-              return { suggestions: suggestions }; // Return early so ONLY statuses show up
+              return { suggestions: suggestions };
             }
 
             // 2. If typing a Priority
@@ -492,12 +630,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           //  SALESFORCE & ZOHO (SQL) MODE
           // ------------------------------------
           else {
+            const snippetFields =
+              this.sourceFields && this.sourceFields.length > 0
+                ? this.sourceFields.slice(0, 15).map((f) => f.name).join(', ')
+                : 'Id';
+
             suggestions.push({
               label: 'SELECT (Basic)',
               kind: monaco.languages.CompletionItemKind.Snippet,
-              insertText: `SELECT * FROM ${this.selectedSourceObject || 'Object'} WHERE `,
+              insertText: `SELECT ${snippetFields} FROM ${this.selectedSourceObject || 'Object'} WHERE `,
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Auto-generates a basic SELECT query for the current object.',
+              documentation: 'Auto-generates a SELECT query using real field names for the current object.',
               range: range
             });
 
@@ -551,7 +694,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           const wordInfo = model.getWordAtPosition(position);
           if (!wordInfo) return null;
 
-          // CLEANUP: Strip out Zendesk operators (:, <, >) so we can match the pure field name
+          //Strip out Zendesk operators (:, <, >) so we can match the pure field name
           const cleanWord = wordInfo.word.replace(/[:<>]/g, '').toLowerCase();
 
           const field = this.sourceFields.find((f) => f.name.toLowerCase() === cleanWord);
@@ -613,11 +756,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   }
 
   closeAllDropdowns() {
-    this.mappings.forEach((m) => (m.isDropdownOpen = false));
-    this.isSourceDropdownOpen = false;
-    this.isTargetDropdownOpen = false;
-    this.isHistoryDropdownOpen = false;
-  }
+  this.mappings.forEach((m) => (m.isDropdownOpen = false));
+  this.isSourceDropdownOpen = false;
+  this.isTargetDropdownOpen = false;
+  this.isHistoryDropdownOpen = false;
+  this.isProfileDropdownOpen = false;
+}
 
   // --- ADD THIS TEMPLATE CONSTANT ---
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
@@ -652,6 +796,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   buildDefaultQuery(entityName: string) {
     const crm = this.sourceCrmId.toLowerCase();
+    this.isDefaultQuery = true;
 
     if (crm === 'zendesk') {
       if (this.isStandardZendeskObject(entityName)) {
@@ -661,17 +806,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         }
         this.customQuery = `type:${singularName} `;
       } else {
-        // --- UPGRADED: Auto-inject the custom layout instructions ---
+        // ---Auto-inject the custom layout instructions ---
         this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE;
       }
     } else if (crm === 'hubspot') {
       this.customQuery = this.HUBSPOT_SEARCH_TEMPLATE;
     } else if (crm === 'salesforce') {
-      this.customQuery = `SELECT * FROM ${entityName}`;
+      this.customQuery = `SELECT Id FROM ${entityName}`;
     } else if (crm === 'zoho') {
-      this.customQuery = `SELECT * FROM ${entityName}`;
+      this.customQuery = `SELECT id FROM ${entityName}`;
     } else {
-      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+      this.customQuery = `SELECT Id FROM ${entityName} WHERE `;
     }
   }
 
@@ -779,6 +924,26 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
+  isExternalIdEligible(field: FieldMeta): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    if (crm === 'zoho') {
+      return field.name === 'id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'hubspot') {
+      return field.name === 'id' || field.name === 'hs_object_id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'zendesk') {
+      return !!field.externalId;
+    }
+    // Salesforce and default fallback
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup;
+  }
+
+  getExternalIdEligibleFields(): FieldMeta[] {
+    if (!this.targetFields) return [];
+    return this.targetFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
   toggleSourceDropdown(event: Event) {
     event.stopPropagation();
     const wasOpen = this.isSourceDropdownOpen;
@@ -801,23 +966,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
-    // const crm = this.sourceCrmId.toLowerCase();
-
-    // if (crm === 'zendesk') {
-    //   let singularName = entityName.toLowerCase();
-    //   if (singularName.endsWith('s') && singularName !== 'macros') {
-    //     singularName = singularName.slice(0, -1);
-    //   }
-    //   this.customQuery = `type:${singularName} `;
-
-    // } else if (crm === 'salesforce') {
-    //   this.customQuery = `SELECT * FROM ${entityName}`;
-
-    // } else {
-    //   this.customQuery = `SELECT * FROM ${entityName} WHERE `;
-    // }
-
     this.buildDefaultQuery(entityName);
+    this.loadSourceObjectCount(entityName);
 
     this.loadMetadata();
   }
@@ -907,10 +1057,10 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
-    } else if (crm === 'salesforce') {
+       } else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
-        placeholder: 'e.g., SELECT * FROM Account WHERE Amount > 5000 LIMIT 100',
+        placeholder: 'e.g., SELECT Id, Name FROM Account WHERE Amount > 5000 LIMIT 100',
         helpText: 'Write your full SOQL query to filter data, or append LIMIT to restrict the migration size.',
         icon: 'icon-database',
         buttonText: 'Run Query',
@@ -919,7 +1069,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     } else if (crm === 'zoho') {
       return {
         title: 'Zoho COQL Editor',
-        placeholder: "e.g., SELECT * FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
+        placeholder: "e.g., SELECT id, Account_Name FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
         helpText: "Write your full COQL query. The engine automatically handles Zoho's strict ID rules behind the scenes.",
         icon: 'icon-database',
         buttonText: 'Run Query',
@@ -1008,6 +1158,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
       const data = await response.json();
       this.previewRecords = data.records || [];
+       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery);
       this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
@@ -1022,6 +1173,37 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       this.logMessages = [...this.logMessages, ` API Error: ${errorMessage}`];
     } finally {
       this.isPreviewLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+    async loadSourceObjectCount(objectName: string, query: string = '') {
+    if (!objectName || !this.sourceCrmId) {
+      this.selectedSourceObjectCount = null;
+      return;
+    }
+
+    this.isSourceCountLoading = true;
+    this.cdr.detectChanges();
+
+    try {
+      const params = new URLSearchParams({ role: 'source' });
+      if (query) params.set('query', query);
+
+      const response = await fetch(
+        `${environment.apiUrl}/api/metadata/${this.sourceCrmId}/count/${encodeURIComponent(objectName)}?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` } }
+      );
+
+      if (!response.ok) throw new Error('Failed to fetch object count.');
+
+      const data = await response.json();
+      this.selectedSourceObjectCount = typeof data.count === 'number' ? data.count : null;
+    } catch (error) {
+      console.error('Object Count Error:', error);
+      this.selectedSourceObjectCount = null;
+    } finally {
+      this.isSourceCountLoading = false;
       this.cdr.detectChanges();
     }
   }
@@ -1249,6 +1431,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   loadHistoricalQuery(query: string) {
     this.customQuery = query;
+    this.isDefaultQuery = false;
     this.isHistoryDropdownOpen = false;
     this.validateQuery();
   }
@@ -1288,6 +1471,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           this.selectedSourceObject = defaultSrc ? defaultSrc.name : this.sourceEntities[0].name;
 
           this.buildDefaultQuery(this.selectedSourceObject);
+          this.loadSourceObjectCount(this.selectedSourceObject);
         }
 
         if (this.targetEntities.length > 0) {
@@ -1350,6 +1534,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         this.previewHeaders = sourceData.headers || [];
         this.previewRecords = sourceData.sampleRecords || [];
 
+        const crmLower = this.sourceCrmId.toLowerCase();
+        if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
+          const fieldList = this.previewHeaders.slice(0, 15).join(', ');
+          this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+        }
+
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
           sourceLabel: `${field.label} (${field.name})`,
@@ -1375,16 +1565,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
-    mapping._mappedBy = null;
     mapping.relationalExtIdField = '';
-    this.mappedCount = this.mappings.filter((m) => m.targetField).length;
-    delete mapping._mappedBy;
     delete mapping._mappedBy;
     this.updateMappedCount();
   }
 
   resetAllMappings() {
-    this.mappings.forEach((m) => (m.targetField = ''));
+    this.mappings.forEach((m) => {
+      m.targetField = '';
+      m.relationalExtIdField = '';
+      delete m._mappedBy;
+    });
 
     this.updateMappedCount();
   }
@@ -1429,8 +1620,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     // =========================================================
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
+    const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
+    const queryFieldSet = this.getQueryFieldFilterSet(); // null = no restriction, otherwise Auto-Map must stay inside it
+
     this.mappings.forEach((m) => {
       if (m.targetField) return;
+      if (queryFieldSet && !queryFieldSet.has((m.sourceField || '').toLowerCase())) return; // outside the query's SELECT -- never auto-map it
 
       const sourceMeta = this.sourceFields.find((sf) => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -1451,6 +1646,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
         if (restrictedTargetFields.includes(tgtApiExact)) return;
+        if (claimedTargetFields.has(t.name)) return;
 
         let score = 0;
         const tgtLabelExact = t.label.toLowerCase();
@@ -1497,6 +1693,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
       if (bestMatch) {
         m.targetField = bestMatch['name'];
+        claimedTargetFields.add(bestMatch['name']);
         if (typeof this.isReferenceField === 'function' && this.isReferenceField(bestMatch['name'])) {
           m.relationalExtIdField = 'Id';
         }
@@ -1506,6 +1703,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     });
 
     const unmappedSourcePayload = this.sourceFields.filter((sf) => {
+      if (queryFieldSet && !queryFieldSet.has(sf.name.toLowerCase())) return false; // outside the query's SELECT -- never send to the AI mapper either
       const activeMap = this.mappings.find((m) => m.sourceField === sf.name);
       return activeMap && !activeMap.targetField;
     });
@@ -1568,7 +1766,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
               this.reviewFilter = 'unmapped';
             }
 
-            // Opens review panel ONLY when AI is completely finished
             this.showReviewPanel = true;
             this.reviewPanelMinimized = false;
 
@@ -1586,8 +1783,11 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
             if (response && Array.isArray(response.mappings)) {
               response.mappings.forEach((backendMap: any) => {
                 const localRow = this.mappings.find((m) => m.sourceField === backendMap.sourceField);
+                const targetAlreadyClaimed = this.mappings.some(
+                  (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
+                );
 
-                if (localRow && !localRow.targetField && backendMap.targetField) {
+                if (localRow && !localRow.targetField && backendMap.targetField && !targetAlreadyClaimed) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -1656,6 +1856,43 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       return;
     }
 
+    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.externalIdField) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(
+        `Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`,
+        'External ID Required'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
+      !this.isExternalIdEligible(this.targetFields.find((f) => f.name === this.externalIdField) || { name: '', label: '' })
+    ) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(
+        `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID (or indexed/lookup) field in ${this.targetSystem}, ` +
+        `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
+        'Field Not Usable for Matching'
+      );
+      return;
+    }
+
+    if (
+      (this.operationMode === 'update' || this.operationMode === 'upsert') &&
+      this.externalIdField &&
+      !this.restrictToQueryFields(this.mappings).some((m) => m.targetField === this.externalIdField)
+    ) {
+      this.jobStatus = 'Validation Failed';
+      const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
+      const message = rawMapping && this.getQueryFieldFilterSet()
+        ? `Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`
+        : `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`;
+      this.toastr.error(message, 'External ID Not Mapped');
+      return;
+    }
+
     // Only show the big popup and wipe stats if it is a FRESH run
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
@@ -1684,10 +1921,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
-    // --- CRITICAL FIX: Add sourceField, targetField, and isRequired so the backend can enforce it ---
-    const activeMappings = this.mappings
-      .filter((m) => m.targetField)
-      .map((m) => {
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField)).map((m) => {
         const targetMeta = this.targetFields.find((t) => t.name === m.targetField);
         return {
           csvField: m.sourceField,
@@ -1706,13 +1940,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
     let safeQuery = this.customQuery.trim();
     const crmContext = this.sourceCrmId.toLowerCase();
-    // --- ADD THIS CLEANING BLOCK FOR VALIDATION STREAM ---
     if (crmContext === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
       safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
 
       const cleanBlankTemplate = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       if (safeQuery === cleanBlankTemplate) {
-        safeQuery = ''; // Default to pulling all records if template unmodified
+        safeQuery = '';
       }
     }
 
@@ -1873,6 +2106,10 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     this.router.navigate(['/connection']);
   }
 
+  returnToHome(): void {
+    this.router.navigate(['/connection']);
+  }
+
   logout(): void {
     Swal.fire({
       title: 'Ready to Leave?',
@@ -1885,13 +2122,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       customClass: { popup: 'rounded-4 shadow-lg border-0' }
     }).then((result) => {
       if (result.isConfirmed) {
-        // 1. Wipe secure tokens and session memory
-        localStorage.removeItem('supabase_token');
-        localStorage.removeItem('source_crm_slot');
-        localStorage.removeItem('target_crm_slot');
-        // Or use localStorage.clear(); if you want to wipe absolutely everything
-
-        // 2. Disconnect active websockets
+        // 1. Disconnect active websockets
         if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
           this.validationSocket.close();
         }
@@ -1899,9 +2130,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
           this.migrationSocket.close();
         }
 
-        // 3. Notify and Redirect
+        // 2. Clear this component's own local slots (not auth tokens —
+        // AuthService owns those)
+        localStorage.removeItem('source_crm_slot');
+        localStorage.removeItem('target_crm_slot');
+
+        // 3. Delegate actual session teardown to AuthService: it clears
+        // supabase_token/refresh/user, resets the currentUser signal that
+        // the route guard reads, calls the backend to kill the session,
+        // and navigates to /login with replaceUrl so Back can't return here.
         this.toastr.success('You have been securely logged out.', 'Goodbye!');
-        this.router.navigate(['/login']); // Change '/login' to your actual auth route if different
+        this.authService.logout();
       }
     });
   }
@@ -1937,8 +2176,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
         const stringVal = String(val !== undefined && val !== null ? val : '');
 
-        // FIX: The Invisible Excel Text Hack!
-        // Adding a tab character (\t) forces Excel to read the ID as text without showing ugly formulas.
         if (/^\d{16,}$/.test(stringVal)) {
           return `"\t${stringVal}"`;
         }
@@ -1962,14 +2199,13 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     document.body.removeChild(a);
   }
 
-  runMigration() {
+   runMigration() {
+    // 1. Preliminary UI Checks (Immediate feedback)
     if (this.hasPendingEdits) {
       this.toastr.warning(
         'You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.',
         'Action Required'
       );
-
-      // Flash the Re-Validate button to draw the user's attention
       const revalBtn = document.querySelector('.btn-danger.fw-bold') as HTMLElement;
       if (revalBtn) {
         revalBtn.classList.add('animate__animated', 'animate__headShake');
@@ -1977,101 +2213,166 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
       }
       return;
     }
-    if (this.customQuery && !this.validateQuery()) {
-      this.jobStatus = 'Validation Failed';
-      this.toastr.error('Please fix your query criteria before running.', 'Query Error');
-      return;
-    }
 
-    const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+    // 2. Fetch validation state (Hard errors vs Soft warnings)
+    const { errors, warnings } = this.getValidationIssues();
 
-    if (activeMappings.length === 0) {
+    // Handle Hard Errors immediately
+    if (errors.length > 0) {
       this.jobStatus = 'Failed';
-      this.toastr.warning('Please map at least one field before running the migration.', 'No Mappings');
+      this.toastr.error(errors[0], 'Migration Error');
       return;
     }
 
-    if (!this.selectedSourceObject || !this.selectedTargetObject) {
-      this.jobStatus = 'Failed';
-      this.toastr.error('Source and Target objects must be selected.', 'Missing Setup');
-      return;
-    }
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
 
-    const missingFields = this.getMissingRequiredFields();
-    const incompleteRefs = this.getIncompleteReferenceMappings();
-
-    if (missingFields.length > 0 || incompleteRefs.length > 0) {
-      let warningHtml = '<div class="text-start mt-2">';
-
-      if (missingFields.length > 0) {
-        warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
-                        <ul class="small mb-3 text-muted"><li>${missingFields.join('</li><li>')}</li></ul>`;
-      }
-
-      if (incompleteRefs.length > 0) {
-        warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
-                        <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (It will default to 'Id'):</p>
-                        <ul class="small mb-0 text-muted"><li>${incompleteRefs.join('</li><li>')}</li></ul>`;
-      }
-      warningHtml += '</div>';
-
-      Swal.fire({
-        title: 'Mapping Warnings',
-        html: warningHtml,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Run Anyway',
-        cancelButtonText: 'Fix Mapping',
-        confirmButtonColor: '#dc3545',
-        customClass: { popup: 'rounded-4 shadow-lg border-0' }
-      }).then((result) => {
-        if (result.isConfirmed) {
-          this.executeMigrationJob(activeMappings);
-        } else {
-          this.jobStatus = 'Idle';
-        }
-      });
+    // 3. Decide whether to show a "Warning" Modal or a "Success Confirmation" Modal
+    if (warnings.missingFields.length > 0 || warnings.incompleteRefs.length > 0) {
+      this.show_warning_modal(warnings);
     } else {
-      // If validation passes perfectly, run it directly
-      Swal.fire({
-        title: 'Ready to Migrate!',
-        text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
-        icon: 'info',
-        showCancelButton: true,
-        confirmButtonColor: '#198754',
-        cancelButtonColor: '#6c757d',
-        confirmButtonText: 'Yes, Run Job!'
-      }).then((result) => {
-        if (result.isConfirmed) {
-          this.executeMigrationJob(activeMappings);
-        } else {
-          this.jobStatus = 'Idle';
-        }
-      });
+      this.show_confirmation_modal(activeMappings);
     }
+  }
+
+  private getValidationIssues() {
+    const errors: string[] = [];
+    const warnings = {
+      missingFields: this.getMissingRequiredFields(), // Returns string[]
+      incompleteRefs: this.getIncompleteReferenceMappings() // Returns string[]
+    };
+
+    // Query Validation (Hard Error)
+    if (this.customQuery && !this.validateQuery()) {
+      errors.push('Please fix your query criteria before running.');
+    }
+
+    // Mapping Count Check
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
+    if (activeMappings.length === 0) {
+      errors.push('Please map at least one field before running the migration.');
+    }
+
+    // Update/Upsert Specific Logic
+    const isUpdateMode = this.operationMode === 'update' || this.operationMode === 'upsert';
+    if (isUpdateMode) {
+      if (!this.externalIdField) {
+        errors.push(`Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`);
+      } else {
+        const targetFieldMeta = this.targetFields.find((f) => f.name === this.externalIdField);
+        const isEligible = this.isExternalIdEligible(targetFieldMeta || { name: '', label: '' });
+
+        if (!isEligible) {
+          errors.push(`"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID in ${this.targetSystem}. Mark it in Setup or choose another field.`);
+        } else if (!activeMappings.some((m) => m.targetField === this.externalIdField)) {
+          const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
+          if (rawMapping && this.getQueryFieldFilterSet()) {
+            errors.push(`Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`);
+          } else {
+            errors.push(`The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column.`);
+          }
+        }
+      }
+    }
+
+    // Object Existence Check
+    if (!this.selectedSourceObject || !this.selectedTargetObject) {
+      errors.push('Source and Target objects must be selected.');
+    }
+
+    return { errors, warnings };
+  }
+
+  private show_warning_modal(warnings: { missingFields: string[], incompleteRefs: string[] }) {
+    let warningHtml = '<div class="text-start mt-2">';
+
+    if (warnings.missingFields.length > 0) {
+      warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
+                       <ul class="small mb-3 text-muted"><li class="mb-0">${warnings.missingFields.join('</li><li_item>')}</li></ul>`;
+    }
+
+    if (warnings.incompleteRefs.length > 0) {
+      warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
+                       <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (Defaults to 'Id'):</p>
+                       <ul class="small mb-0 text-muted"><li class="mb-0">${warnings.incompleteRefs.join('</li><li_item>')}</li></ul>`;
+    }
+    warningHtml += '</div>';
+
+    Swal.fire({
+      title: 'Mapping Warnings',
+      html: warningHtml,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Run Anyway',
+      cancelButtonText: 'Fix Mapping',
+      confirmButtonColor: '#dc3545',
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
+        this.executeMigrationJob(activeMappings);
+      } else {
+        this.jobStatus = 'Idle';
+      }
+    });
+  }
+
+  private show_confirmation_modal(activeMappings: any[]) {
+    Swal.fire({
+      title: 'Ready to Migrate!',
+      text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+      icon: 'info',
+      showCancelButton: true,
+      confirmButtonColor: '#198754',
+      cancelButtonColor: '#6c757d',
+      confirmButtonText: 'Yes, Run Job!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.executeMigrationJob(activeMappings);
+      } else {
+        this.jobStatus = 'Idle';
+      }
+    });
   }
 
   downloadAudit(type: 'valid' | 'invalid') {
-    if (!this.currentSessionId) {
-      this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
-      return;
-    }
-
-    if (type === 'invalid' && this.validationResults?.invalidRecords) {
-      this.toastr.info(`Generating error audit report...`, 'Downloading');
-      this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
-    } else {
-      // Valid records are handled by the backend because they are too massive for browser RAM
-      this.toastr.info(`Generating valid audit report...`, 'Downloading');
-      const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
-      window.open(url, '_blank');
-    }
+  if (!this.currentSessionId) {
+    this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
+    return;
   }
+
+  if (type === 'invalid' && this.validationResults?.invalidRecords) {
+    this.toastr.info(`Generating error audit report...`, 'Downloading');
+    this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
+    return;
+  }
+
+  this.toastr.info(`Generating valid audit report...`, 'Downloading');
+  const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
+  const token = localStorage.getItem('supabase_token') || '';
+
+  this.http.get(url, {
+    responseType: 'blob',
+    headers: { Authorization: `Bearer ${token}` }
+  }).subscribe({
+    next: (blob) => {
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `Validation_Audit_${type}_${this.currentSessionId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    },
+    error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
+  });
+}
 
   // --- Separated execution logic for clean popup handling ---
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
     this.errorData = [];
+    this.skippedData = [];
     this.jobStatus = 'Initializing...';
     this.logMessages = [];
     this.isGlobalLoading = true;
@@ -2153,21 +2454,25 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
         if (data.status) {
           this.jobStatus = data.status;
 
-          // --- THE NEW POST-MIGRATION POPUP ---
+          // --- POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
             this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
             const errorCount = data.errorData ? data.errorData.length : 0;
+            const skippedCount = data.skippedData ? data.skippedData.length : 0;
 
             let swalIcon: 'success' | 'warning' | 'error' = 'success';
             let swalTitle = 'Migration Complete!';
 
+            // Skipped records (Update mode intentionally not creating new records)
             if (errorCount > 0 && successCount > 0) {
               swalIcon = 'warning';
               swalTitle = 'Migration Finished with Errors';
             } else if (errorCount > 0 && successCount === 0) {
               swalIcon = 'error';
               swalTitle = 'Migration Failed';
+            } else if (skippedCount > 0) {
+              swalTitle = 'Migration Complete (Some Records Skipped)';
             }
 
             Swal.fire({
@@ -2179,12 +2484,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
                       <h2 class="text-success mb-0 fw-bold">${successCount}</h2>
                       <span class="small fw-bold text-success-emphasis text-uppercase">Successful</span>
                     </div>
+                    ${skippedCount > 0 ? `
+                    <div class="p-3 border rounded border-warning-subtle bg-warning-subtle w-100 shadow-sm">
+                      <h2 class="text-warning-emphasis mb-0 fw-bold">${skippedCount}</h2>
+                      <span class="small fw-bold text-warning-emphasis text-uppercase">Skipped (No Match)</span>
+                    </div>` : ''}
                     <div class="p-3 border rounded border-danger-subtle bg-danger-subtle w-100 shadow-sm">
                       <h2 class="text-danger mb-0 fw-bold">${errorCount}</h2>
                       <span class="small fw-bold text-danger-emphasis text-uppercase">Rejected</span>
                     </div>
                   </div>
-                  <p class="text-muted small mb-0">Check the terminal logs or download the error reports to review rejected records.</p>
+                  <p class="text-muted small mb-0">Check the terminal logs or download the reports below to review the details.</p>
                 </div>
               `,
               icon: swalIcon,
@@ -2197,6 +2507,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
         if (data.successData) this.successData = data.successData;
         if (data.errorData) this.errorData = data.errorData;
+        if (data.skippedData) this.skippedData = data.skippedData;
 
         this.cdr.detectChanges();
         setTimeout(() => {

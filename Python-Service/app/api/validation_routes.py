@@ -4,8 +4,9 @@ import tempfile
 import shutil
 import pandas as pd
 from openpyxl import load_workbook
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends
 from app.services.validator_service import process_validation_batch
+from app.api.dependencies.auth import get_current_user
 import glob
 from datetime import datetime
 
@@ -81,7 +82,7 @@ async def validate_batch(
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
     
-    # --- FIX 1: Extract Dynamic CRM ---
+    # ---  1: Extract Dynamic CRM ---
     target_crm = payload.get("targetCrmId", "salesforce")
 
     ext = os.path.splitext(file.filename)[1].lower()
@@ -104,7 +105,7 @@ async def validate_batch(
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 chunk_records = chunk_df.to_dict(orient="records")
                 
-                # --- FIX 2: Pass target_rules and target_crm to the processor ---
+                # --- 2: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
                     records=chunk_records, mappings=mappings, dedupe_key=dedupe_key,  
                     target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -136,7 +137,7 @@ async def validate_batch(
                     chunk_df = pd.DataFrame(chunk_records)
                     chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                     
-                    # --- FIX 3: Pass target_rules and target_crm to the processor ---
+                    # --- 3: Pass target_rules and target_crm to the processor ---
                     result = process_validation_batch(
                         records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
                         target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -155,7 +156,7 @@ async def validate_batch(
                 chunk_df = pd.DataFrame(chunk_records)
                 chunk_df = chunk_df.astype(object).where(pd.notna(chunk_df), None)
                 
-                # --- FIX 4: Pass target_rules and target_crm to the processor ---
+                # --- 4: Pass target_rules and target_crm to the processor ---
                 result = process_validation_batch(
                     records=chunk_df.to_dict(orient="records"), mappings=mappings, dedupe_key=dedupe_key,  
                     target_rules=sf_rules, date_format=date_format, target_crm=target_crm
@@ -205,10 +206,10 @@ async def revalidate_batch_json(request: Request):
     sf_rules = payload.get("sfRules", {})
     date_format = payload.get("dateFormat", "")
     
-    # --- FIX 5: Extract Dynamic CRM ---
+    # --- 5: Extract Dynamic CRM ---
     target_crm = payload.get("targetCrmId", "salesforce")
 
-    # --- FIX 6: Pass target_rules and target_crm to the processor ---
+    # --- 6: Pass target_rules and target_crm to the processor ---
     result = process_validation_batch(
         records=records, 
         mappings=mappings, 
@@ -224,8 +225,18 @@ async def revalidate_batch_json(request: Request):
 # ROUTE 4: FETCH ACTIVE SESSIONS
 # ==========================================
 @router.get("/api/validation/sessions")
-async def get_active_sessions():
-    """Scans the staging folder and returns a list of recoverable validation sessions."""
+async def get_active_sessions(current_user = Depends(get_current_user)):
+    """Scans the staging folder and returns a list of recoverable validation sessions.
+
+    NOTE: staging .db files are organized on disk as {crm}/{object}/{session_id}.db
+    with no user_id anywhere in that path, so this can only require *that you're
+    logged in* -- it still can't tell one authenticated user's sessions apart from
+    another's. Closing that fully needs a small schema addition (a
+    validation_sessions table mapping session_id -> user_id, written at session
+    creation time in migration_routes.py) so this endpoint -- and the audit
+    download/revalidation routes -- can filter to sessions the caller actually
+    owns instead of just requiring *a* valid login.
+    """
     base_dir = os.path.join(os.getcwd(), "SureShift_staging_databases")
     sessions = []
     

@@ -19,7 +19,7 @@ class HubspotMigrator:
         safe_obj = obj_name.lower()
         source_records = []
         
-        # --- THE FIX: Support both UI mapping formats ---
+        # --- Support both UI mapping formats ---
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
@@ -72,7 +72,7 @@ class HubspotMigrator:
                     props = rec.get("properties", {})
                     if props:
                         for k, v in props.items(): 
-                            # --- FIX: Safeguard against nested objects in HubSpot ---
+                            # --- Safeguard against nested objects in HubSpot ---
                             if isinstance(v, dict):
                                 flat_rec[k] = str(v)
                             elif isinstance(v, list):
@@ -99,18 +99,19 @@ class HubspotMigrator:
             raise e
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
         target_object = options["targetObject"]
         token = options["token"]
         domain = (options.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         source_records = options["sourceRecords"]
-        dedupe_key = options.get("targetExtIdField") or options.get("dedupeKey") or "email"
-        
-        user_id = options.get("userId") # <-- Needed for refresh
+        target_ext_id_field = options.get("targetExtIdField") or options.get("dedupeKey")
 
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        user_id = options.get("userId")
+
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []
 
         await send_log(f"[{target_object}] {pass_name}: Pushing data to HubSpot (Concurrent Mode)...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -118,11 +119,20 @@ class HubspotMigrator:
 
         chunks = list(chunk_dataset(payload, 100))
 
-        if op_mode == "update":
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/update"
-        elif op_mode == "upsert":
-            # FIXED: Removed the query string. HubSpot v3 requires this in the body.
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert" 
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        dedupe_key = target_ext_id_field
+
+        if wire_op_mode == "upsert":
+            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert"
         else:
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
 
@@ -130,28 +140,38 @@ class HubspotMigrator:
 
         async def process_chunk(chunk):
             async with semaphore:
-                if op_mode == "update":
-                    hs_records = [{"id": c["targetRecord"].pop("id"), "properties": c["targetRecord"]} for c in chunk if "id" in c["targetRecord"]]
-                elif op_mode == "upsert":
-                    hs_records = [
-                        {
-                            # Use .get() instead of .pop() to keep the email in the properties body!
-                            "id": str(c["targetRecord"].get(dedupe_key)), 
-                            "idProperty": dedupe_key,
-                            "properties": c["targetRecord"]
-                        } 
-                        for c in chunk if c["targetRecord"].get(dedupe_key)
-                    ]
+                hs_records = []
+                included_indices = []
+
+                if wire_op_mode == "upsert":
+                    for i, c in enumerate(chunk):
+                        dedupe_val = c["targetRecord"].get(dedupe_key)
+                        if dedupe_val:
+                            hs_records.append({
+                                # Use .get() instead of .pop() to keep the email in the properties body!
+                                "id": str(dedupe_val),
+                                "idProperty": dedupe_key,
+                                "properties": c["targetRecord"]
+                            })
+                            included_indices.append(i)
                 else:
                     hs_records = [{"properties": c["targetRecord"]} for c in chunk]
+                    included_indices = list(range(len(chunk)))
+
+                skipped_indices = [i for i in range(len(chunk)) if i not in set(included_indices)]
+                missing_field_label = dedupe_key
 
                 if not hs_records:
-                    return {"chunk": chunk, "status": "error", "message": "Missing required record IDs for operation."}
+                    return {
+                        "chunk": chunk,
+                        "status": "error",
+                        "message": f"Missing required '{missing_field_label}' value for every record in this batch."
+                    }
 
                 req_payload = {"inputs": hs_records}
                 
                 try:
-                    # --- FIX: Silent Retry Loop for Uploads ---
+                    # ---  Silent Retry Loop for Uploads ---
                     while True:
                         res = await client.post(endpoint, json=req_payload, headers=headers)
                         
@@ -176,7 +196,6 @@ class HubspotMigrator:
                         return {"chunk": chunk, "status": "error", "message": error_msg}
                         
                     data = res.json()
-                    results = []
                     
                     successes = data.get("results", [])
                     success_map = {str(i): s for i, s in enumerate(successes)}
@@ -184,21 +203,39 @@ class HubspotMigrator:
                     errors = data.get("errors", [])
                     error_map = {str(e.get("index")): e for e in errors}
                     
-                    for i in range(len(chunk)):
-                        index_str = str(i)
-                        if index_str in error_map:
-                            results.append({
-                                "success": False, 
-                                "details": error_map[index_str].get("message", "Validation failed")
-                            })
-                        elif index_str in success_map:
-                            results.append({
-                                "success": True, 
-                                "id": success_map[index_str].get("id")
-                            })
+                    results_by_index = {}
+                    for hs_pos, orig_idx in enumerate(included_indices):
+                        idx_str = str(hs_pos)
+                        if idx_str in error_map:
+                            results_by_index[orig_idx] = {
+                                "success": False,
+                                "details": error_map[idx_str].get("message", "Validation failed")
+                            }
+                        elif idx_str in success_map:
+                            s = success_map[idx_str]
+                            if is_update_only and s.get("new") is True:
+                                results_by_index[orig_idx] = {
+                                    "success": True,
+                                    "skipped": True,
+                                    "id": s.get("id")
+                                }
+                            else:
+                                results_by_index[orig_idx] = {
+                                    "success": True,
+                                    "id": s.get("id")
+                                }
                         else:
-                            results.append({"success": True, "id": "Success"})
-                            
+                            results_by_index[orig_idx] = {"success": True, "id": "Success"}
+
+
+                    for orig_idx in skipped_indices:
+                        results_by_index[orig_idx] = {
+                            "success": False,
+                            "details": f"Skipped: missing required '{missing_field_label}' value."
+                        }
+
+                    results = [results_by_index[i] for i in range(len(chunk))]
+
                     return {"chunk": chunk, "status": "completed", "results": results}
                         
                 except Exception as exc:
@@ -218,8 +255,21 @@ class HubspotMigrator:
             else:
                 for item, hs_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
+
+                    if hs_res.get("skipped"):
+                        orig_record["Target_SkipReason"] = (
+                            f"[{dedupe_key}] No matching record found in HubSpot. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        raw_id = hs_res.get("id")
+                        if raw_id:
+                            ids_to_revert.append(str(raw_id))
+                        continue
+
                     if hs_res.get("success"):
-                        # --- FIX: Strict String Cast ---
+                        # ---  Strict String Cast ---
                         raw_id = hs_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         
@@ -230,4 +280,31 @@ class HubspotMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records HubSpot auto-created for them..."
+            )
+            await self._archive_records(client, domain, headers, safe_obj, ids_to_revert, user_id, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _archive_records(self, client, domain, headers, safe_obj, record_ids, user_id, send_log):
+        """Archives (soft-deletes) records HubSpot auto-created that 'update'
+        mode should never have created in the first place. HubSpot's batch
+        archive endpoint accepts up to 100 ids per call."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                url = f"{domain}/crm/v3/objects/{safe_obj}/batch/archive"
+                req_payload = {"inputs": [{"id": rid} for rid in chunk]}
+                res = await client.post(url, json=req_payload, headers=headers)
+
+                if res.status_code == 401:
+                    token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
+                    headers["Authorization"] = f"Bearer {token}"
+                    res = await client.post(url, json=req_payload, headers=headers)
+
+                if res.status_code not in [204, 200]:
+                    await send_log(f"[{safe_obj}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{safe_obj}] Revert Failed: {str(e)}")

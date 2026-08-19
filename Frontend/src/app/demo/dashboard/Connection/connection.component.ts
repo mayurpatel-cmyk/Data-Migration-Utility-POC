@@ -11,7 +11,7 @@ import { Subscription, switchMap, delay } from 'rxjs';
 @Component({
   selector: 'app-connection',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent, BreadcrumbComponent],
+  imports: [CommonModule, FormsModule, CardComponent],
   templateUrl: './connection.component.html',
   styleUrls: ['./connection.component.scss']
 })

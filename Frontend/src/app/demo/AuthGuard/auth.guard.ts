@@ -11,7 +11,6 @@ export const authGuard: CanActivateFn = (route, state) => {
     return true;
   }
 
-  // If not logged in, boot them back to the login page
-  router.navigate(['/login']);
+  router.navigate(['/login'], { replaceUrl: true });
   return false;
 };

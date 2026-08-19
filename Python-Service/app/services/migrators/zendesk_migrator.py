@@ -2,6 +2,7 @@ import urllib.parse
 import re
 import asyncio
 import json
+from app.services.crm_service import CrmService
 
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
@@ -12,6 +13,7 @@ class ZendeskMigrator:
     async def extract(self, client, creds, obj_name, query, mappings, send_log):
         token = creds.get("access_token")
         subdomain = creds.get("subdomain")
+        user_id = creds.get("user_id")
         if not subdomain and creds.get("api_domain"):
             subdomain = creds.get("api_domain").replace(".zendesk.com", "").replace("https://", "")
         
@@ -39,6 +41,11 @@ class ZendeskMigrator:
                 while url:
                     while True:
                         res = await client.get(url, headers=headers)
+                        if res.status_code == 401:
+                            await send_log(" Zendesk token expired. Silently refreshing...")
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "source")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
                         if res.status_code == 429:
                             await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
                             await asyncio.sleep(30)
@@ -93,8 +100,13 @@ class ZendeskMigrator:
                         else:
                             res = await client.get(url, headers=headers)
 
+                        if res.status_code == 401:
+                            await send_log(" Zendesk token expired. Silently refreshing...")
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "source")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
                         if res.status_code == 429:
-                            await send_log(" ⏳ Zendesk Rate Limit hit. Pausing 30s...")
+                            await send_log("Zendesk Rate Limit hit. Pausing 30s...")
                             await asyncio.sleep(30)
                             continue
                         break
@@ -131,74 +143,208 @@ class ZendeskMigrator:
 
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
-        # 2. NO HARDCODING: Uses exactly what the frontend passes (e.g., "users", "tickets")
         target_object = options["targetObject"].strip().lower()
-        
+
         token = options["token"]
         domain = options.get("instance_url", "").replace(".zendesk.com", "").replace("https://", "").strip('/')
         source_records = options["sourceRecords"]
+        target_ext_id_field = options.get("targetExtIdField", "")
+        user_id = options.get("userId")
 
         await send_log(f"[{target_object}] {pass_name}: Injecting data stream into Zendesk...")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []
 
         chunks = list(chunk_dataset(payload, 100))
 
-        # 3. DYNAMIC URL BUILDER 
-        if op_mode == "upsert":
-            endpoint = "create_or_update_many.json"
-        elif op_mode == "update":
-            endpoint = "update_many.json"
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        standard_objects = {"tickets", "users", "organizations", "groups", "macros", "triggers", "views"}
+        is_standard_object = target_object in standard_objects or f"{target_object}s" in standard_objects
+
+        if is_standard_object:
+            zendesk_object_key = target_object if target_object in standard_objects else f"{target_object}s"
         else:
-            endpoint = "create_many.json"
-            
-        api_path = f"https://{domain}.zendesk.com/api/v2/{target_object}/{endpoint}"
+            zendesk_object_key = target_object  # custom object key is used verbatim
 
-        async def process_chunk(chunk):
-            # 4. DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
-            zendesk_data_rows = [c["targetRecord"] for c in chunk]
-            req_payload = {target_object: zendesk_data_rows}
+        bulk_write_capable = {"tickets", "users", "organizations"}
+        is_bulk_write_capable = zendesk_object_key in bulk_write_capable
 
+        if is_standard_object and not is_bulk_write_capable:
+            await send_log(
+                f"[{target_object}] {pass_name}: Zendesk has no bulk-write endpoint for "
+                f"'{zendesk_object_key}' (only tickets/users/organizations support create_many). "
+                f"Skipping this pass -- these records were not sent."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        needs_manual_upsert_split = (
+            is_standard_object and zendesk_object_key != "users" and wire_op_mode == "upsert"
+        )
+
+        if is_standard_object:
+            if needs_manual_upsert_split:
+                api_path = None
+                await send_log(
+                    f"[{target_object}] {pass_name}: Zendesk has no bulk upsert endpoint for "
+                    f"'{zendesk_object_key}' -- resolving matches via Search by external_id, "
+                    f"then splitting into update_many/create_many."
+                )
+            else:
+                endpoint = "create_or_update_many.json" if wire_op_mode == "upsert" else "create_many.json"
+                api_path = f"https://{domain}.zendesk.com/api/v2/{zendesk_object_key}/{endpoint}"
+        else:
+            job_action = "create_or_update_by_external_id" if wire_op_mode == "upsert" else "create"
+            api_path = f"https://{domain}.zendesk.com/api/v2/custom_objects/{zendesk_object_key}/jobs"
+
+        if api_path:
+            await send_log(f"[{target_object}] {pass_name}: Target endpoint -> {api_path}")
+
+        async def submit_bulk(method, url, body):
+            """POST/PUT a Zendesk bulk endpoint, follow the async job to completion
+            if one is returned, and hand back the `results` array (same order as
+            the items that were submitted)."""
+            nonlocal token
             while True:
-                if op_mode == "update":
-                    res = await client.put(api_path, json=req_payload, headers=headers)
-                else:
-                    res = await client.post(api_path, json=req_payload, headers=headers)
+                res = await (client.put(url, json=body, headers=headers) if method == "put"
+                             else client.post(url, json=body, headers=headers))
+
+                if res.status_code == 401:
+                    await send_log(" Zendesk token expired mid-migration. Silently refreshing...")
+                    token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
+                    headers["Authorization"] = f"Bearer {token}"
+                    continue
 
                 if res.status_code == 429:
-                    await send_log(" ⏳ Zendesk API Rate Limit reached. Pausing 30s...")
+                    await send_log(" Zendesk API Rate Limit reached. Pausing 30s...")
                     await asyncio.sleep(30)
                     continue
                 break
 
-            if res.status_code in [200, 201, 202]:
-                data = res.json()
-                
-                # ASYNC JOB POLLING: Bulk API endpoints return a Job Status ID
-                if "job_status" in data:
-                    job_id = data["job_status"]["id"]
-                    await send_log(f" 🔄 Batch accepted. Waiting for Zendesk Background Job: {job_id}...")
-                    
-                    while True:
-                        job_res = await client.get(f"https://{domain}.zendesk.com/api/v2/job_statuses/{job_id}.json", headers=headers)
-                        if job_res.status_code == 429:
-                            await asyncio.sleep(30)
-                            continue
-                            
-                        job_data = job_res.json().get("job_status", {})
-                        if job_data.get("status") in ["completed", "failed", "killed"]:
-                            return {"chunk": chunk, "status": "completed", "results": job_data.get("results", [])}
-                        
-                        await asyncio.sleep(3) # Poll every 3 seconds
-                else:
-                    # Synchronous response (fallback)
-                    return {"chunk": chunk, "status": "completed", "results": data.get(target_object, [])}
+            if res.status_code not in [200, 201, 202]:
+                raise RuntimeError(res.text)
+
+            data = res.json()
+
+            # ASYNC JOB POLLING: Bulk API endpoints return a Job Status ID
+            if "job_status" in data:
+                job_id = data["job_status"]["id"]
+                await send_log(f" Batch accepted. Waiting for Zendesk Background Job: {job_id}...")
+
+                while True:
+                    job_res = await client.get(f"https://{domain}.zendesk.com/api/v2/job_statuses/{job_id}.json", headers=headers)
+                    if job_res.status_code == 429:
+                        await asyncio.sleep(30)
+                        continue
+
+                    job_data = job_res.json().get("job_status", {})
+                    if job_data.get("status") in ["completed", "failed", "killed"]:
+                        return job_data.get("results", [])
+
+                    await asyncio.sleep(3)  # Poll every 3 seconds
             else:
-                return {"chunk": chunk, "status": "error", "message": res.text}
+                return data.get(target_object, []) if is_standard_object else data.get("results", [])
+
+        async def process_manual_upsert_chunk(chunk):
+            nonlocal token
+
+            ext_ids = list(dict.fromkeys(
+                c["targetRecord"].get("external_id") for c in chunk
+                if c["targetRecord"].get("external_id") not in (None, "")
+            ))
+
+            obj_type_singular = zendesk_object_key[:-1] if zendesk_object_key.endswith("s") else zendesk_object_key
+            existing_id_by_ext_id = {}
+            for id_batch in chunk_dataset(ext_ids, 20):
+                or_clause = " OR ".join(f'external_id:"{str(e)}"' for e in id_batch)
+                search_query = f"type:{obj_type_singular} ({or_clause})"
+                search_url = f"https://{domain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(search_query)}"
+                while True:
+                    lres = await client.get(search_url, headers=headers)
+                    if lres.status_code == 401:
+                        token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
+                        headers["Authorization"] = f"Bearer {token}"
+                        continue
+                    if lres.status_code == 429:
+                        await asyncio.sleep(30)
+                        continue
+                    break
+                if lres.status_code == 200:
+                    for rec in lres.json().get("results", []):
+                        if rec.get("external_id") not in (None, ""):
+                            existing_id_by_ext_id[str(rec["external_id"])] = rec["id"]
+                else:
+                    await send_log(
+                        f"[{target_object}] {pass_name}: external_id lookup failed for a batch "
+                        f"({lres.status_code}) -- those records will be treated as new: {lres.text}"
+                    )
+
+            update_positions, update_records = [], []
+            create_positions, create_records = [], []
+            for pos, item in enumerate(chunk):
+                rec = dict(item["targetRecord"])
+                ext_id = rec.get("external_id")
+                matched_id = existing_id_by_ext_id.get(str(ext_id)) if ext_id not in (None, "") else None
+                if matched_id:
+                    rec["id"] = matched_id
+                    update_positions.append(pos)
+                    update_records.append(rec)
+                else:
+                    create_positions.append(pos)
+                    create_records.append(rec)
+
+            results = [None] * len(chunk)
+            try:
+                if update_records:
+                    update_results = await submit_bulk(
+                        "put", f"https://{domain}.zendesk.com/api/v2/{zendesk_object_key}/update_many.json",
+                        {zendesk_object_key: update_records}
+                    )
+                    for pos, r in zip(update_positions, update_results):
+                        results[pos] = r
+                if create_records:
+                    create_results = await submit_bulk(
+                        "post", f"https://{domain}.zendesk.com/api/v2/{zendesk_object_key}/create_many.json",
+                        {zendesk_object_key: create_records}
+                    )
+                    for pos, r in zip(create_positions, create_results):
+                        results[pos] = r
+            except RuntimeError as e:
+                return {"chunk": chunk, "status": "error", "message": str(e)}
+
+            return {"chunk": chunk, "status": "completed", "results": results}
+
+        async def process_chunk(chunk):
+            if needs_manual_upsert_split:
+                return await process_manual_upsert_chunk(chunk)
+
+            if is_standard_object:
+                # DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
+                zendesk_data_rows = [c["targetRecord"] for c in chunk]
+                req_payload = {target_object: zendesk_data_rows}
+            else:
+                items = [c["targetRecord"] for c in chunk]
+                req_payload = {"job": {"action": job_action, "items": items}}
+
+            try:
+                results = await submit_bulk("post", api_path, req_payload)
+            except RuntimeError as e:
+                return {"chunk": chunk, "status": "error", "message": str(e)}
+
+            return {"chunk": chunk, "status": "completed", "results": results}
 
         # Fire off batches concurrently (5 chunks at a time to respect limits)
         batch_results = []
@@ -207,7 +353,6 @@ class ZendeskMigrator:
             results = await asyncio.gather(*[process_chunk(chunk) for chunk in concurrent_batch])
             batch_results.extend(results)
 
-        # Map Results back to original UI rows
         for batch_res in batch_results:
             chunk = batch_res["chunk"]
             
@@ -220,9 +365,24 @@ class ZendeskMigrator:
             else:
                 for item, z_res in zip(chunk, batch_res.get("results", [])):
                     orig_record = source_records[item["originalIndex"]]
-                    
-                    if z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]:
-                        # --- FIX: Strict String Cast ---
+
+                    is_success = z_res.get("success") == True or z_res.get("status") in ["Created", "Updated"]
+
+   
+                    if is_success and is_update_only and z_res.get("action") == "create":
+                        orig_record["Target_SkipReason"] = (
+                            f"No matching record found in Zendesk. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        raw_id = z_res.get("id")
+                        if raw_id:
+                            ids_to_revert.append(str(raw_id))
+                        continue
+
+                    if is_success:
+                        # --- Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         
@@ -233,11 +393,33 @@ class ZendeskMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
                     else: 
-                        # --- FIX: Strict String Cast ---
+                        # ---  Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         
                         all_success_data.append(orig_record)
                         total_success += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Zendesk auto-created for them..."
+            )
+            await self._delete_records(client, domain, headers, target_object, ids_to_revert, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, domain, headers, target_object, record_ids, send_log):
+        """Bulk-deletes records Zendesk auto-created that 'update' mode should
+        never have created in the first place (destroy_many accepts <=100
+        ids per call)."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                ids_param = ",".join(chunk)
+                url = f"https://{domain}.zendesk.com/api/v2/{target_object}/destroy_many.json?ids={ids_param}"
+                res = await client.delete(url, headers=headers)
+
+                if res.status_code not in [200, 202, 204]:
+                    await send_log(f"[{target_object}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{target_object}] Revert Failed: {str(e)}")
