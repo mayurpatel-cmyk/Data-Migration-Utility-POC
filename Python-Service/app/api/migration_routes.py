@@ -6,6 +6,7 @@ from app.api.dependencies.auth import get_current_user
 from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
 from app.services.crm_service import CrmService
+from app.services.crm_query_service import CrmQueryService
 import math
 import csv
 from fpdf import FPDF
@@ -597,3 +598,32 @@ async def download_validation_audit(session_id: str, type: str = 'valid', curren
         'Content-Disposition': f'attachment; filename="Validation_Audit_{type.capitalize()}_{session_id}.csv"'
     }
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+# =========================================================
+# FETCH OBJECT RECORD COUNT (With Silent Token Refresh)
+# =========================================================
+@router.get("/api/metadata/{crm_id}/count/{object_name}")
+async def get_crm_object_count(
+    crm_id: str,
+    object_name: str,
+    role: str = "source",
+    query: str = "",
+    current_user = Depends(get_current_user)
+):
+    crm_lower = crm_id.lower()
+    creds = CrmService.get_active_crm_credentials(current_user.id, crm_lower, role)
+
+    async def _fetch(token):
+        creds["access_token"] = token
+        return await CrmQueryService.get_object_count(creds, object_name, crm_lower, query)
+
+    try:
+        count = await _fetch(creds["access_token"])
+        return {"count": count}
+    except HTTPException as e:
+        if e.status_code == 401:
+            new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
+            count = await _fetch(new_token)
+            return {"count": count}
+        raise e

@@ -121,6 +121,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   mappedCount = 0;
   isStrictMapping = false;
   hideMappedFields = false;
+  selectedSourceObjectCount: number | null = null;
+  isSourceCountLoading = false;
+  restrictMappingToQueryFields = true;
 
   currentUser: any = null;
 isProfileDropdownOpen = false;
@@ -129,6 +132,7 @@ isProfileDropdownOpen = false;
   jobStatus = 'Idle';
   logMessages: string[] = [];
   customQuery: string = '';
+  isDefaultQuery: boolean = true; // true until the user hand-edits the query; controls when auto-rebuild is safe
   queryError: string | null = null;
   isPreviewLoading = false;
   sourceFields: FieldMeta[] = [];
@@ -277,8 +281,63 @@ isProfileDropdownOpen = false;
     }
   }
 
+  getQuerySelectedFields(): string[] | null {
+    const crm = (this.sourceCrmId || '').toLowerCase();
+    const query = (this.customQuery || '').trim();
+
+    if (!query) return null;
+    if (crm !== 'salesforce' && crm !== 'zoho') return null;
+
+    const queryLower = query.toLowerCase();
+    if (!queryLower.startsWith('select ')) return null;
+
+    const fromIdx = queryLower.indexOf(' from ');
+    if (fromIdx === -1) return null;
+
+    const selectClause = query.substring(7, fromIdx).trim(); // strip leading "SELECT "
+    if (selectClause === '*') return null; // wildcard -- no restriction
+
+    const fields = selectClause
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => f.length > 0)
+      // Strip relationship dot-notation to its root field, e.g. "Account.Name" -> "Account"
+      .map((f) => f.split('.')[0]);
+
+    return fields.length > 0 ? fields : null;
+  }
+
+  onQueryEdited() {
+    this.queryError = null;
+    this.isDefaultQuery = false;
+  }
+
+  private getQueryFieldFilterSet(): Set<string> | null {
+    if (!this.restrictMappingToQueryFields) return null;
+    const querySelectedFields = this.getQuerySelectedFields();
+    if (!querySelectedFields) return null;
+    return new Set(querySelectedFields.map((f) => f.toLowerCase()));
+  }
+
+  private restrictToQueryFields<T extends { sourceField: string }>(rows: T[]): T[] {
+    const fieldSet = this.getQueryFieldFilterSet();
+    if (!fieldSet) return rows;
+    return rows.filter((r) => fieldSet.has((r.sourceField || '').toLowerCase()));
+  }
+
   get visibleMappings() {
     let filtered = this.mappings;
+
+    // 0. Restrict to only the fields the query builder actually selects,
+    //    unless the user has opted to see the full object schema instead.
+    const queryFieldSet = this.getQueryFieldFilterSet();
+    if (queryFieldSet) {
+      filtered = filtered.filter(
+        (m) =>
+          queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
+          !!m.targetField // never hide a field the user already mapped, even if the query text changed since
+      );
+    }
 
     // 1. Filter out already mapped fields if toggled
     if (this.hideMappedFields) {
@@ -295,6 +354,52 @@ isProfileDropdownOpen = false;
     }
 
     return filtered;
+  }
+
+  /** True when the current query actually restricts which source fields are selected. */
+  get isQueryFieldFilterActive(): boolean {
+    return this.getQueryFieldFilterSet() !== null;
+  }
+
+  /** Count of fields the active query selects, for the UI badge. */
+  get queryFilteredFieldCount(): number {
+    return this.getQuerySelectedFields()?.length ?? 0;
+  }
+
+  /**
+   * Column headers that actually came back in the live preview/query
+   * results -- this is the ground truth of what your query selected,
+   * unlike the static object schema fetched once at load time. Falls
+   * back to the schema list only when there's no preview data yet.
+   */
+  private getLiveRecordHeaders(): string[] {
+    if (!this.previewRecords || this.previewRecords.length === 0) return [];
+    const headerSet = new Set<string>();
+    const sampleSize = Math.min(this.previewRecords.length, 25); // union across a few rows -- some CRMs omit null fields per-record
+    for (let i = 0; i < sampleSize; i++) {
+      Object.keys(this.previewRecords[i] || {}).forEach((k) => headerSet.add(k));
+    }
+    return Array.from(headerSet);
+  }
+
+  /**
+   * Data Preview table columns, narrowed to the fields the query builder
+   * actually SELECTs (same rule as visibleMappings). Sourced from the live
+   * query results whenever they're available, so a field you just added to
+   * your SELECT clause shows up immediately -- even if it wasn't part of
+   * the original object schema snapshot. Falls back to the schema list
+   * whenever there's no active field restriction, or when the live results
+   * and the SELECT list don't overlap at all.
+   */
+  get visiblePreviewHeaders(): string[] {
+    const liveHeaders = this.getLiveRecordHeaders();
+    const baseHeaders = liveHeaders.length > 0 ? liveHeaders : this.previewHeaders;
+
+    const fieldSet = this.getQueryFieldFilterSet();
+    if (!fieldSet) return baseHeaders;
+
+    const narrowed = baseHeaders.filter((h) => fieldSet.has(h.toLowerCase()));
+    return narrowed.length > 0 ? narrowed : baseHeaders;
   }
 
   getUserData(): void {
@@ -525,12 +630,17 @@ toggleProfileDropdown(event: Event): void {
           //  SALESFORCE & ZOHO (SQL) MODE
           // ------------------------------------
           else {
+            const snippetFields =
+              this.sourceFields && this.sourceFields.length > 0
+                ? this.sourceFields.slice(0, 15).map((f) => f.name).join(', ')
+                : 'Id';
+
             suggestions.push({
               label: 'SELECT (Basic)',
               kind: monaco.languages.CompletionItemKind.Snippet,
-              insertText: `SELECT * FROM ${this.selectedSourceObject || 'Object'} WHERE `,
+              insertText: `SELECT ${snippetFields} FROM ${this.selectedSourceObject || 'Object'} WHERE `,
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Auto-generates a basic SELECT query for the current object.',
+              documentation: 'Auto-generates a SELECT query using real field names for the current object.',
               range: range
             });
 
@@ -686,6 +796,7 @@ toggleProfileDropdown(event: Event): void {
 
   buildDefaultQuery(entityName: string) {
     const crm = this.sourceCrmId.toLowerCase();
+    this.isDefaultQuery = true;
 
     if (crm === 'zendesk') {
       if (this.isStandardZendeskObject(entityName)) {
@@ -701,11 +812,11 @@ toggleProfileDropdown(event: Event): void {
     } else if (crm === 'hubspot') {
       this.customQuery = this.HUBSPOT_SEARCH_TEMPLATE;
     } else if (crm === 'salesforce') {
-      this.customQuery = `SELECT * FROM ${entityName}`;
+      this.customQuery = `SELECT Id FROM ${entityName}`;
     } else if (crm === 'zoho') {
-      this.customQuery = `SELECT * FROM ${entityName}`;
+      this.customQuery = `SELECT id FROM ${entityName}`;
     } else {
-      this.customQuery = `SELECT * FROM ${entityName} WHERE `;
+      this.customQuery = `SELECT Id FROM ${entityName} WHERE `;
     }
   }
 
@@ -856,6 +967,7 @@ toggleProfileDropdown(event: Event): void {
     this.isSourceDropdownOpen = false;
 
     this.buildDefaultQuery(entityName);
+    this.loadSourceObjectCount(entityName);
 
     this.loadMetadata();
   }
@@ -945,10 +1057,10 @@ toggleProfileDropdown(event: Event): void {
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
-    } else if (crm === 'salesforce') {
+       } else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
-        placeholder: 'e.g., SELECT * FROM Account WHERE Amount > 5000 LIMIT 100',
+        placeholder: 'e.g., SELECT Id, Name FROM Account WHERE Amount > 5000 LIMIT 100',
         helpText: 'Write your full SOQL query to filter data, or append LIMIT to restrict the migration size.',
         icon: 'icon-database',
         buttonText: 'Run Query',
@@ -957,7 +1069,7 @@ toggleProfileDropdown(event: Event): void {
     } else if (crm === 'zoho') {
       return {
         title: 'Zoho COQL Editor',
-        placeholder: "e.g., SELECT * FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
+        placeholder: "e.g., SELECT id, Account_Name FROM Accounts WHERE Industry = 'Technology' LIMIT 200",
         helpText: "Write your full COQL query. The engine automatically handles Zoho's strict ID rules behind the scenes.",
         icon: 'icon-database',
         buttonText: 'Run Query',
@@ -1046,6 +1158,7 @@ toggleProfileDropdown(event: Event): void {
 
       const data = await response.json();
       this.previewRecords = data.records || [];
+       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery);
       this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
@@ -1060,6 +1173,37 @@ toggleProfileDropdown(event: Event): void {
       this.logMessages = [...this.logMessages, ` API Error: ${errorMessage}`];
     } finally {
       this.isPreviewLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+    async loadSourceObjectCount(objectName: string, query: string = '') {
+    if (!objectName || !this.sourceCrmId) {
+      this.selectedSourceObjectCount = null;
+      return;
+    }
+
+    this.isSourceCountLoading = true;
+    this.cdr.detectChanges();
+
+    try {
+      const params = new URLSearchParams({ role: 'source' });
+      if (query) params.set('query', query);
+
+      const response = await fetch(
+        `${environment.apiUrl}/api/metadata/${this.sourceCrmId}/count/${encodeURIComponent(objectName)}?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` } }
+      );
+
+      if (!response.ok) throw new Error('Failed to fetch object count.');
+
+      const data = await response.json();
+      this.selectedSourceObjectCount = typeof data.count === 'number' ? data.count : null;
+    } catch (error) {
+      console.error('Object Count Error:', error);
+      this.selectedSourceObjectCount = null;
+    } finally {
+      this.isSourceCountLoading = false;
       this.cdr.detectChanges();
     }
   }
@@ -1287,6 +1431,7 @@ toggleProfileDropdown(event: Event): void {
 
   loadHistoricalQuery(query: string) {
     this.customQuery = query;
+    this.isDefaultQuery = false;
     this.isHistoryDropdownOpen = false;
     this.validateQuery();
   }
@@ -1326,6 +1471,7 @@ toggleProfileDropdown(event: Event): void {
           this.selectedSourceObject = defaultSrc ? defaultSrc.name : this.sourceEntities[0].name;
 
           this.buildDefaultQuery(this.selectedSourceObject);
+          this.loadSourceObjectCount(this.selectedSourceObject);
         }
 
         if (this.targetEntities.length > 0) {
@@ -1387,6 +1533,12 @@ toggleProfileDropdown(event: Event): void {
 
         this.previewHeaders = sourceData.headers || [];
         this.previewRecords = sourceData.sampleRecords || [];
+
+        const crmLower = this.sourceCrmId.toLowerCase();
+        if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
+          const fieldList = this.previewHeaders.slice(0, 15).join(', ');
+          this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+        }
 
         this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
           sourceField: field.name,
@@ -1469,9 +1621,11 @@ toggleProfileDropdown(event: Event): void {
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
     const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
+    const queryFieldSet = this.getQueryFieldFilterSet(); // null = no restriction, otherwise Auto-Map must stay inside it
 
     this.mappings.forEach((m) => {
       if (m.targetField) return;
+      if (queryFieldSet && !queryFieldSet.has((m.sourceField || '').toLowerCase())) return; // outside the query's SELECT -- never auto-map it
 
       const sourceMeta = this.sourceFields.find((sf) => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -1549,6 +1703,7 @@ toggleProfileDropdown(event: Event): void {
     });
 
     const unmappedSourcePayload = this.sourceFields.filter((sf) => {
+      if (queryFieldSet && !queryFieldSet.has(sf.name.toLowerCase())) return false; // outside the query's SELECT -- never send to the AI mapper either
       const activeMap = this.mappings.find((m) => m.sourceField === sf.name);
       return activeMap && !activeMap.targetField;
     });
@@ -1727,13 +1882,14 @@ toggleProfileDropdown(event: Event): void {
     if (
       (this.operationMode === 'update' || this.operationMode === 'upsert') &&
       this.externalIdField &&
-      !this.mappings.some((m) => m.targetField === this.externalIdField)
+      !this.restrictToQueryFields(this.mappings).some((m) => m.targetField === this.externalIdField)
     ) {
       this.jobStatus = 'Validation Failed';
-      this.toastr.error(
-        `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`,
-        'External ID Not Mapped'
-      );
+      const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
+      const message = rawMapping && this.getQueryFieldFilterSet()
+        ? `Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`
+        : `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`;
+      this.toastr.error(message, 'External ID Not Mapped');
       return;
     }
 
@@ -1765,9 +1921,7 @@ toggleProfileDropdown(event: Event): void {
     this.errorCurrentPage = 1;
     this.cdr.detectChanges();
 
-    const activeMappings = this.mappings
-      .filter((m) => m.targetField)
-      .map((m) => {
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField)).map((m) => {
         const targetMeta = this.targetFields.find((t) => t.name === m.targetField);
         return {
           csvField: m.sourceField,
@@ -2070,7 +2224,7 @@ toggleProfileDropdown(event: Event): void {
       return;
     }
 
-    const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
 
     // 3. Decide whether to show a "Warning" Modal or a "Success Confirmation" Modal
     if (warnings.missingFields.length > 0 || warnings.incompleteRefs.length > 0) {
@@ -2093,7 +2247,7 @@ toggleProfileDropdown(event: Event): void {
     }
 
     // Mapping Count Check
-    const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+    const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
     if (activeMappings.length === 0) {
       errors.push('Please map at least one field before running the migration.');
     }
@@ -2110,7 +2264,12 @@ toggleProfileDropdown(event: Event): void {
         if (!isEligible) {
           errors.push(`"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID in ${this.targetSystem}. Mark it in Setup or choose another field.`);
         } else if (!activeMappings.some((m) => m.targetField === this.externalIdField)) {
-          errors.push(`The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column.`);
+          const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
+          if (rawMapping && this.getQueryFieldFilterSet()) {
+            errors.push(`Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`);
+          } else {
+            errors.push(`The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column.`);
+          }
         }
       }
     }
@@ -2149,7 +2308,7 @@ toggleProfileDropdown(event: Event): void {
       customClass: { popup: 'rounded-4 shadow-lg border-0' }
     }).then((result) => {
       if (result.isConfirmed) {
-        const activeMappings = this.mappings.filter((m) => m.targetField !== '');
+        const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
         this.executeMigrationJob(activeMappings);
       } else {
         this.jobStatus = 'Idle';

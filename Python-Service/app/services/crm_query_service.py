@@ -194,3 +194,109 @@ class CrmQueryService:
                 flattened_records.append(flat_rec)
                 
             return {"records": flattened_records}
+
+    # =========================================================
+    # OBJECT RECORD COUNT (per-CRM totals for object selector / preview)
+    # =========================================================
+    @staticmethod
+    async def get_object_count(creds: dict, obj_name: str, crm_type: str, query: str = "") -> int:
+        crm = crm_type.lower()
+
+        if crm == "salesforce":
+            return await CrmQueryService._salesforce_count(creds, obj_name, query)
+        elif crm == "zoho":
+            return await CrmQueryService._zoho_count(creds, obj_name)
+        elif crm == "zendesk":
+            return await CrmQueryService._zendesk_count(creds, obj_name)
+        elif crm == "hubspot":
+            return await CrmQueryService._hubspot_count(creds, obj_name, query)
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported CRM Engine")
+
+    @staticmethod
+    async def _salesforce_count(creds: dict, obj_name: str, query: str) -> int:
+        sf_token = creds.get("access_token")
+        sf_instance = (creds.get("instance_url") or "").rstrip('/')
+
+        where_clause = ""
+        if query and query.strip():
+            stripped = query.strip()
+            if stripped.lower().startswith("select "):
+                # Reuse the WHERE clause from the user's SOQL, drop SELECT list / LIMIT
+                match = re.search(r'(?i)\bwhere\b(.*?)(\blimit\b.*)?$', stripped)
+                if match and match.group(1).strip():
+                    where_clause = f" WHERE {match.group(1).strip()}"
+            else:
+                where_clause = f" WHERE {stripped}"
+
+        soql = f"SELECT COUNT() FROM {obj_name}{where_clause}"
+        url = f"{sf_instance}/services/data/v60.0/query?q={urllib.parse.quote(soql)}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.get(url, headers={"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"})
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Salesforce rejected count query: {res.text}")
+            return res.json().get("totalSize", 0)
+
+    @staticmethod
+    async def _zoho_count(creds: dict, obj_name: str) -> int:
+        zoho_token = creds.get("access_token")
+        domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
+        if not domain.startswith("http"):
+            domain = f"https://{domain}"
+
+        headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+        url = f"{domain}/crm/v6/{obj_name}/actions/count"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.get(url, headers=headers)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Zoho rejected count request: {res.text}")
+            return res.json().get("count", 0)
+
+    @staticmethod
+    async def _zendesk_count(creds: dict, obj_name: str) -> int:
+        zd_token = creds.get("access_token")
+        zd_subdomain = creds.get("subdomain")
+        safe_obj = obj_name.lower()
+        headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+
+        standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+        is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if is_standard:
+                if not safe_obj.endswith("s"):
+                    safe_obj = f"{safe_obj}s"
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/{safe_obj}/count.json"
+            else:
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/count"
+
+            res = await client.get(url, headers=headers)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Zendesk rejected count request: {res.text}")
+            return res.json().get("count", {}).get("value", 0)
+
+    @staticmethod
+    async def _hubspot_count(creds: dict, obj_name: str, query: str) -> int:
+        hs_token = creds.get("access_token")
+        domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
+
+        headers = {"Authorization": f"Bearer {hs_token}", "Content-Type": "application/json"}
+        url = f"{domain}/crm/v3/objects/{obj_name}/search"
+
+        payload: dict = {"limit": 1, "properties": []}
+        if query and query.strip():
+            try:
+                query_dict = json.loads(query)
+                if "filterGroups" in query_dict:
+                    payload["filterGroups"] = query_dict["filterGroups"]
+            except json.JSONDecodeError:
+                pass  # fall back to unfiltered total
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"HubSpot rejected count request: {res.text}")
+            # HubSpot search caps `total` at 10,000 due to API limits on deep pagination.
+            return res.json().get("total", 0)
