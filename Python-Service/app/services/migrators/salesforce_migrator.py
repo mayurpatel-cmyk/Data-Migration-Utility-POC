@@ -18,8 +18,6 @@ class SalesforceMigrator:
         
         headers_list = [m["sourceField"] if "sourceField" in m else m["csvField"] for m in mappings if m.get("sourceField") or m.get("csvField")]
         if "Id" not in headers_list:
-            # Always pull Id -- needed downstream to map old records to their
-            # newly-created target Ids (e.g. for the file/attachment migration pass)
             headers_list.append("Id")
         fields_str = ", ".join(headers_list) if headers_list else "Id"
         
@@ -28,11 +26,14 @@ class SalesforceMigrator:
         # --- NEW SMART QUERY BUILDER ---
         if clean_query.lower().startswith("select "):
             soql = clean_query
-            # Intelligently swap out the '*' for the actual mapped fields so the migration doesn't miss data
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
+            else:
+                # Ensure 'Id' is injected into the SELECT clause if explicitly missing
+                select_clause = re.split(r'(?i)\s+from\s+', soql)[0]
+                if not re.search(r'\bid\b', select_clause, re.IGNORECASE):
+                    soql = re.sub(r'(?i)^select\s+', 'SELECT Id, ', soql)
         else:
-            # Fallback for when the user only types a standard condition (e.g., "Industry = 'Tech'")
             where_clause = f" WHERE {clean_query}" if clean_query else ""
             soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
         # --------------------------------
@@ -45,7 +46,6 @@ class SalesforceMigrator:
         while url:
             res = await client.get(url, headers=headers)
             
-            # Catch 400 Bad Request errors gracefully and send them to the UI logs
             if res.status_code != 200:
                 await send_log(f"Salesforce Extraction Failed: {res.text}")
                 res.raise_for_status()
@@ -57,7 +57,6 @@ class SalesforceMigrator:
                 flat_rec = {}
                 for k, v in r.items():
                     if isinstance(v, dict):
-                        # Extract the most useful identifier from the relationship dictionary
                         flat_rec[k] = v.get("Name", v.get("Id", str(v)))
                     elif isinstance(v, list):
                         flat_rec[k] = str(v)

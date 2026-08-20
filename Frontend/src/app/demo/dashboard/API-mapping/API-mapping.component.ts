@@ -366,12 +366,7 @@ isProfileDropdownOpen = false;
     return this.getQuerySelectedFields()?.length ?? 0;
   }
 
-  /**
-   * Column headers that actually came back in the live preview/query
-   * results -- this is the ground truth of what your query selected,
-   * unlike the static object schema fetched once at load time. Falls
-   * back to the schema list only when there's no preview data yet.
-   */
+
   private getLiveRecordHeaders(): string[] {
     if (!this.previewRecords || this.previewRecords.length === 0) return [];
     const headerSet = new Set<string>();
@@ -382,15 +377,7 @@ isProfileDropdownOpen = false;
     return Array.from(headerSet);
   }
 
-  /**
-   * Data Preview table columns, narrowed to the fields the query builder
-   * actually SELECTs (same rule as visibleMappings). Sourced from the live
-   * query results whenever they're available, so a field you just added to
-   * your SELECT clause shows up immediately -- even if it wasn't part of
-   * the original object schema snapshot. Falls back to the schema list
-   * whenever there's no active field restriction, or when the live results
-   * and the SELECT list don't overlap at all.
-   */
+
   get visiblePreviewHeaders(): string[] {
     const liveHeaders = this.getLiveRecordHeaders();
     const baseHeaders = liveHeaders.length > 0 ? liveHeaders : this.previewHeaders;

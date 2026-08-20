@@ -243,8 +243,6 @@ async def websocket_migration(websocket: WebSocket):
 
                 # ==========================================
                 # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
-                # Runs once per job, right after that job's own records have
-                # synced, using only the old_id -> new_id pairs THIS job produced.
                 # ==========================================
                 if migrate_attachments or migrate_files:
                     if job.get("isPass3Patch", False):
@@ -254,13 +252,13 @@ async def websocket_migration(websocket: WebSocket):
                     else:
                         job_success_records = all_success_data[job_success_start_idx:]
                         await send_log(f"[{target_object}] {len(job_success_records)} record(s) synced this pass, checking for Id/Target_Id to build the file map...")
-
+                        
                         id_map = {
-                            rec["Id"]: rec["Target_Id"]
+                            (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
                             for rec in job_success_records
-                            if rec.get("Id") and rec.get("Target_Id")
+                            if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
                         }
-
+                        
                         if not id_map:
                             await send_log(
                                 f"[{target_object}] File migration skipped: no source Id was found on synced records. "
@@ -277,7 +275,6 @@ async def websocket_migration(websocket: WebSocket):
                                 f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
                                 f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
                             )
-
             await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
             
             safe_success_data = []
