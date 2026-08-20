@@ -19,10 +19,11 @@ export class LoginComponent {
 
   loading = signal(false);
   error = signal('');
-  isSignUpMode = signal(false); 
+  isSignUpMode = signal(false);
   isForgotPasswordMode = signal(false);
+  showPassword = signal(false);
 
-  fullName = signal(''); // NEW: Full Name state
+  fullName = signal('');
   email = signal('');
   password = signal('');
 
@@ -30,80 +31,77 @@ export class LoginComponent {
     this.isSignUpMode.set(!this.isSignUpMode());
     this.isForgotPasswordMode.set(false);
     this.error.set('');
-    this.fullName.set(''); 
+    this.fullName.set('');
+    this.showPassword.set(false);
   }
 
-  // Add a method to toggle the forgot password view specifically
   toggleForgotPassword() {
     this.isForgotPasswordMode.set(!this.isForgotPasswordMode());
     this.isSignUpMode.set(false);
     this.error.set('');
+    this.showPassword.set(false);
   }
 
-  // Update onSubmit to handle the Forgot Password flow
+  togglePasswordVisibility() {
+    this.showPassword.set(!this.showPassword());
+  }
+
   onSubmit(event: Event) {
     event.preventDefault();
     this.error.set('');
 
-    // 1. Handle Forgot Password Flow
     if (this.isForgotPasswordMode()) {
       if (!this.email()) {
         this.error.set('Please enter your email address.');
         return;
       }
-      
+
       this.loading.set(true);
       this.authService.forgotPassword(this.email()).subscribe({
         next: (res) => {
           this.toastr.success(res.message, 'Email Sent');
-          this.toggleForgotPassword(); // Go back to login
+          this.toggleForgotPassword();
           this.loading.set(false);
         },
         error: () => {
-          // Security best practice: don't reveal if the email actually exists
           this.toastr.success('If that email exists, a reset link has been sent.', 'Email Sent');
           this.toggleForgotPassword();
           this.loading.set(false);
         }
       });
-      return; // Stop execution here
-    } 
-    
-    // 2. Handle Sign-Up Flow
+      return;
+    }
+
     if (this.isSignUpMode()) {
-      // Note the keys here should match what your FastAPI backend expects (full_name)
-      const signUpData = { 
-        email: this.email(), 
+      const signUpData = {
+        email: this.email(),
         password: this.password(),
-        full_name: this.fullName() 
+        full_name: this.fullName()
       };
 
       this.loading.set(true);
-      // Assuming your Angular authService has a 'signup' method
       this.authService.signup(signUpData).subscribe({
         next: () => {
           this.toastr.success('Account created successfully! Please log in.', 'Success');
           this.loading.set(false);
-          this.toggleMode(); // Switch them back to the login view
+          this.toggleMode();
         },
         error: (err) => {
-          // Handle backend FastAPI error format
           this.error.set(err.error?.detail || 'Sign up failed. Please try again.');
           this.loading.set(false);
         }
       });
-      return; // Stop execution here
+      return;
     }
 
-    // 3. Handle Login Flow (Default)
     const loginCredentials = { email: this.email(), password: this.password() };
     this.loading.set(true);
-    
+
     this.authService.login(loginCredentials).subscribe({
       next: () => {
         this.toastr.success('Welcome back!', 'Success');
         this.loading.set(false);
-        this.router.navigate(['/connection']); 
+        this.router.navigate(['/connection']);
       },
       error: (err) => {
         this.error.set(err.error?.detail || 'Invalid credentials.');

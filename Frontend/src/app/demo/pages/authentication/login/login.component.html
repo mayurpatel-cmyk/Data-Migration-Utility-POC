@@ -1,8 +1,80 @@
 <div class="auth-main d-flex align-items-center justify-content-center min-vh-100 position-relative overflow-hidden">
-  
-  <div class="bg-shape bg-primary blob-1"></div>
-  <div class="bg-shape bg-info blob-2"></div>
-  <div class="bg-shape bg-purple blob-3"></div>
+
+  <div class="auth-bg">
+    <div class="bg-gradient-mesh"></div>
+
+    <div class="bg-shape bg-primary blob-1"></div>
+    <div class="bg-shape bg-info blob-2"></div>
+    <div class="bg-shape bg-purple blob-3"></div>
+
+    <svg class="migration-flow" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+      <path id="path1" class="flow-path" d="M 80 160 Q 400 40 700 190 T 1140 150" />
+      <path id="path2" class="flow-path" d="M 70 520 Q 360 660 660 560 T 1130 610" />
+      <path id="path3" class="flow-path" d="M 140 360 Q 520 240 860 400 T 1170 380" />
+
+      <circle class="flow-dot dot-a" r="4">
+        <animateMotion dur="6s" repeatCount="indefinite">
+          <mpath href="#path1"></mpath>
+        </animateMotion>
+      </circle>
+      <circle class="flow-dot dot-b" r="3">
+        <animateMotion dur="7.5s" repeatCount="indefinite" begin="1.2s">
+          <mpath href="#path1"></mpath>
+        </animateMotion>
+      </circle>
+
+      <circle class="flow-dot dot-a" r="4">
+        <animateMotion dur="6.8s" repeatCount="indefinite" begin="0.4s">
+          <mpath href="#path2"></mpath>
+        </animateMotion>
+      </circle>
+      <circle class="flow-dot dot-b" r="3">
+        <animateMotion dur="8.4s" repeatCount="indefinite" begin="2s">
+          <mpath href="#path2"></mpath>
+        </animateMotion>
+      </circle>
+
+      <circle class="flow-dot dot-a" r="4">
+        <animateMotion dur="7.2s" repeatCount="indefinite" begin="0.8s">
+          <mpath href="#path3"></mpath>
+        </animateMotion>
+      </circle>
+      <circle class="flow-dot dot-b" r="3">
+        <animateMotion dur="9s" repeatCount="indefinite" begin="2.6s">
+          <mpath href="#path3"></mpath>
+        </animateMotion>
+      </circle>
+    </svg>
+
+    <!-- <div class="data-node node-left">
+      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+      </svg>
+    </div>
+    <div class="data-node node-right">
+      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="7" rx="1"></rect>
+        <rect x="2" y="14" width="20" height="7" rx="1"></rect>
+        <line x1="6" y1="6.5" x2="6.01" y2="6.5"></line>
+        <line x1="6" y1="17.5" x2="6.01" y2="17.5"></line>
+      </svg>
+    </div> -->
+
+    <div class="particles">
+      <span class="particle p1"></span>
+      <span class="particle p2"></span>
+      <span class="particle p3"></span>
+      <span class="particle p4"></span>
+      <span class="particle p5"></span>
+      <span class="particle p6"></span>
+      <span class="particle p7"></span>
+      <span class="particle p8"></span>
+      <span class="particle p9"></span>
+      <span class="particle p10"></span>
+    </div>
+  </div>
 
   <div class="card auth-card shadow-lg border-0 rounded-4 position-relative z-1 animate__animated animate__fadeInUp">
     <div class="card-body p-5">
@@ -54,17 +126,36 @@
           </div>
 
           @if (!isForgotPasswordMode()) {
-            <div class="form-floating mb-3 custom-floating">
+            <div class="form-floating mb-3 custom-floating position-relative password-field">
               <input 
-                type="password" 
-                class="form-control rounded-3" 
+                [type]="showPassword() ? 'text' : 'password'" 
+                class="form-control rounded-3 pe-5" 
                 id="password" 
                 placeholder="Password"
                 [ngModel]="password()" 
                 (ngModelChange)="password.set($event)" 
                 name="password" 
+                autocomplete="current-password"
                 required>
               <label for="password"><i class="feather icon-lock me-2 text-muted"></i>Password</label>
+              <button 
+                type="button" 
+                class="btn password-toggle-btn position-absolute top-50 end-0 translate-middle-y me-2 p-0 border-0 bg-transparent"
+                (click)="togglePasswordVisibility()"
+                [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'"
+                tabindex="-1">
+                @if (showPassword()) {
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                  </svg>
+                } @else {
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                }
+              </button>
             </div>
 
             @if (!isSignUpMode()) {
