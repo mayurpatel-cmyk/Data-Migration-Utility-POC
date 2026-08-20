@@ -214,13 +214,14 @@ class CrmMetadataService:
                             elif not isinstance(v, (dict, list)): 
                                 flat_rec[k] = v
                                 # Discover missing system fields dynamically
-                                if k not in schema_fields_map:
-                                    field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
-                                    schema_fields_map[k] = {
-                                        "name": k, "label": k.replace("_", " ").title(), "type": field_type,
-                                        "isRequired": k == "id", "custom": False, "referenceTo": None,
+                            if k not in schema_fields_map:
+                                field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
+                                schema_fields_map[k] = {
+                                       "name": k, "label": k.replace("_", " ").title(), "type": field_type,
+                                        "isRequired": False,
+                                       "custom": False, "referenceTo": None,
                                         "externalId": k in ("id", "external_id")
-                                    }
+                                 }
                         sample_records.append(flat_rec)
 
                 else:
