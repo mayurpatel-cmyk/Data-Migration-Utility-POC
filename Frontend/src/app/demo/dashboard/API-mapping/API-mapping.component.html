@@ -1581,7 +1581,7 @@
     <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2 transition-all"
       [class.btn-warning]="reviewFilter === 'unmapped'" [class.btn-outline-warning]="reviewFilter !== 'unmapped'"
       (click)="reviewFilter = 'unmapped'">
-      Unmapped <span class="badge" [class.bg-white]="reviewFilter === 'unmapped'"
+      Unmapped <span class="badge" [class.bg-yellow]="reviewFilter === 'unmapped'"
         [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{
         mappings.length - mappedCount }}</span>
     </button>
