@@ -1523,7 +1523,7 @@ toggleProfileDropdown(event: Event): void {
 
         const crmLower = this.sourceCrmId.toLowerCase();
         if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
-          const fieldList = this.previewHeaders.slice(0, 15).join(', ');
+          const fieldList = this.previewHeaders.slice(0, 2).join(', ');
           this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
         }
 
