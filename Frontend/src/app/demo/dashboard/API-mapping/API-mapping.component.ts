@@ -2,7 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { forkJoin } from 'rxjs';
+import { forkJoin, Subject } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
@@ -60,6 +61,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
   private http = inject(HttpClient);
+
+  // Emits whenever the source/target object pair changes (or the component is destroyed).
+  // Any in-flight metadata fetch or AI auto-map chunk request is tied to this via takeUntil,
+  // so switching the target object mid-request can no longer write stale results (wrong
+  // target schema, phantom mappedCount) into the freshly-rebuilt `mappings` array.
+  private mappingCancel$ = new Subject<void>();
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -217,6 +224,10 @@ isProfileDropdownOpen = false;
   }
 
   ngOnDestroy() {
+    // 0. Cancel any in-flight metadata/AI auto-map requests
+    this.mappingCancel$.next();
+    this.mappingCancel$.complete();
+
     // 1. Kill active websockets
     if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
       this.validationSocket.close();
@@ -284,10 +295,22 @@ isProfileDropdownOpen = false;
   getQuerySelectedFields(): string[] | null {
     const crm = (this.sourceCrmId || '').toLowerCase();
     const query = (this.customQuery || '').trim();
-
     if (!query) return null;
-    if (crm !== 'salesforce' && crm !== 'zoho') return null;
 
+    switch (crm) {
+      case 'salesforce':
+      case 'zoho':
+        return this.parseSqlStyleSelectedFields(query);
+      case 'hubspot':
+        return this.parseHubspotSelectedFields(query);
+      case 'zendesk':
+        return this.parseZendeskSelectedFields(query);
+      default:
+        return null;
+    }
+  }
+
+  private parseSqlStyleSelectedFields(query: string): string[] | null {
     const queryLower = query.toLowerCase();
     if (!queryLower.startsWith('select ')) return null;
 
@@ -305,6 +328,55 @@ isProfileDropdownOpen = false;
       .map((f) => f.split('.')[0]);
 
     return fields.length > 0 ? fields : null;
+  }
+
+  /**
+   * HubSpot's search API has a real field-projection mechanism: the `properties`
+   * array on the search body. When the user's JSON filter explicitly lists it,
+   * that plays the same role as a SOQL/COQL SELECT clause -- and it's honored
+   * server-side too (see execute_hubspot_query in crm_query_service.py), so it
+   * actually narrows what HubSpot returns, not just what the mapping UI shows.
+   */
+  private parseHubspotSelectedFields(query: string): string[] | null {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(query.replace(/\/\*[\s\S]*?\*\//g, '').trim());
+    } catch {
+      return null; // invalid/partial JSON mid-edit -- no restriction yet
+    }
+
+    const properties = parsed?.properties;
+    if (!Array.isArray(properties) || properties.length === 0) return null;
+
+    const fields = properties.map((p: any) => String(p).trim()).filter((p: string) => p.length > 0);
+    return fields.length > 0 ? fields : null;
+  }
+
+  /**
+   * Zendesk custom objects can carry an optional `fields` array in the JSON filter
+   * body. Zendesk's search API has no server-side field projection, so this only
+   * narrows the mapping table/migration scope -- enforced by trimming the
+   * flattened record down to that field set server-side too (see
+   * execute_zendesk_query). Standard Zendesk objects (tickets/users/...) use
+   * plain search-string syntax with no field-list concept at all, so there's
+   * nothing to parse there -- Auto-Map and the mapping table intentionally keep
+   * showing the full object schema for those.
+   */
+  private parseZendeskSelectedFields(query: string): string[] | null {
+    if (!this.selectedSourceObject || this.isStandardZendeskObject(this.selectedSourceObject)) return null;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(query.replace(/\/\*[\s\S]*?\*\//g, '').trim());
+    } catch {
+      return null;
+    }
+
+    const fields = parsed?.fields;
+    if (!Array.isArray(fields) || fields.length === 0) return null;
+
+    const cleaned = fields.map((f: any) => String(f).trim()).filter((f: string) => f.length > 0);
+    return cleaned.length > 0 ? cleaned : null;
   }
 
   onQueryEdited() {
@@ -767,6 +839,9 @@ toggleProfileDropdown(event: Event): void {
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
  - Leave blank to fetch all records.
  - Prefix custom fields with 'custom_object_fields.' 
+ - Optional: add a top-level "fields": ["field_a", "field_b"] array to restrict
+   which fields appear in the mapping table and get migrated (same role as a
+   SOQL/COQL SELECT list). Omit it to keep the full object schema mappable.
 */
 {
   "filter": {
@@ -779,6 +854,9 @@ toggleProfileDropdown(event: Event): void {
   readonly HUBSPOT_SEARCH_TEMPLATE = `/* HubSpot Search Filter 
  - Leave blank to fetch all records.
  - Uses HubSpot's JSON Search syntax.
+ - Optional: add a top-level "properties": ["field_a", "field_b"] array to
+   restrict which fields HubSpot returns and which appear in the mapping table
+   (same role as a SOQL/COQL SELECT list). Omit it to keep the full schema.
 */
 {
   "filterGroups": [
@@ -1041,7 +1119,7 @@ toggleProfileDropdown(event: Event): void {
           ? '{\n  "filter": {\n    "$and": [\n      { "custom_object_fields.your_field": { "$eq": "value" } }\n    ]\n  }\n}'
           : 'e.g., type:ticket status<solved created>2023-01-01',
         helpText: isCustom
-          ? "Use JSON. Prefix custom fields with 'custom_object_fields.'. Leave blank for all records."
+          ? "Use JSON. Prefix custom fields with 'custom_object_fields.'. Leave blank for all records. Add a top-level \"fields\": [...] array to restrict which fields are mappable."
           : 'Use Zendesk native search syntax to filter by tags, status, or dates.',
         icon: 'icon-search',
         buttonText: 'Apply Filter',
@@ -1052,7 +1130,7 @@ toggleProfileDropdown(event: Event): void {
         title: 'HubSpot Search Filter',
         placeholder:
           '{\n  "filterGroups": [\n    {\n      "filters": [\n        { "propertyName": "hs_object_id", "operator": "GT", "value": "0" }\n      ]\n    }\n  ]\n}',
-        helpText: 'Use HubSpot JSON search syntax to filter records. Leave blank to fetch all.',
+        helpText: 'Use HubSpot JSON search syntax to filter records. Leave blank to fetch all. Add a top-level "properties": [...] array to restrict which fields are returned and mappable.',
         icon: 'icon-filter',
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
@@ -1519,6 +1597,13 @@ toggleProfileDropdown(event: Event): void {
       return;
     }
 
+    // Cancel any AI auto-map chunks or metadata fetch still in flight for the PREVIOUS
+    // source/target pair, and drop any mapping session state that belongs to it. Without
+    // this, a late-arriving AI response from before the target was switched would still
+    // match rows by sourceField name and write a targetField that doesn't exist on the
+    // newly selected target object -- corrupting both the mapping and mappedCount.
+    this.cancelPendingMappingWork();
+
     this.isLoading = true;
     this.cdr.detectChanges();
 
@@ -1526,41 +1611,60 @@ toggleProfileDropdown(event: Event): void {
       // Tell the backend EXACTLY which DB slot to look up
       sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject, 'source'),
       targetData: this.mappingApi.getFields(this.targetCrmId, this.selectedTargetObject, 'target')
-    }).subscribe({
-      next: ({ sourceData, targetData }) => {
-        this.targetFields = targetData.fields || [];
-        this.sourceFields = sourceData.fields || [];
+    })
+      .pipe(takeUntil(this.mappingCancel$))
+      .subscribe({
+        next: ({ sourceData, targetData }) => {
+          this.targetFields = targetData.fields || [];
+          this.sourceFields = sourceData.fields || [];
 
-        this.previewHeaders = sourceData.headers || [];
-        this.previewRecords = sourceData.sampleRecords || [];
+          this.previewHeaders = sourceData.headers || [];
+          this.previewRecords = sourceData.sampleRecords || [];
 
-        const crmLower = this.sourceCrmId.toLowerCase();
-        if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
-          const fieldList = this.previewHeaders.slice(0, 2).join(', ');
-          this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+          const crmLower = this.sourceCrmId.toLowerCase();
+          if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
+            const fieldList = this.previewHeaders.slice(0, 2).join(', ');
+            this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+          }
+
+          this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
+            sourceField: field.name,
+            sourceLabel: `${field.label} (${field.name})`,
+            targetField: ''
+          }));
+
+          // Target-scoped session state from the previous mapping run is no longer valid
+          // against the new target schema -- clear it out alongside the mapping rows.
+          this.externalIdField = '';
+          this.validationResults = null;
+          this.showReviewPanel = false;
+          this.reviewPanelMinimized = false;
+          this.reviewFilter = 'mapped';
+          this.mappingSearchQuery = '';
+
+          this.updateMappedCount();
+          this.isLoading = false;
+          this.cdr.detectChanges();
+
+          if (this.customQuery && this.previewHeaders.length > 0) {
+            this.applyFilter();
+          }
+        },
+        error: (err) => {
+          console.error('Metadata payload extraction failed:', err);
+          this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics from ${this.sourceSystem}.`);
+          this.isLoading = false;
+          this.cdr.detectChanges();
         }
+      });
+  }
 
-        this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
-          sourceField: field.name,
-          sourceLabel: `${field.label} (${field.name})`,
-          targetField: ''
-        }));
+  private cancelPendingMappingWork(): void {
+    this.mappingCancel$.next();
 
-        this.updateMappedCount();
-        this.isLoading = false;
-        this.cdr.detectChanges();
-
-        if (this.customQuery && this.previewHeaders.length > 0) {
-          this.applyFilter();
-        }
-      },
-      error: (err) => {
-        console.error('Metadata payload extraction failed:', err);
-        this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics from ${this.sourceSystem}.`);
-        this.isLoading = false;
-        this.cdr.detectChanges();
-      }
-    });
+    this.isAutoMapping = false;
+    this.autoMapProgress = { current: 0, total: 0 };
+    this.mappings.forEach((m) => (m._isAiProcessing = false));
   }
 
   clearMapping(mapping: any) {
@@ -1777,8 +1881,12 @@ toggleProfileDropdown(event: Event): void {
         }
 
         const currentChunk = unmappedSourcePayload.slice(currentIndex, currentIndex + CHUNK_SIZE);
+        const targetFieldsAtRequestTime = new Set(this.targetFields.map((t) => t.name));
 
-        this.mappingApi.getAiAutoMapping(currentChunk, this.targetFields).subscribe({
+        this.mappingApi
+          .getAiAutoMapping(currentChunk, this.targetFields)
+          .pipe(takeUntil(this.mappingCancel$))
+          .subscribe({
           next: (response: any) => {
             if (response && Array.isArray(response.mappings)) {
               response.mappings.forEach((backendMap: any) => {
@@ -1786,8 +1894,12 @@ toggleProfileDropdown(event: Event): void {
                 const targetAlreadyClaimed = this.mappings.some(
                   (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
                 );
+                // Defensive re-check: even with takeUntil, only accept a suggestion whose
+                // targetField still belongs to the target object that was active when this
+                // chunk was requested -- protects against any other stale-write path.
+                const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
 
-                if (localRow && !localRow.targetField && backendMap.targetField && !targetAlreadyClaimed) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -1838,6 +1950,15 @@ toggleProfileDropdown(event: Event): void {
   }
 
   updateMappedCount() {
+    const validTargetFieldNames = new Set(this.targetFields.map((f) => f.name));
+    this.mappings.forEach((m) => {
+      if (m.targetField && !validTargetFieldNames.has(m.targetField)) {
+        m.targetField = '';
+        m.relationalExtIdField = '';
+        delete m._mappedBy;
+      }
+    });
+
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
     this.cdr.detectChanges();
   }

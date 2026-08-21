@@ -63,12 +63,19 @@ class CrmQueryService:
                 return {"records": res.json().get("results", [])}
                 
             else:
+                explicit_fields = None
                 if query.strip():
                     try:
                         json_payload = json.loads(query)
                     except json.JSONDecodeError:
                         raise HTTPException(status_code=400, detail="Invalid JSON payload in Zendesk query.")
-                    
+
+                    raw_fields = json_payload.pop("fields", None)
+                    if isinstance(raw_fields, list) and raw_fields:
+                        cleaned = {str(f).strip() for f in raw_fields if str(f).strip()}
+                        if cleaned:
+                            explicit_fields = cleaned
+
                     url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
                     res = await client.post(url, headers=headers, json=json_payload)
                 else:
@@ -88,6 +95,9 @@ class CrmQueryService:
                             for cf_key, cf_val in v.items(): flat_rec[cf_key] = cf_val
                         elif not isinstance(v, (dict, list)): 
                             flat_rec[k] = v
+                    if explicit_fields is not None:
+                        always_keep = {"id", "name", "external_id"}
+                        flat_rec = {k: v for k, v in flat_rec.items() if k in explicit_fields or k in always_keep}
                     flattened_records.append(flat_rec)
                 return {"records": flattened_records}
 
@@ -174,6 +184,12 @@ class CrmQueryService:
                         payload["filterGroups"] = query_dict["filterGroups"]
                     if "sorts" in query_dict:
                         payload["sorts"] = query_dict["sorts"]
+
+                    explicit_properties = query_dict.get("properties")
+                    if isinstance(explicit_properties, list) and explicit_properties:
+                        cleaned = [str(p).strip() for p in explicit_properties if str(p).strip()]
+                        if cleaned:
+                            payload["properties"] = cleaned[:50]
                 except json.JSONDecodeError:
                     raise HTTPException(status_code=400, detail="Invalid JSON payload provided for HubSpot Search filter.")
             
