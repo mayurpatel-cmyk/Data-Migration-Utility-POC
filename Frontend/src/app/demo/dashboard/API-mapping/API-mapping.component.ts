@@ -330,13 +330,6 @@ isProfileDropdownOpen = false;
     return fields.length > 0 ? fields : null;
   }
 
-  /**
-   * HubSpot's search API has a real field-projection mechanism: the `properties`
-   * array on the search body. When the user's JSON filter explicitly lists it,
-   * that plays the same role as a SOQL/COQL SELECT clause -- and it's honored
-   * server-side too (see execute_hubspot_query in crm_query_service.py), so it
-   * actually narrows what HubSpot returns, not just what the mapping UI shows.
-   */
   private parseHubspotSelectedFields(query: string): string[] | null {
     let parsed: any;
     try {
@@ -352,16 +345,6 @@ isProfileDropdownOpen = false;
     return fields.length > 0 ? fields : null;
   }
 
-  /**
-   * Zendesk custom objects can carry an optional `fields` array in the JSON filter
-   * body. Zendesk's search API has no server-side field projection, so this only
-   * narrows the mapping table/migration scope -- enforced by trimming the
-   * flattened record down to that field set server-side too (see
-   * execute_zendesk_query). Standard Zendesk objects (tickets/users/...) use
-   * plain search-string syntax with no field-list concept at all, so there's
-   * nothing to parse there -- Auto-Map and the mapping table intentionally keep
-   * showing the full object schema for those.
-   */
   private parseZendeskSelectedFields(query: string): string[] | null {
     if (!this.selectedSourceObject || this.isStandardZendeskObject(this.selectedSourceObject)) return null;
 
@@ -399,9 +382,6 @@ isProfileDropdownOpen = false;
 
   get visibleMappings() {
     let filtered = this.mappings;
-
-    // 0. Restrict to only the fields the query builder actually selects,
-    //    unless the user has opted to see the full object schema instead.
     const queryFieldSet = this.getQueryFieldFilterSet();
     if (queryFieldSet) {
       filtered = filtered.filter(
@@ -438,12 +418,6 @@ isProfileDropdownOpen = false;
     return this.getQuerySelectedFields()?.length ?? 0;
   }
 
-  /**
-   * Column headers that actually came back in the live preview/query
-   * results -- this is the ground truth of what your query selected,
-   * unlike the static object schema fetched once at load time. Falls
-   * back to the schema list only when there's no preview data yet.
-   */
   private getLiveRecordHeaders(): string[] {
     if (!this.previewRecords || this.previewRecords.length === 0) return [];
     const headerSet = new Set<string>();
@@ -454,15 +428,6 @@ isProfileDropdownOpen = false;
     return Array.from(headerSet);
   }
 
-  /**
-   * Data Preview table columns, narrowed to the fields the query builder
-   * actually SELECTs (same rule as visibleMappings). Sourced from the live
-   * query results whenever they're available, so a field you just added to
-   * your SELECT clause shows up immediately -- even if it wasn't part of
-   * the original object schema snapshot. Falls back to the schema list
-   * whenever there's no active field restriction, or when the live results
-   * and the SELECT list don't overlap at all.
-   */
   get visiblePreviewHeaders(): string[] {
     const liveHeaders = this.getLiveRecordHeaders();
     const baseHeaders = liveHeaders.length > 0 ? liveHeaders : this.previewHeaders;
@@ -1597,11 +1562,6 @@ toggleProfileDropdown(event: Event): void {
       return;
     }
 
-    // Cancel any AI auto-map chunks or metadata fetch still in flight for the PREVIOUS
-    // source/target pair, and drop any mapping session state that belongs to it. Without
-    // this, a late-arriving AI response from before the target was switched would still
-    // match rows by sourceField name and write a targetField that doesn't exist on the
-    // newly selected target object -- corrupting both the mapping and mappedCount.
     this.cancelPendingMappingWork();
 
     this.isLoading = true;
@@ -1633,8 +1593,7 @@ toggleProfileDropdown(event: Event): void {
             targetField: ''
           }));
 
-          // Target-scoped session state from the previous mapping run is no longer valid
-          // against the new target schema -- clear it out alongside the mapping rows.
+
           this.externalIdField = '';
           this.validationResults = null;
           this.showReviewPanel = false;
@@ -1894,9 +1853,7 @@ toggleProfileDropdown(event: Event): void {
                 const targetAlreadyClaimed = this.mappings.some(
                   (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
                 );
-                // Defensive re-check: even with takeUntil, only accept a suggestion whose
-                // targetField still belongs to the target object that was active when this
-                // chunk was requested -- protects against any other stale-write path.
+
                 const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
 
                 if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
@@ -2256,10 +2213,6 @@ toggleProfileDropdown(event: Event): void {
         localStorage.removeItem('source_crm_slot');
         localStorage.removeItem('target_crm_slot');
 
-        // 3. Delegate actual session teardown to AuthService: it clears
-        // supabase_token/refresh/user, resets the currentUser signal that
-        // the route guard reads, calls the backend to kill the session,
-        // and navigates to /login with replaceUrl so Back can't return here.
         this.toastr.success('You have been securely logged out.', 'Goodbye!');
         this.authService.logout();
       }
