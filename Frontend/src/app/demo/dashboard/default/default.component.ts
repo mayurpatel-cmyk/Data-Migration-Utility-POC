@@ -921,6 +921,7 @@ export class DefaultComponent implements OnInit {
     mapping.parentObjectName = undefined;
     mapping.relationalExtIdField = '';
     mapping.isDropdownOpen = false;
+    this.mappings = [...this.mappings];
     this.cdr.detectChanges();
   }
 

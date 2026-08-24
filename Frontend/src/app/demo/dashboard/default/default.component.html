@@ -49,6 +49,30 @@
     flex-grow: 1;
     background-color: #f8f9fa;
   }
+
+  /* Trendy trash action button (row-level clear mapping) */
+  .btn-hover-lift {
+    transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .btn-hover-lift.hover-danger:hover,
+  .btn-hover-lift.hover-danger:focus-visible {
+    background-color: #fdecea !important;
+    color: #dc3545 !important;
+    transform: scale(1.12);
+  }
+
+  .btn-hover-lift.hover-danger:active {
+    transform: scale(0.94);
+  }
+
+  .btn-hover-lift.hover-danger .feather {
+    transition: transform 0.15s ease;
+  }
+
+  .btn-hover-lift.hover-danger:hover .feather {
+    transform: rotate(-6deg);
+  }
 </style>
 
 <div class="row mb-3">
@@ -804,7 +828,9 @@
                     </button>
                     <button class="btn btn-sm btn-outline-danger shadow-sm" (click)="removeFromQueue($index)"
                       title="Remove from queue">
-                      <i class="feather icon-trash-2"></i>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.029l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06Zm6.53-.528a.5.5 0 0 0-.528.47l-.5 8.5a.5.5 0 0 0 .998.058l.5-8.5a.5.5 0 0 0-.47-.528ZM8 4.5a.5.5 0 0 0-.5.5v8.5a.5.5 0 0 0 1 0V5a.5.5 0 0 0-.5-.5"/>
+                      </svg>
                     </button>
 
                   </div>
@@ -1193,7 +1219,7 @@
     <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2"
       [class.btn-warning]="reviewFilter === 'unmapped'" [class.btn-outline-warning]="reviewFilter !== 'unmapped'"
       (click)="reviewFilter = 'unmapped'">
-      Unmapped <span class="badge" [class.bg-white]="reviewFilter === 'unmapped'"
+      Unmapped <span class="badge" [class.bg-yellow]="reviewFilter === 'unmapped'"
         [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{
         mappings.length - getConfirmedCount(mappings) }}</span>
     </button>
@@ -1272,8 +1298,8 @@
           <td class="px-2 text-center">
             <button
               class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
-              (click)="clearMapping(mapping)">
-              <i class="feather icon-x"></i>
+              (click)="clearMapping(mapping)" title="Clear this mapping">
+              <i class="feather icon-trash-2"></i>
             </button>
           </td>
         </tr>
