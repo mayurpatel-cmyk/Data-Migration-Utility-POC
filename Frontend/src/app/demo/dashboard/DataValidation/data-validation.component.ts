@@ -720,7 +720,11 @@ export class DataValidationComponent implements OnInit {
         isRequired: isReq,
         picklistValues: picklistVals,
         skipValidation: m.type === 'reference',
-        maxLength: fieldLength
+        maxLength: fieldLength,
+        referenceTo: meta?.referenceTo,
+        relationshipName: meta?.relationshipName,
+        relationalExtIdField: m.relationalExtIdField || (m.type === 'reference' ? 'Id' : undefined),
+        parentObjectName: m.parentObjectName
       };
     });
 

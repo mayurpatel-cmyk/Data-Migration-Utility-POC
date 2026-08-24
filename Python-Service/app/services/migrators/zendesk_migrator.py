@@ -266,29 +266,54 @@ class ZendeskMigrator:
 
             obj_type_singular = zendesk_object_key[:-1] if zendesk_object_key.endswith("s") else zendesk_object_key
             existing_id_by_ext_id = {}
-            for id_batch in chunk_dataset(ext_ids, 20):
-                or_clause = " OR ".join(f'external_id:"{str(e)}"' for e in id_batch)
-                search_query = f"type:{obj_type_singular} ({or_clause})"
-                search_url = f"https://{domain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(search_query)}"
-                while True:
-                    lres = await client.get(search_url, headers=headers)
-                    if lres.status_code == 401:
-                        token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
-                        headers["Authorization"] = f"Bearer {token}"
-                        continue
-                    if lres.status_code == 429:
-                        await asyncio.sleep(30)
-                        continue
-                    break
-                if lres.status_code == 200:
-                    for rec in lres.json().get("results", []):
-                        if rec.get("external_id") not in (None, ""):
-                            existing_id_by_ext_id[str(rec["external_id"])] = rec["id"]
-                else:
-                    await send_log(
-                        f"[{target_object}] {pass_name}: external_id lookup failed for a batch "
-                        f"({lres.status_code}) -- those records will be treated as new: {lres.text}"
-                    )
+
+            if zendesk_object_key == "organizations":
+                for id_batch in chunk_dataset(ext_ids, 100):
+                    ids_param = urllib.parse.quote(",".join(str(e) for e in id_batch))
+                    show_many_url = f"https://{domain}.zendesk.com/api/v2/organizations/show_many.json?external_ids={ids_param}"
+                    while True:
+                        lres = await client.get(show_many_url, headers=headers)
+                        if lres.status_code == 401:
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
+                        if lres.status_code == 429:
+                            await asyncio.sleep(30)
+                            continue
+                        break
+                    if lres.status_code == 200:
+                        for rec in lres.json().get("organizations", []):
+                            if rec.get("external_id") not in (None, ""):
+                                existing_id_by_ext_id[str(rec["external_id"])] = rec["id"]
+                    else:
+                        await send_log(
+                            f"[{target_object}] {pass_name}: external_id lookup failed for a batch "
+                            f"({lres.status_code}) -- those records will be treated as new: {lres.text}"
+                        )
+            else:
+                for id_batch in chunk_dataset(ext_ids, 20):
+                    or_clause = " OR ".join(f'external_id:"{str(e)}"' for e in id_batch)
+                    search_query = f"type:{obj_type_singular} ({or_clause})"
+                    search_url = f"https://{domain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(search_query)}"
+                    while True:
+                        lres = await client.get(search_url, headers=headers)
+                        if lres.status_code == 401:
+                            token = await CrmService.refresh_crm_token(user_id, "zendesk", "target")
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
+                        if lres.status_code == 429:
+                            await asyncio.sleep(30)
+                            continue
+                        break
+                    if lres.status_code == 200:
+                        for rec in lres.json().get("results", []):
+                            if rec.get("external_id") not in (None, ""):
+                                existing_id_by_ext_id[str(rec["external_id"])] = rec["id"]
+                    else:
+                        await send_log(
+                            f"[{target_object}] {pass_name}: external_id lookup failed for a batch "
+                            f"({lres.status_code}) -- those records will be treated as new: {lres.text}"
+                        )
 
             update_positions, update_records = [], []
             create_positions, create_records = [], []

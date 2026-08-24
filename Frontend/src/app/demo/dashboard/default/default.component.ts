@@ -154,8 +154,10 @@ export class DefaultComponent implements OnInit {
           csvField: m.csvField,
           sfField: m.sfField,
           type: m.type,
-          relationalExtIdField: '',
-          parentObjectName: undefined
+          referenceTo: m.referenceTo,
+          relationshipName: m.relationshipName,
+          relationalExtIdField: m.relationalExtIdField || '',
+          parentObjectName: m.parentObjectName
         }));
 
         this.migrationQueue.push({
