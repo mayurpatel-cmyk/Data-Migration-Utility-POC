@@ -3,7 +3,7 @@ Full-Stack Data Migration Application
 SureShift
 
 ## Description
-
+SureShift is system-to-system migration engine that connects directly to your CRMs, maps and migrate the data intelligently.
 
 ##  Tech Stack
 - **Frontend:** Angular
@@ -35,13 +35,15 @@ py -m pip install -r requirements.txt (Windows)
 1. FRONTEND: ng serve
 2. PYTHON(Linux): uvicorn app.main:app --reload --port 8000
 3. PYTHON(Windows): py -m uvicorn app.main:app --reload --port 8000
+4. ollama pull mxbai-embed-large
+
+## Running the Ollama
+ollama pull mxbai-embed-large
 
 ## Container Application
 docker build -t test-backend .
 docker run -p 3000:3000 test-backend
 
-## ollama
-ollama pull mxbai-embed-large
 
 1. To build and start everything at once:-  docker-compose up --build
 2. To run them in the background:- docker-compose up -d --build
