@@ -1,8 +1,13 @@
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PayloadBuilderService:
     @staticmethod
     def build_payload(raw_records, mappings, options, target_crm="salesforce"):
+        mappings = PayloadBuilderService._dedupe_target_fields(mappings)
+
         skip_self_ref = options.get("skipSelfReferencing", False)
         only_self_ref = options.get("onlySelfReferencing", False)
         exclude_refs = options.get("excludeReferencesTo", [])
@@ -190,6 +195,37 @@ class PayloadBuilderService:
                     payload.append({"originalIndex": idx, "targetRecord": target_record})
 
         return payload
+
+    @staticmethod
+    def _dedupe_target_fields(mappings):
+        """
+        Two mapping rows pointed at the same target field silently overwrite each
+        other inside the per-record loop below -- only the LAST one in list order
+        ever actually reaches the target CRM, and the earlier source column's data
+        is dropped with no error anywhere. The mapping UI now blocks this at
+        selection time, but this is a backstop for mapping arrays assembled
+        outside that flow (recovered sessions, direct API calls, older saved
+        mappings). Keeps the LAST occurrence per target field, mirroring the
+        "last row wins" convention used by dedupe_by_unique_key below.
+        """
+        seen: dict = {}
+        no_target: list = []
+
+        for m in mappings:
+            target_field = m.get("targetField") or m.get("sfField")
+            if not target_field:
+                no_target.append(m)
+                continue
+            seen[target_field] = m
+
+        dropped = len([m for m in mappings if (m.get("targetField") or m.get("sfField"))]) - len(seen)
+        if dropped > 0:
+            logger.warning(
+                "[PAYLOAD BUILDER] %d duplicate target-field mapping(s) collapsed to their last occurrence.",
+                dropped
+            )
+
+        return list(seen.values()) + no_target
 
     @staticmethod
     def dedupe_by_unique_key(payload, source_records, key_field):

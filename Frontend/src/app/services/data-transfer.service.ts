@@ -6,7 +6,6 @@ export class DataTransferService {
   private fileName: string = '';
   private targetObject: string = ''; 
 
-  // Data parameter is now an array of ValidationJobs
   setValidatedData(data: any[], fileName: string, targetObject: string) {
     this.validatedData = data;
     this.fileName = fileName;
@@ -15,7 +14,7 @@ export class DataTransferService {
 
   getValidatedData() {
     const data = { 
-      data: this.validatedData, // Array of ValidationJobs
+      data: this.validatedData,
       fileName: this.fileName,
       targetObject: this.targetObject 
     };

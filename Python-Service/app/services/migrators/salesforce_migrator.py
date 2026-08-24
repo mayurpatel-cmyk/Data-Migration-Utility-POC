@@ -23,20 +23,17 @@ class SalesforceMigrator:
         
         clean_query = (query or "").strip()
 
-        # --- NEW SMART QUERY BUILDER ---
         if clean_query.lower().startswith("select "):
             soql = clean_query
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
             else:
-                # Ensure 'Id' is injected into the SELECT clause if explicitly missing
                 select_clause = re.split(r'(?i)\s+from\s+', soql)[0]
                 if not re.search(r'\bid\b', select_clause, re.IGNORECASE):
                     soql = re.sub(r'(?i)^select\s+', 'SELECT Id, ', soql)
         else:
             where_clause = f" WHERE {clean_query}" if clean_query else ""
             soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
-        # --------------------------------
         
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         safe_soql = urllib.parse.quote(soql)
@@ -107,7 +104,6 @@ class SalesforceMigrator:
 
         job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
         
-        # Silent Refresh
         if job_res.status_code == 401:
             await send_log(f"[{target_object}] Session Expired. Silently refreshing SF Token...")
             sf_token = await CrmService.refresh_crm_token(user_id, "salesforce", "target")
@@ -152,7 +148,7 @@ class SalesforceMigrator:
                 break
             poll_delay = min(poll_delay * 1.5, 4.0)
 
-        ids_to_revert = []  # records Salesforce inserted that "update" mode must not keep
+        ids_to_revert = []  
 
         for i, b_id in enumerate(batch_ids):
             res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
@@ -178,12 +174,10 @@ class SalesforceMigrator:
                     all_success_data.append(orig_record)
                     total_success += 1
                 else:
-                    # --- Extract Exact Salesforce Field ---
                     err_obj = sf_result.get("errors", [{}])[0]
                     err_msg = err_obj.get("message", "Unknown Error")
                     fields = err_obj.get("fields", [])
                     
-                    # Inject the field name into the error log so it reads: "[Field_Name__c] Error Message"
                     if fields and isinstance(fields, list) and len(fields) > 0:
                         err_msg = f"[{', '.join(fields)}] {err_msg}"
                         

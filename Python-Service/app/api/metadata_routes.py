@@ -22,7 +22,6 @@ router = APIRouter()
 async def get_crm_objects(crm_id: str, role: str = "source", current_user = Depends(get_current_user)):
     crm_lower = crm_id.lower()
 
-    # Securely grab credentials from Database using Supabase Auth token
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_lower, role)
 
     async def _fetch(token):
@@ -40,7 +39,6 @@ async def get_crm_objects(crm_id: str, role: str = "source", current_user = Depe
     try:
         return await _fetch(creds["access_token"])
     except HTTPException as e:
-        # If the CRM rejects the token, silently refresh it and retry!
         if e.status_code == 401:
             new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
             return await _fetch(new_token)
@@ -69,7 +67,6 @@ async def get_crm_fields(crm_id: str, object_name: str, role: str = "source", cu
     try:
         return await _fetch(creds["access_token"])
     except HTTPException as e:
-        # If the CRM rejects the token, silently refresh it and retry!
         if e.status_code == 401:
             new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
             return await _fetch(new_token)
@@ -98,11 +95,9 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
     if not obj_name:
         raise HTTPException(status_code=400, detail="Object name is required.")
 
-    # Securely grab credentials from Database
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_id, role)
 
     async def _fetch(token):
-        # Temporarily inject the new token into the creds dictionary for the query service
         creds["access_token"] = token
 
         if crm_id == "salesforce":
@@ -119,7 +114,6 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
     try:
         return await _fetch(creds["access_token"])
     except HTTPException as e:
-        # If the CRM rejects the token, silently refresh it and retry!
         if e.status_code == 401:
             new_token = await CrmService.refresh_crm_token(current_user.id, crm_id, role)
             return await _fetch(new_token)
@@ -139,12 +133,10 @@ def tokenize_field(name: str) -> set:
     """Splits camelCase/snake_case into core semantic word tokens for fast identification."""
     if not name:
         return set()
-    # Handle camelCase transitions (e.g., "firstName" -> "first Name")
     s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', name)
     s2 = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1)
     words = re.sub(r'[^a-zA-Z0-9]', ' ', s2).lower().split()
 
-    # Stemming: Truncate words to their base roots to align variations (e.g., billing/bill -> bill)
     roots = []
     for w in words:
         if w.endswith('ing'): w = w[:-3]
@@ -189,7 +181,6 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
             'createdat', 'updatedat', 'updateddate', 'deleted'
         }
 
-        # Safe Target Fields (Overwrites the raw list)
         target_fields = [
             t for t in raw_target_fields
             if t.get("name", "").lower() not in restricted_targets
@@ -199,12 +190,10 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
             s for s in source_fields
             if s.get("type", "").lower() not in ['reference', 'id']
         ]
-        # ====================================================
 
         final_mappings = []
         unmapped_source = []
 
-        # Pre-calculate target catalogs for fast lookup loops
         target_names = [t.get("name") for t in target_fields]
         target_lookup = {normalize_field_name(t.get("name")): t.get("name") for t in target_fields}
 
@@ -215,19 +204,16 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
                 "name": t_name,
                 "tokens": tokenize_field(t_name)
             })
-        # 1. RUN FAST HEURISTIC ALIGNMENT
         for src in source_fields:
             src_name = src.get("name")
             src_type = src.get("type", "string")
             src_norm = normalize_field_name(src_name)
             src_tok = tokenize_field(src_name)
 
-            # Pass A: Perfect Text Normalization + Type Check
             if src_norm in target_lookup:
                 tgt_name = target_lookup[src_norm]
                 tgt_meta = next((t for t in target_fields if t.get("name") == tgt_name), {})
 
-                # Verify types match before auto-assigning 1.0 confidence
                 if src_type == tgt_meta.get("type", "string"):
                     final_mappings.append({
                         "sourceField": src_name,
@@ -236,12 +222,10 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
                     })
                     continue
 
-            # Pass B: Strict Token Intersect Overlap (Require more than just 1 generic match)
             best_token_match = None
             max_overlap = 0
             for tgt in target_tokens:
                 tgt_meta = next((t for t in target_fields if t.get("name") == tgt["name"]), {})
-                # Skip if types are wildly mismatched
                 if src_type != tgt_meta.get("type", "string"):
                     continue
 
@@ -277,7 +261,6 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
         )
 
         if unmapped_source:
-            # OPTIMIZATION: Only send target fields that haven't been mapped yet!
             mapped_target_names = [m["targetField"] for m in final_mappings if "targetField" in m]
 
             minimized_target = [
@@ -302,7 +285,5 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
     except HTTPException:
         raise
     except Exception as e:
-        # Log the full traceback server-side; don't echo internal exception
-        # text (which can include field names/data shape) back to the client.
         logger.exception("AI auto-map route crashed")
         raise HTTPException(status_code=500, detail="Internal Server Error while generating field mappings.")

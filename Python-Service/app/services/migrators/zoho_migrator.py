@@ -2,7 +2,6 @@ import re
 import asyncio
 from app.services.crm_service import CrmService
 
-#  Restored 'yield' to make it a proper batch generator ---
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
@@ -18,7 +17,6 @@ class ZohoMigrator:
             
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
-        # Determine fields to extract based on UI mappings
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
@@ -39,12 +37,10 @@ class ZohoMigrator:
                     coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query}"
 
                 if " limit " not in coql_query.lower():
-                    # Zoho limits COQL to 2000 records per request max
                     coql_query += " limit 200"
 
                 await send_log(f"Extracting data from Zoho using COQL...")
                 
-                # This must be client.post() for the /coql endpoint
                 res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
                 
                 if res.status_code != 200:
@@ -72,7 +68,6 @@ class ZohoMigrator:
                         break
                     page += 1
 
-            # Flatten Zoho Lookups for the frontend UI
             processed_data = []
             for r in data:
                 flat_rec = {}
@@ -136,7 +131,6 @@ class ZohoMigrator:
                 if wire_op_mode == "upsert" and options.get("targetExtIdField"):
                    req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
-                # --- Silent Retry Loop for Uploads (Token Refresh & Rate Limits) ---
                 while True:
                     if http_method == "PUT":
                         res = await client.put(api_path, json=req_payload, headers=headers)
@@ -175,23 +169,19 @@ class ZohoMigrator:
                                     ids_to_revert.append(str(raw_id))
                                 continue
 
-                            #  Force the ID into a string to protect it from JS precision limits
                             orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                             
                             all_success_data.append(orig_record)
                             total_success += 1
                         else:
-                            #  Deeply parse Zoho's error structure ---
                             err_msg = z_res.get("message") or z_res.get("code", "Unknown Error")
                             details = z_res.get("details", {})
                             
-                            # Intelligently extract the field name if Zoho provides it
                             if isinstance(details, dict):
                                 api_name = details.get("api_name")
                                 if api_name:
                                     err_msg = f"[{api_name}] {err_msg}"
                                 elif details:
-                                    # Fallback for other nested details
                                     err_msg = f"{err_msg} | Details: {str(details)}"
                                     
                             orig_record["Target_Error"] = f"Zoho Error: {err_msg}"

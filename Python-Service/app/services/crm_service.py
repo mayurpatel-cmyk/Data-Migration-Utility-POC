@@ -21,7 +21,6 @@ class CrmService:
     @staticmethod
     def delete_connection(user_id: str, side: str):
         try:
-            # Delete the specific connection slot (source or target) for this user
             response = supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
             return response.data
         except Exception as e:
@@ -100,7 +99,6 @@ class CrmService:
                 })
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")
-                    # HubSpot also rotates the refresh_token, so update both!
                     new_refresh_token = res.json().get("refresh_token")
                     supabase.table("crm_connections").update({
                         "access_token": new_access_token,
@@ -109,7 +107,6 @@ class CrmService:
                     return new_access_token
                     
         if new_access_token:
-            # Save new token back to database
             supabase.table("crm_connections").update({"access_token": new_access_token}).eq("id", creds["id"]).execute()
             return new_access_token
             

@@ -44,7 +44,6 @@ export class AuthService {
     return this.http.post<AuthResponse>(`${this.apiUrl}/login`, credentials).pipe(
       tap(res => {
         if (res.success && res.token && res.refresh_token) {
-          // Store both tokens securely
           localStorage.setItem('supabase_token', res.token);
           localStorage.setItem('supabase_refresh', res.refresh_token);
           localStorage.setItem('supabase_user', JSON.stringify(res.user));
@@ -58,7 +57,6 @@ export class AuthService {
     return this.http.post<any>(`${this.apiUrl}/signup`, data);
   }
 
-  // Use this method in your HTTP Interceptor when a 401 Unauthorized occurs
   refreshToken(): Observable<any> {
     const refreshToken = localStorage.getItem('supabase_refresh');
     return this.http.post<any>(`${this.apiUrl}/refresh`, { refresh_token: refreshToken }).pipe(
@@ -95,15 +93,13 @@ export class AuthService {
     localStorage.removeItem('supabase_refresh');
     localStorage.removeItem('supabase_user');
     this.currentUser.set(null);
-    // replaceUrl so the guarded page we just left isn't reachable via Back
     this.router.navigate(['/login'], { replaceUrl: true });
   }
 
   logout() {
-    // 1. Tell the Python backend to kill the session
     this.http.post(`${this.apiUrl}/logout`, {}).subscribe({
       next: () => this.clearLocalSession(),
-      error: () => this.clearLocalSession() // Clear it even if the server fails
+      error: () => this.clearLocalSession()
     });
   }
 }

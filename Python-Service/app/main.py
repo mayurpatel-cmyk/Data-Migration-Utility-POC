@@ -15,8 +15,6 @@ if sys.platform == 'win32':
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# Import your NEW modular routes
 from app.api.validation_routes import router as validation_router
 from app.api.migration_routes import router as migration_router
 from app.api.auth_routes import router as auth_router

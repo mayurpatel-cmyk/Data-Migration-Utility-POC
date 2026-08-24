@@ -5,13 +5,11 @@ from app.utils.config import supabase
 
 logger = logging.getLogger(__name__)
 
-# 1. Initialize the router here so FastAPI knows what 'router' is
 router = APIRouter()
 
 @router.get("/api/migration-history")
 def get_migration_history(current_user = Depends(get_current_user)):
     try:
-        # Fetch only the history for the currently logged-in user
         response = supabase.table("migration_history") \
             .select("*") \
             .eq("user_id", current_user.id) \

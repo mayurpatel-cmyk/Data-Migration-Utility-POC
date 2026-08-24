@@ -316,11 +316,6 @@
   }
 </style>
 
-<!-- Shared brand-icon template: inline SVG glyphs on a tinted badge.
-     Nothing loads over the network, so it can never fail to render.
-     Icons are original vector marks in each brand's real color, not
-     a reproduction of the trademarked logo artwork. Unknown CRM ids
-     fall back to the feather icon from getCrmConfig(). -->
 <ng-template #crmLogo let-crmId="crmId" let-fallbackIcon="fallbackIcon" let-size="size">
   @switch (crmId) {
     @case ('salesforce') {

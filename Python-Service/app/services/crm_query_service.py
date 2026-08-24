@@ -109,7 +109,6 @@ class CrmQueryService:
         
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         
-        #  Zoho strictly rejects COQL queries over 200 records.
         if limit > 200:
             limit = 200
             
@@ -122,7 +121,6 @@ class CrmQueryService:
                         fields_str = ",".join(safe_fields)
                         coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
                         
-                    #  Inject WHERE clause properly so it doesn't break ORDER BY
                     if " where " not in coql_query.lower():
                         if " order by " in coql_query.lower():
                             coql_query = re.sub(r'(?i)(\border\s+by\b)', r'where id is not null \1', coql_query, count=1)
@@ -238,7 +236,6 @@ class CrmQueryService:
         if query and query.strip():
             stripped = query.strip()
             if stripped.lower().startswith("select "):
-                # Reuse the WHERE clause from the user's SOQL, drop SELECT list / LIMIT
                 match = re.search(r'(?i)\bwhere\b(.*?)(\blimit\b.*)?$', stripped)
                 if match and match.group(1).strip():
                     where_clause = f" WHERE {match.group(1).strip()}"
@@ -308,11 +305,10 @@ class CrmQueryService:
                 if "filterGroups" in query_dict:
                     payload["filterGroups"] = query_dict["filterGroups"]
             except json.JSONDecodeError:
-                pass  # fall back to unfiltered total
+                pass  
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(url, headers=headers, json=payload)
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"HubSpot rejected count request: {res.text}")
-            # HubSpot search caps `total` at 10,000 due to API limits on deep pagination.
             return res.json().get("total", 0)

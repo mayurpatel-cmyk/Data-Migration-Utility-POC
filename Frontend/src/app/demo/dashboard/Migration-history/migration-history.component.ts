@@ -1,7 +1,6 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule, DatePipe, TitleCasePipe } from '@angular/common';
 import { MigrationApiService, MigrationHistoryRecord } from '../../../services/migration-history.service';
-// Import your Shared AppCardComponent if it's standalone, or declare it in your module
 
 @Component({
   selector: 'app-migration-history',
@@ -41,7 +40,6 @@ export class MigrationHistoryComponent implements OnInit {
     });
   }
 
-  // Helper to format the CRM names and icons dynamically
   getCrmIcon(crmName: string): string {
     const crm = crmName?.toLowerCase();
     if (crm === 'salesforce') return 'icon-cloud text-primary';

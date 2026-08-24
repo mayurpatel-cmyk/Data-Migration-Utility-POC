@@ -103,14 +103,12 @@ export class DefaultComponent implements OnInit {
   isUpsertDropdownOpen: boolean = false;
   upsertSearchQuery: string = '';
 
-  // --- Real-Time UI State Trackers ---
   activeJobStatus: string = '';
   completedJobsCount: number = 0;
 
   targetCrmId: string = 'salesforce';
   sourceCrmId: string = 'csv';
 
-  // AI Auto-Map / Review Panel State
   isAutoMapping = false;
   autoMapProgress = { current: 0, total: 0 };
   showReviewPanel = false;
@@ -130,12 +128,10 @@ export class DefaultComponent implements OnInit {
 
     const transferred = this.dataTransfer.getValidatedData();
 
-    // Check if we have an array of jobs transferred from Validation
     if (transferred && transferred.data && Array.isArray(transferred.data) && transferred.data.length > 0) {
       const newWorkbook = utils.book_new();
       this.availableSheets = [];
 
-      // 1. Loop through the Validation Jobs and create a multi-sheet Excel file
       transferred.data.forEach((job: any, index: number) => {
         const sheetName = (job.sheetName || `Sheet${index + 1}`).substring(0, 31);
         const worksheet = utils.json_to_sheet(job.results.validRecords);
@@ -144,7 +140,6 @@ export class DefaultComponent implements OnInit {
         this.availableSheets.push(sheetName);
       });
 
-      // Bind the new workbook and file to the UI
       this.workbook = newWorkbook;
       this.selectedFile = new File(
         [write(newWorkbook, { type: 'array', bookType: 'xlsx' })],
@@ -152,7 +147,6 @@ export class DefaultComponent implements OnInit {
         { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
       );
 
-      // --- AUTO-BUILD THE ENTIRE MIGRATION QUEUE ---
       this.migrationQueue = [];
 
       transferred.data.forEach((job: any, index: number) => {
@@ -216,7 +210,6 @@ export class DefaultComponent implements OnInit {
           this.toastr.error('Session expired. Please log in again.');
           this.authService.logout();
         } else {
-          //  Removed invalid bitwise | operator that crashed the TypeScript build!
           this.toastr.error(`Could not load objects for ${this.targetCrmId.toUpperCase()}.`, 'Connection Error');
         }
       }
@@ -235,18 +228,17 @@ export class DefaultComponent implements OnInit {
     return this.migrationQueue.length > 0 && this.migrationQueue.every((job) => job.operationMode === 'delete');
   }
 
-  // Dynamically returns which operation modes the selected CRM supports
   get availableOpModes(): string[] {
     const crm = (this.targetCrmId || '').toLowerCase();
     switch (crm) {
       case 'hubspot':
-        return ['insert', 'update', 'upsert']; // HubSpot Bulk Delete not natively supported here
+        return ['insert', 'update', 'upsert']; 
       case 'zendesk':
-        return ['insert', 'update', 'upsert']; // Zendesk Bulk Delete not natively supported here
+        return ['insert', 'update', 'upsert'];
       case 'zoho':
       case 'salesforce':
       default:
-        return ['insert', 'update', 'upsert', 'delete']; // SF & Zoho support all 4
+        return ['insert', 'update', 'upsert', 'delete']; 
     }
   }
 
@@ -254,7 +246,7 @@ export class DefaultComponent implements OnInit {
     event.stopPropagation();
     this.isUpsertDropdownOpen = !this.isUpsertDropdownOpen;
     if (this.isUpsertDropdownOpen) {
-      this.upsertSearchQuery = ''; // Clear search when opening
+      this.upsertSearchQuery = '';
     }
   }
 
@@ -262,10 +254,9 @@ export class DefaultComponent implements OnInit {
   selectUpsertKeyOption(fieldName: string) {
     this.targetExtIdField = fieldName;
     this.isUpsertDropdownOpen = false;
-    this.onOperationModeChange(); // Fire your existing logic to save it
+    this.onOperationModeChange();
   }
 
-  // Filters the list based on what the user types
   get filteredUpsertKeys(): any[] {
     if (!this.upsertSearchQuery) return this.validUpsertKeys;
     const query = this.upsertSearchQuery.toLowerCase();
@@ -372,7 +363,7 @@ export class DefaultComponent implements OnInit {
     return field ? `${field.label} (${field.name})` : fieldName;
   }
 
-  // Dynamically gets valid fields for the Upsert Key dropdown
+
   get validUpsertKeys(): any[] {
     if (!this.sfFields || this.sfFields.length === 0) return [];
     return this.sfFields.filter((f) => f.externalId || f.unique || f.idLookup || f.name === 'Id' || f.name === 'id');
@@ -485,10 +476,8 @@ export class DefaultComponent implements OnInit {
     const crm = (this.targetCrmId || '').toLowerCase();
     const objLower = (this.selectedObject || '').toLowerCase();
 
-    // 1. Get API-defined required fields (Works perfectly for Salesforce)
     let requiredFields = this.sfFields.filter((f) => f.isRequired).map((f) => f.name);
 
-    // Helper to safely suggest a field only if it actually exists in their schema
     const addIfInSchema = (fieldName: string) => {
       if (this.sfFields.some((f) => f.name === fieldName) && !requiredFields.includes(fieldName)) {
         requiredFields.push(fieldName);
@@ -497,7 +486,6 @@ export class DefaultComponent implements OnInit {
 
     const currentlyMappedFields = this.mappings.map((m) => m.sfField).filter((val) => val !== '');
 
-    // 2. Inject CRM-Specific Smart Fallbacks
     if (crm === 'hubspot') {
       if (objLower === 'contacts') addIfInSchema('email');
       if (objLower === 'deals') addIfInSchema('dealname');
@@ -506,10 +494,9 @@ export class DefaultComponent implements OnInit {
         addIfInSchema('hs_pipeline_stage');
       }
 
-      // HubSpot Companies Special Rule: Requires EITHER domain OR name
       if (objLower === 'companies') {
         if (!currentlyMappedFields.includes('domain') && !currentlyMappedFields.includes('name')) {
-          addIfInSchema('domain'); // Suggest domain as the primary identifier
+          addIfInSchema('domain');
         }
       }
     } else if (crm === 'zoho') {
@@ -518,7 +505,6 @@ export class DefaultComponent implements OnInit {
       if (objLower === 'deals') addIfInSchema('Deal_Name');
     }
 
-    // 3. Return what's required but hasn't been mapped yet
     return requiredFields.filter((reqField) => !currentlyMappedFields.includes(reqField));
   }
 
@@ -563,17 +549,14 @@ export class DefaultComponent implements OnInit {
     const objLower = (this.selectedObject || '').toLowerCase();
 
     if (this.operationMode === 'upsert' && !this.targetExtIdField) {
-      // CRM-SPECIFIC UPSERT LOGIC
       if (crm === 'hubspot' && objLower === 'contacts') {
         this.selectUpsertKey('email');
       } else if (crm === 'hubspot' && objLower === 'companies') {
         this.selectUpsertKey('domain');
       } else if (crm === 'zendesk') {
-        // Zendesk commonly upserts via external_id
         const hasExtId = this.sfFields.find((f) => f.name === 'external_id');
         if (hasExtId) this.selectUpsertKey('external_id');
       } else {
-        // Default Salesforce/Zoho Logic: Auto-select if there's only 1 external ID field
         const extIds = this.sfFields.filter((f) => f.externalId || f.unique || f.idLookup);
         if (extIds.length === 1) {
           this.selectUpsertKey(extIds[0].name);
@@ -584,7 +567,6 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  // Dynamically returns the naming convention for fields/properties
   get targetFieldLabel(): string {
     const crm = (this.targetCrmId || '').toLowerCase();
     switch (crm) {
@@ -600,7 +582,6 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  // Dynamically returns the naming convention for records/objects
   get targetObjectLabel(): string {
     const crm = (this.targetCrmId || '').toLowerCase();
     switch (crm) {
@@ -615,11 +596,8 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  // Dynamically determines if the CRM supports complex nested External ID lookups
   get supportsRelationalLookups(): boolean {
     const crm = (this.targetCrmId || '').toLowerCase();
-    // Currently, only Salesforce natively supports mapping parent relationships
-    // via dynamic External IDs inside a standard bulk payload.
     return crm === 'salesforce' || crm === 'zoho';
   }
 
@@ -643,7 +621,6 @@ export class DefaultComponent implements OnInit {
     }
   }
 
-  // --- SAVED MAPPING TEMPLATES ---
   async saveMappingTemplate() {
     const activeMappings = this.mappings.filter((m) => m.sfField !== '');
     if (activeMappings.length === 0) {
@@ -1035,31 +1012,24 @@ export class DefaultComponent implements OnInit {
   onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
 
-    // Check if it's a lookup field (reference)
     if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
-      // 1. Try to get parent object from standard metadata (Works perfectly for Salesforce)
       let parentObj = fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0 ? fieldMeta.referenceTo[0] : null;
 
       if (!parentObj && this.sfObjects && this.sfObjects.length > 0) {
-        const fieldLower = mapping.sfField.toLowerCase().replace(/[^a-z0-9]/g, ''); // Clean field name
+        const fieldLower = mapping.sfField.toLowerCase().replace(/[^a-z0-9]/g, '');
 
         const matchedObj = this.sfObjects.find((obj) => {
           const objNameLower = (obj.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
           if (!objNameLower) return false;
-
-          // Create a singular version for matching (e.g., 'accounts' -> 'account')
           const singularName = objNameLower.endsWith('s') ? objNameLower.slice(0, -1) : objNameLower;
-
-          // Match if the field name contains the object name or its singular form
           return fieldLower.includes(singularName) || fieldLower.includes(objNameLower);
         });
 
         if (matchedObj) {
-          parentObj = matchedObj.name; // Use the exact API name from the CRM
+          parentObj = matchedObj.name;
         }
       }
 
-      // 3. Load the fields for the dropdown
       if (parentObj) {
         mapping.parentObjectName = parentObj;
 
@@ -1081,7 +1051,6 @@ export class DefaultComponent implements OnInit {
             error: (err) => {
               setTimeout(() => {
                 mapping.isLoadingParentFields = false;
-                // Failsafe: Let them type it manually if the API fails
                 mapping.parentObjectName = 'Manual_Entry';
                 this.cdr.detectChanges();
               });
@@ -1089,11 +1058,9 @@ export class DefaultComponent implements OnInit {
           });
         }
       } else {
-        // If we couldn't guess it from any module, trigger the manual entry fallback
         mapping.parentObjectName = 'Manual_Entry';
       }
     } else {
-      // Not a lookup field, wipe data cleanly
       mapping.parentObjectName = undefined;
       mapping.relationalExtIdField = '';
     }
@@ -1342,7 +1309,6 @@ export class DefaultComponent implements OnInit {
     return mappings.filter((m) => m.sfField && m.sfField !== '');
   }
 
-  // --- DOWNLOAD MAPPING RECEIPT (AUDIT LOG) ---
   downloadMappingReceipt() {
     if (this.migrationQueue.length === 0) {
       this.toastr.warning('There are no mappings to export.', 'Empty Queue');
@@ -1378,7 +1344,6 @@ export class DefaultComponent implements OnInit {
     this.toastr.info('Mapping receipt downloaded. Keep this for your audit records!', 'Receipt Generated');
   }
 
-  // --- UPGRADED: Sequential Batch Processing ---
   startMigration() {
     this.showPreview = false;
     this.previewingItemIndex = null;

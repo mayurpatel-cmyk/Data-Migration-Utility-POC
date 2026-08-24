@@ -105,11 +105,9 @@ export class DataValidationComponent implements OnInit {
   }
 
   ngOnInit() {
-    // Safely grab the Target CRM chosen on the connection page
     const navState = history.state;
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
     
-    // Lock Contexts into Storage
     localStorage.setItem('target_crm_slot', this.targetCrmId);
     localStorage.setItem('source_crm_slot', 'csv');
 
@@ -224,7 +222,6 @@ export class DataValidationComponent implements OnInit {
     if (crm === 'zendesk') {
       return !!field.externalId;
     }
-    // Salesforce, Zoho, and default fallback
     return field.name === 'Id' || !!field.externalId || !!field.idLookup || !!field.unique;
   }
 
@@ -488,7 +485,7 @@ export class DataValidationComponent implements OnInit {
 
     setTimeout(() => {
       // =========================================================
-      // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING (fast pass)
+      // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
       // =========================================================
       let ruleMatchCount = 0;
       const normalizeString = (str: string) => String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
@@ -657,7 +654,6 @@ export class DataValidationComponent implements OnInit {
     });
   }
 
-  // --- NEW: Helper to extract Field Schema to send to Python ---
   private buildRulesDict(): any {
     const rules: any = {};
     if (this.sfFields) {
@@ -844,7 +840,7 @@ export class DataValidationComponent implements OnInit {
         mappings: job.mappings,
         dedupeKey: job.dedupeKey,
         targetCrmId: this.targetCrmId,
-        sfRules: schemaRules // <-- IMPORTANT: Pass the full schema rules to Python
+        sfRules: schemaRules
       };
 
       formData.append('config', JSON.stringify(config));
@@ -995,7 +991,7 @@ export class DataValidationComponent implements OnInit {
       mappings: job.mappings,
       dedupeKey: job.dedupeKey,
       targetCrmId: this.targetCrmId,
-      sfRules: this.buildRulesDict() // <-- IMPORTANT: Send schema rules to Python
+      sfRules: this.buildRulesDict()
     };
 
     try {
@@ -1121,7 +1117,6 @@ export class DataValidationComponent implements OnInit {
 
   getParentFieldLabel(mapping: any, fieldName?: string): string {
     if (!fieldName) return '';
-    // Dynamic label for Standard IDs based on CRM
     if (fieldName === 'Id') return `Id (Standard ${this.targetCrmId.toUpperCase()} ID)`;
     
     if (!mapping.parentObjectName) return fieldName;

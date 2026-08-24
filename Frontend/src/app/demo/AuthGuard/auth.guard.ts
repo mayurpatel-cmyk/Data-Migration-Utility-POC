@@ -6,7 +6,6 @@ export const authGuard: CanActivateFn = (route, state) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
-  // Simply check if the Supabase token exists in our service
   if (authService.isLoggedIn()) {
     return true;
   }

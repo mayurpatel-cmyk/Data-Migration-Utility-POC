@@ -63,15 +63,12 @@ class CrmMetadataService:
                 select_fields_list = []
                 
                 for f in fields_raw:
-                    # Skip compound fields that break SOQL queries
                     if f["type"] in ["address", "location"]:
                         continue
 
-                    # Grab fields for sample records
                     if f.get("createable") or f.get("updateable") or f.get("name") == "Id":
                         select_fields_list.append(f["name"])
                         
-                    #  Extract length, custom flag, exact isRequired logic, and referenceTo
                     is_required = (not f.get("nillable", True)) and f.get("createable", False) and (not f.get("defaultedOnCreate", False))
                     
                     parsed_fields.append({
@@ -87,7 +84,6 @@ class CrmMetadataService:
                         "idLookup": f.get("idLookup", False)
                     })
 
-                # 2. Fetch Sample Data
                 sample_fields = select_fields_list[:15]
                 sample_records = []
                 
@@ -137,7 +133,6 @@ class CrmMetadataService:
         
         headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
         
-        # 2. Modern Native Custom Objects (Admin Center)
         url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects"
         
         try:
@@ -168,7 +163,6 @@ class CrmMetadataService:
                 schema_fields_map = {}
                 sample_records = []
                 
-                # Check if it's a standard Zendesk object or a Native Custom Object
                 standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
                 is_standard = safe_object_name in standard_objects
                 
@@ -317,11 +311,9 @@ class CrmMetadataService:
                 objects = []
                 
                 for mod in data.get("modules", []):
-                    # Ensure we catch Custom Modules even if Zoho flags them weirdly
                     if mod.get("api_supported", False) or mod.get("generated_type") == "custom":
                         objects.append({
                             "name": mod.get("api_name"),
-                            # Use plural_label for a cleaner UI display
                             "label": mod.get("plural_label") or mod.get("module_name") or mod.get("api_name")
                         })
                         
@@ -396,7 +388,6 @@ class CrmMetadataService:
                     for r in raw_records:
                         flat_rec = {}
                         for k, v in r.items():
-                            # Flatten Zoho's nested dictionary structures for Lookups/Owners
                             if isinstance(v, dict) and "id" in v:
                                 flat_rec[k] = v.get("name", v["id"]) 
                             else:
@@ -432,7 +423,6 @@ class CrmMetadataService:
         
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # 1. Fetch Standard Objects (HubSpot doesn't have a single /schemas endpoint for everything)
                 standard_objects = [
                     {"name": "contacts", "label": "Contacts"},
                     {"name": "companies", "label": "Companies"},
@@ -449,14 +439,12 @@ class CrmMetadataService:
                 ]
                 objects.extend(standard_objects)
 
-                # 2. Fetch Custom Objects
                 custom_url = f"{api_domain.rstrip('/')}/crm/v3/schemas"
-                # We catch errors here silently in case the user's tier doesn't support custom objects
                 res = await client.get(custom_url, headers=headers)
                 if res.status_code == 200:
                     for schema in res.json().get("results", []):
                         objects.append({
-                            "name": schema.get("objectTypeId"), # Internal ID needed for querying
+                            "name": schema.get("objectTypeId"),
                             "label": schema.get("labels", {}).get("plural", schema.get("name")),
                             "isCustomObject": True
                         })
@@ -501,7 +489,6 @@ class CrmMetadataService:
                 select_fields_list = []
 
                 for f in fields_raw:
-                    # Skip internal/hidden fields that shouldn't be mapped
                     if f.get("hidden"):
                         continue
                         
@@ -512,16 +499,15 @@ class CrmMetadataService:
                         "name": api_name,
                         "label": f.get("label"),
                         "type": type_mapping.get(f.get("type"), "string"),
-                        "isRequired": False, # HubSpot doesn't strictly enforce schema-level required fields like SF
+                        "isRequired": False, 
                         "custom": not f.get("hubspotDefined", True),
                         "referenceTo": f.get("referencedObjectType"),
                         "unique": f.get("hasUniqueValue", False),
                         "externalId": api_name in ("hs_object_id", "id")
                     })
 
-                # 2. Fetch Sample Data
-                # HubSpot requires us to specify which properties we want returned
-                sample_fields = select_fields_list[:50] # Limit to avoid URI too long errors
+
+                sample_fields = select_fields_list[:50] 
                 properties_query = "&".join([f"properties={urllib.parse.quote(p)}" for p in sample_fields])
                 
                 records_url = f"{api_domain.rstrip('/')}/crm/v3/objects/{object_name}?limit=5&{properties_query}"
@@ -533,7 +519,6 @@ class CrmMetadataService:
                     for r in raw_records:
                         flat_rec = {"id": r.get("id")}
                         
-                        # Merge properties into the flat record
                         props = r.get("properties", {})
                         if props:
                             for k, v in props.items():

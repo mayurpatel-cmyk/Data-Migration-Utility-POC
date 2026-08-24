@@ -5,10 +5,8 @@ def process_validation_batch(records: list, mappings: list, dedupe_key: str, tar
     Acts as a gateway. Dynamically loads the specific Validation Strategy 
     for the requested Target CRM and executes the data check.
     """
-    # 1. Ask the Factory for the specific CRM Ruleset
     validator_engine = ValidatorFactory.get_validator(target_crm)
     
-    # 2. Run the specialized rules!
     return validator_engine.validate(
         records=records, 
         mappings=mappings, 

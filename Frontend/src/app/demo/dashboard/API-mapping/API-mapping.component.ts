@@ -10,8 +10,7 @@ import Swal from 'sweetalert2';
 import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
 import { HttpClient } from '@angular/common/http';
-import { AuthService } from 'src/app/demo/Services/auth.service'; // Verify this path matches your project
-
+import { AuthService } from 'src/app/demo/Services/auth.service';
 declare const monaco: any;
 interface FieldMeta {
   name: string;
@@ -62,11 +61,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private migrationSocket: WebSocket | null = null;
   private http = inject(HttpClient);
 
-  // Emits whenever the source/target object pair changes (or the component is destroyed).
-  // Any in-flight metadata fetch or AI auto-map chunk request is tied to this via takeUntil,
-  // so switching the target object mid-request can no longer write stale results (wrong
-  // target schema, phantom mappedCount) into the freshly-rebuilt `mappings` array.
   private mappingCancel$ = new Subject<void>();
+  private lastLoadedTargetObject: string | null = null;
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -79,7 +75,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     for (const i in ob) {
       if (!ob.hasOwnProperty(i)) continue;
 
-      // If it's a nested object (like originalRow), flatten its keys into top-level columns
       if (typeof ob[i] === 'object' && ob[i] !== null && !Array.isArray(ob[i])) {
         const flatObject = this.flattenObject(ob[i]);
         for (const x in flatObject) {
@@ -139,14 +134,14 @@ isProfileDropdownOpen = false;
   jobStatus = 'Idle';
   logMessages: string[] = [];
   customQuery: string = '';
-  isDefaultQuery: boolean = true; // true until the user hand-edits the query; controls when auto-rebuild is safe
+  isDefaultQuery: boolean = true;
   queryError: string | null = null;
   isPreviewLoading = false;
   sourceFields: FieldMeta[] = [];
   successData: any[] = [];
   isQueueMinimized: boolean = false;
   errorData: any[] = [];
-  skippedData: any[] = []; // Records "update" mode intentionally skipped (no matching record found)
+  skippedData: any[] = [];
   aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
   validationResults: any = null;
   isValidating = false;
@@ -164,7 +159,7 @@ isProfileDropdownOpen = false;
   batchSize: number = 5000;
   migrationQueue: any[] = [];
 
-  // Files & Attachments (Salesforce -> Salesforce only, for now)
+  // Files & Attachments (Salesforce -> Salesforce only)
   migrateAttachments = false;
   migrateFiles = false;
 
@@ -194,7 +189,6 @@ isProfileDropdownOpen = false;
   isSessionsLoading = false;
 
   ngOnInit(): void {
-    // 1. Securely pull the intended CRMs
     this.getUserData();
 // this.fetchRecoverableSessions();
 // this.preloadEntirePage();
@@ -204,7 +198,7 @@ isProfileDropdownOpen = false;
 
     if (!this.sourceCrmId || !this.targetCrmId) {
       this.toastr.warning('Please connect your Source and Target systems first.', 'Connections Required');
-      this.router.navigate(['/connection']); // Or whatever your route is named
+      this.router.navigate(['/connection']);
       return;
     }
 
@@ -212,7 +206,6 @@ isProfileDropdownOpen = false;
     this.targetSystem = this.targetCrmId;
     this.batchSize = this.batchConfig.default;
 
-    // Save them so a page refresh doesn't break the app
     localStorage.setItem('source_crm_slot', this.sourceCrmId);
     localStorage.setItem('target_crm_slot', this.targetCrmId);
 
@@ -224,21 +217,24 @@ isProfileDropdownOpen = false;
   }
 
   ngOnDestroy() {
-    // 0. Cancel any in-flight metadata/AI auto-map requests
     this.mappingCancel$.next();
     this.mappingCancel$.complete();
 
     // 1. Kill active websockets
-    if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
-      this.validationSocket.close();
-    }
-    if (this.migrationSocket && this.migrationSocket.readyState === WebSocket.OPEN) {
-      this.migrationSocket.close();
-    }
+    this.closeSocket(this.validationSocket);
+    this.closeSocket(this.migrationSocket);
+    this.validationSocket = null;
+    this.migrationSocket = null;
 
-    // 2. Kill the VS Code engine to free up RAM
     if (this.monacoEditorInstance) {
       this.monacoEditorInstance.dispose();
+    }
+  }
+
+  private closeSocket(socket: WebSocket | null): void {
+    if (!socket) return;
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      socket.close();
     }
   }
 
@@ -255,15 +251,11 @@ isProfileDropdownOpen = false;
   }
 
   resumeSession(sessionId: string, crm: string, object: string) {
-    // 1. Update the UI state to match the old session
     this.currentSessionId = sessionId;
     this.sourceCrmId = crm.toLowerCase();
     this.selectedSourceObject = object.toLowerCase();
 
     this.toastr.info(`Restoring previous session...`, 'Resuming');
-
-    // 2. Trigger the WebSocket with Revalidation = true, passing empty records
-    // Your Python backend will see the ID, skip API extraction, and instantly return the DB errors!
     this.validateData(true, []);
   }
 
@@ -317,14 +309,13 @@ isProfileDropdownOpen = false;
     const fromIdx = queryLower.indexOf(' from ');
     if (fromIdx === -1) return null;
 
-    const selectClause = query.substring(7, fromIdx).trim(); // strip leading "SELECT "
-    if (selectClause === '*') return null; // wildcard -- no restriction
+    const selectClause = query.substring(7, fromIdx).trim();
+    if (selectClause === '*') return null;
 
     const fields = selectClause
       .split(',')
       .map((f) => f.trim())
       .filter((f) => f.length > 0)
-      // Strip relationship dot-notation to its root field, e.g. "Account.Name" -> "Account"
       .map((f) => f.split('.')[0]);
 
     return fields.length > 0 ? fields : null;
@@ -335,7 +326,7 @@ isProfileDropdownOpen = false;
     try {
       parsed = JSON.parse(query.replace(/\/\*[\s\S]*?\*\//g, '').trim());
     } catch {
-      return null; // invalid/partial JSON mid-edit -- no restriction yet
+      return null; 
     }
 
     const properties = parsed?.properties;
@@ -382,21 +373,20 @@ isProfileDropdownOpen = false;
 
   get visibleMappings() {
     let filtered = this.mappings;
+
     const queryFieldSet = this.getQueryFieldFilterSet();
     if (queryFieldSet) {
       filtered = filtered.filter(
         (m) =>
           queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
-          !!m.targetField // never hide a field the user already mapped, even if the query text changed since
+          !!m.targetField 
       );
     }
 
-    // 1. Filter out already mapped fields if toggled
     if (this.hideMappedFields) {
       filtered = filtered.filter((m) => !m.targetField);
     }
 
-    // 2. Filter by the user's search query (matches field name or label)
     if (this.mappingSearchQuery) {
       const query = this.mappingSearchQuery.toLowerCase().trim();
       filtered = filtered.filter(
@@ -408,12 +398,10 @@ isProfileDropdownOpen = false;
     return filtered;
   }
 
-  /** True when the current query actually restricts which source fields are selected. */
   get isQueryFieldFilterActive(): boolean {
     return this.getQueryFieldFilterSet() !== null;
   }
 
-  /** Count of fields the active query selects, for the UI badge. */
   get queryFilteredFieldCount(): number {
     return this.getQuerySelectedFields()?.length ?? 0;
   }
@@ -421,7 +409,7 @@ isProfileDropdownOpen = false;
   private getLiveRecordHeaders(): string[] {
     if (!this.previewRecords || this.previewRecords.length === 0) return [];
     const headerSet = new Set<string>();
-    const sampleSize = Math.min(this.previewRecords.length, 25); // union across a few rows -- some CRMs omit null fields per-record
+    const sampleSize = Math.min(this.previewRecords.length, 25); 
     for (let i = 0; i < sampleSize; i++) {
       Object.keys(this.previewRecords[i] || {}).forEach((k) => headerSet.add(k));
     }
@@ -461,10 +449,9 @@ toggleProfileDropdown(event: Event): void {
 }
 
   changePreviewLimit(newLimit: number) {
-    // Force JavaScript to treat the dropdown value as a number
+
     this.previewLimit = Number(newLimit);
 
-    // If they already selected an object, instantly fetch the new rows!
     if (this.selectedSourceObject) {
       this.applyFilter();
     }
@@ -489,7 +476,7 @@ toggleProfileDropdown(event: Event): void {
   get hasPendingEdits(): boolean {
     if (!this.validationResults?.invalidRecords) return false;
 
-    // Check if ANY record has the _editedFields object with at least one true value
+  
     return this.validationResults.invalidRecords.some((rec: any) => rec._editedFields && Object.keys(rec._editedFields).length > 0);
   }
 
@@ -500,9 +487,8 @@ toggleProfileDropdown(event: Event): void {
 
     if (srcType === tgtType) return false;
 
-    //  Strings can usually map to picklists or text areas
     if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
-    // Numbers can map to other numbers
+  
     if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType))
       return false;
 
@@ -731,7 +717,6 @@ toggleProfileDropdown(event: Event): void {
           const wordInfo = model.getWordAtPosition(position);
           if (!wordInfo) return null;
 
-          //Strip out Zendesk operators (:, <, >) so we can match the pure field name
           const cleanWord = wordInfo.word.replace(/[:<>]/g, '').toLowerCase();
 
           const field = this.sourceFields.find((f) => f.name.toLowerCase() === cleanWord);
@@ -752,13 +737,11 @@ toggleProfileDropdown(event: Event): void {
     }
   }
 
-  // Overwrite the old inject function to use Monaco's cursor placement
+
   injectFieldAtCursor(fieldName: string) {
     if (this.monacoEditorInstance) {
-      // Get the user's current cursor position inside the editor
       const position = this.monacoEditorInstance.getPosition();
 
-      // Inject the text exactly where they clicked
       this.monacoEditorInstance.executeEdits('custom-inject', [
         {
           range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
@@ -767,11 +750,9 @@ toggleProfileDropdown(event: Event): void {
         }
       ]);
 
-      // Keep the editor focused so they can keep typing
       this.monacoEditorInstance.focus();
       this.customQuery = this.monacoEditorInstance.getValue();
     } else {
-      // Fallback just in case Monaco hasn't fully loaded
       if (!this.customQuery) {
         this.customQuery = fieldName;
       } else {
@@ -849,7 +830,6 @@ toggleProfileDropdown(event: Event): void {
         }
         this.customQuery = `type:${singularName} `;
       } else {
-        // ---Auto-inject the custom layout instructions ---
         this.customQuery = this.ZENDESK_CUSTOM_OBJECT_TEMPLATE;
       }
     } else if (crm === 'hubspot') {
@@ -919,9 +899,6 @@ toggleProfileDropdown(event: Event): void {
   selectField(mapping: any, fieldName: string) {
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
-    if (!fieldName || fieldName === '') {
-      mapping._mappedBy = null;
-    }
     delete mapping._mappedBy;
 
     if (this.isReferenceField(fieldName)) {
@@ -938,7 +915,10 @@ toggleProfileDropdown(event: Event): void {
   }
 
   getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
-    let filtered = this.targetFields;
+    const claimedByOtherRows = new Set(
+      this.mappings.filter((m) => m.sourceField !== sourceFieldName && m.targetField).map((m) => m.targetField)
+    );
+    let filtered = this.targetFields.filter((t) => !claimedByOtherRows.has(t.name));
 
     if (this.isStrictMapping) {
       const sourceMeta = this.sourceFields.find((f) => f.name === sourceFieldName);
@@ -978,7 +958,6 @@ toggleProfileDropdown(event: Event): void {
     if (crm === 'zendesk') {
       return !!field.externalId;
     }
-    // Salesforce and default fallback
     return field.name === 'Id' || !!field.externalId || !!field.idLookup;
   }
 
@@ -1156,7 +1135,6 @@ toggleProfileDropdown(event: Event): void {
 
     let safeQuery = this.customQuery.trim();
 
-    // --- ADD THIS CLEANING BLOCK FOR CUSTOM OBJECTS ---
     if (this.sourceCrmId.toLowerCase() === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
       safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
 
@@ -1193,7 +1171,6 @@ toggleProfileDropdown(event: Event): void {
         body: JSON.stringify(payload)
       });
 
-      // --- DETAILED ERROR LOGGING EXTRACTED FROM BACKEND ---
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown Server Error' }));
         throw new Error(errorData.detail || 'Failed to fetch filtered data.');
@@ -1207,11 +1184,9 @@ toggleProfileDropdown(event: Event): void {
       console.error('Filter Error:', error);
       this.previewRecords = [];
 
-      // --- Bind the CRM API error directly to the query editor! ---
       const errorMessage = error.message || 'Invalid Query Syntax rejected by CRM.';
       this.queryError = `API Error: ${errorMessage}`;
 
-      // Show popup and log it
       this.toastr.error('Your query was rejected by the source CRM.', 'Query Error');
       this.logMessages = [...this.logMessages, ` API Error: ${errorMessage}`];
     } finally {
@@ -1262,7 +1237,6 @@ toggleProfileDropdown(event: Event): void {
   validateQuery(): boolean {
     this.queryError = null;
 
-    //  Clear existing red squiggles every time they type
     if (this.monacoEditorInstance) {
       monaco.editor.setModelMarkers(this.monacoEditorInstance.getModel(), 'sql-validation', []);
     }
@@ -1272,7 +1246,7 @@ toggleProfileDropdown(event: Event): void {
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
 
-    //  Helper Function to Draw Red Squiggles
+
     const applySquiggle = (errorMsg: string, offendingText: string): boolean => {
       this.queryError = errorMsg;
 
@@ -1280,14 +1254,12 @@ toggleProfileDropdown(event: Event): void {
         const model = this.monacoEditorInstance.getModel();
         const fullText = model.getValue().toLowerCase();
 
-        // Find exactly where the bad text starts in the query
         const startIndex = fullText.indexOf(offendingText.toLowerCase());
 
         if (startIndex !== -1) {
           const startPos = model.getPositionAt(startIndex);
           const endPos = model.getPositionAt(startIndex + offendingText.length);
 
-          // Command Monaco to draw the red squiggly line!
           monaco.editor.setModelMarkers(model, 'sql-validation', [
             {
               startLineNumber: startPos.lineNumber,
@@ -1311,7 +1283,6 @@ toggleProfileDropdown(event: Event): void {
 
       if (!isStandard) {
         // --- CUSTOM OBJECT VALIDATION ---
-        // 1. Empty is perfectly fine (Fetches all recent)
         const cleanJsonText = this.customQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
 
         if (cleanJsonText === '') return true;
@@ -1496,7 +1467,6 @@ toggleProfileDropdown(event: Event): void {
     this.cdr.detectChanges();
 
     forkJoin({
-      // Tell the backend EXACTLY which DB slot to look up
       sourceObjs: this.mappingApi.getObjects(this.sourceCrmId, 'source'),
       targetObjs: this.mappingApi.getObjects(this.targetCrmId, 'target')
     }).subscribe({
@@ -1528,7 +1498,6 @@ toggleProfileDropdown(event: Event): void {
         this.cdr.detectChanges();
         this.loadMetadata();
 
-        // 2. Turn it off when finished!
         this.isGlobalLoading = false;
         this.cdr.detectChanges();
       },
@@ -1548,10 +1517,8 @@ toggleProfileDropdown(event: Event): void {
 
     if (!fieldName) return;
 
-    // Route the selected field through your Monaco cursor injector
     this.injectFieldAtCursor(fieldName);
 
-    // Reset the dropdown back to the placeholder
     selectElement.value = '';
   }
 
@@ -1561,14 +1528,15 @@ toggleProfileDropdown(event: Event): void {
       this.cdr.detectChanges();
       return;
     }
-
     this.cancelPendingMappingWork();
+
+    const targetObjectChanged = this.lastLoadedTargetObject !== this.selectedTargetObject;
+    this.lastLoadedTargetObject = this.selectedTargetObject;
 
     this.isLoading = true;
     this.cdr.detectChanges();
 
     forkJoin({
-      // Tell the backend EXACTLY which DB slot to look up
       sourceData: this.mappingApi.getFields(this.sourceCrmId, this.selectedSourceObject, 'source'),
       targetData: this.mappingApi.getFields(this.targetCrmId, this.selectedTargetObject, 'target')
     })
@@ -1593,13 +1561,15 @@ toggleProfileDropdown(event: Event): void {
             targetField: ''
           }));
 
-
-          this.externalIdField = '';
-          this.validationResults = null;
           this.showReviewPanel = false;
           this.reviewPanelMinimized = false;
           this.reviewFilter = 'mapped';
           this.mappingSearchQuery = '';
+
+          if (targetObjectChanged) {
+            this.externalIdField = '';
+            this.validationResults = null;
+          }
 
           this.updateMappedCount();
           this.isLoading = false;
@@ -1618,6 +1588,7 @@ toggleProfileDropdown(event: Event): void {
       });
   }
 
+  
   private cancelPendingMappingWork(): void {
     this.mappingCancel$.next();
 
@@ -1644,10 +1615,8 @@ toggleProfileDropdown(event: Event): void {
   }
 
   autoMap(): void {
-    // Prevent duplicate double-clicks
     if (this.isAutoMapping || this.isLoading) return;
 
-    // Set loading state
     this.isAutoMapping = true;
 
     let heuristicMatchCount = 0;
@@ -1684,11 +1653,11 @@ toggleProfileDropdown(event: Event): void {
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
     const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
-    const queryFieldSet = this.getQueryFieldFilterSet(); // null = no restriction, otherwise Auto-Map must stay inside it
+    const queryFieldSet = this.getQueryFieldFilterSet(); 
 
     this.mappings.forEach((m) => {
       if (m.targetField) return;
-      if (queryFieldSet && !queryFieldSet.has((m.sourceField || '').toLowerCase())) return; // outside the query's SELECT -- never auto-map it
+      if (queryFieldSet && !queryFieldSet.has((m.sourceField || '').toLowerCase())) return;
 
       const sourceMeta = this.sourceFields.find((sf) => sf.name === m.sourceField);
       if (!sourceMeta) return;
@@ -1725,7 +1694,6 @@ toggleProfileDropdown(event: Event): void {
           return;
         }
 
-        // DATA TYPE COMPATIBILITY CHECK
         const isExactTypeMatch = srcType === tgtType;
         const isForgivingTypeMatch =
           (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
@@ -1766,7 +1734,7 @@ toggleProfileDropdown(event: Event): void {
     });
 
     const unmappedSourcePayload = this.sourceFields.filter((sf) => {
-      if (queryFieldSet && !queryFieldSet.has(sf.name.toLowerCase())) return false; // outside the query's SELECT -- never send to the AI mapper either
+      if (queryFieldSet && !queryFieldSet.has(sf.name.toLowerCase())) return false;
       const activeMap = this.mappings.find((m) => m.sourceField === sf.name);
       return activeMap && !activeMap.targetField;
     });
@@ -1782,7 +1750,6 @@ toggleProfileDropdown(event: Event): void {
         if (this.toastr) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
         if (this.logMessages) this.logMessages.unshift(`System: Fast-pass local mapping matched ${heuristicMatchCount} fields.`);
 
-        // Opens review panel ONLY when fast-mapping is complete
         this.showReviewPanel = true;
         this.reviewPanelMinimized = false;
         this.reviewFilter = 'mapped';
@@ -1793,7 +1760,7 @@ toggleProfileDropdown(event: Event): void {
     }
 
     // =========================================================
-    // PHASE 2 & 3: UI SETUP AND AI FETCH (DEFERRED)
+    // PHASE 2 & 3: UI SETUP AND AI FETCH
     // =========================================================
     setTimeout(() => {
       this.isAutoMapping = true;
@@ -1821,11 +1788,10 @@ toggleProfileDropdown(event: Event): void {
               if (this.toastr) this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Hybrid Auto-Map Complete');
               if (this.logMessages) this.logMessages.unshift(`System: Hybrid Auto-mapping complete.`);
 
-              // Switch to mapped tab to show results
               this.reviewFilter = 'mapped';
             } else {
               if (this.toastr) this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
-              // Switch to unmapped tab to show what failed
+
               this.reviewFilter = 'unmapped';
             }
 
@@ -1853,7 +1819,7 @@ toggleProfileDropdown(event: Event): void {
                 const targetAlreadyClaimed = this.mappings.some(
                   (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
                 );
-
+ 
                 const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
 
                 if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
@@ -1868,7 +1834,6 @@ toggleProfileDropdown(event: Event): void {
               });
             }
 
-            // Fallback cleanup: Turn off spinners for this chunk
             currentChunk.forEach((field) => {
               const mappingRow = this.mappings.find((m) => m.sourceField === field.name);
               if (mappingRow) mappingRow._isAiProcessing = false;
@@ -1929,7 +1894,6 @@ toggleProfileDropdown(event: Event): void {
     if (!isRevalidation && this.customQuery && !this.validateQuery()) {
       this.jobStatus = 'Validation Failed';
       this.toastr.error('Please fix your query criteria before validating.', 'Query Error');
-      // Scroll to the top so the user sees the red query box
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -1971,7 +1935,6 @@ toggleProfileDropdown(event: Event): void {
       return;
     }
 
-    // Only show the big popup and wipe stats if it is a FRESH run
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
         title: 'Validate Entire Database?',
@@ -2035,7 +1998,6 @@ toggleProfileDropdown(event: Event): void {
       }
     }
 
-    // Inject the Revalidation flags into the payload
     const payload = {
       isRevalidation: isRevalidation,
       sessionId: this.currentSessionId,
@@ -2050,8 +2012,11 @@ toggleProfileDropdown(event: Event): void {
       authToken: localStorage.getItem('supabase_token') || ''
     };
 
-    // Connect to the new streaming websocket
+
+    this.closeSocket(this.validationSocket);
+
     const ws = new WebSocket(`${environment.wsUrl}/ws/validate-stream`);
+    this.validationSocket = ws;
 
     ws.onopen = () => {
       ws.send(JSON.stringify(payload));
@@ -2062,7 +2027,6 @@ toggleProfileDropdown(event: Event): void {
         const data = JSON.parse(event.data);
 
         if (data.log) {
-          // Keep only the last 50 logs to prevent UI lag on massive streams
           this.logMessages.push(data.log);
           if (this.logMessages.length > 50) this.logMessages.shift();
         }
@@ -2071,16 +2035,14 @@ toggleProfileDropdown(event: Event): void {
           this.jobStatus = data.status;
         }
 
-        // --- LIVE STAT UPDATES ---
         if (data.stats) {
           this.aggregateStats = data.stats;
         }
 
-        // --- FINAL RESULTS INJECTION ---
         if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
           this.validationResults.invalidRecords = data.invalidRecords;
           if (data.sessionId) {
-            this.currentSessionId = data.sessionId; // Save the session!
+            this.currentSessionId = data.sessionId;
           }
 
           if (data.invalidRecords.length >= 500) {
@@ -2096,6 +2058,7 @@ toggleProfileDropdown(event: Event): void {
 
     ws.onerror = () => {
       this.zone.run(() => {
+        if (this.validationSocket === ws) this.validationSocket = null;
         this.logError(' WebSocket Error: Validation stream disconnected.');
         this.jobStatus = 'Validation Failed';
         this.isValidating = false;
@@ -2112,6 +2075,7 @@ toggleProfileDropdown(event: Event): void {
 
     ws.onclose = () => {
       this.zone.run(() => {
+        if (this.validationSocket === ws) this.validationSocket = null;
         if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning' && this.jobStatus !== 'Validation Failed') {
           this.jobStatus = 'Disconnected';
         }
@@ -2124,14 +2088,12 @@ toggleProfileDropdown(event: Event): void {
   applyMassUpdate(sourceField: string, value: string | undefined) {
     if (value === undefined) value = '';
 
-    // Check if there are actually records to update
     if (!this.validationResults || !this.validationResults.invalidRecords || this.validationResults.invalidRecords.length === 0) {
       return;
     }
 
     let updatedCount = 0;
 
-    // Loop through ALL error records, but ONLY apply the fix if that specific cell failed!
     this.validationResults.invalidRecords.forEach((record: any) => {
       if (this.hasCellError(record, sourceField)) {
         record.originalRow[sourceField] = value;
@@ -2172,15 +2134,12 @@ toggleProfileDropdown(event: Event): void {
   async revalidatePreview() {
     if (!this.validationResults?.invalidRecords?.length) return;
 
-    // Grab all the rows currently in the error grid (including the user's edits)
     const recordsToTest = this.validationResults.invalidRecords.map((ir: any) => ir.originalRow);
 
-    // Pass True to trigger the shortcut in Python
     await this.validateData(true, recordsToTest);
   }
 
   goBackToConnection(): void {
-    // You can also add validation or warning prompts here if the user has unsaved mappings
     this.router.navigate(['/connection']);
   }
 
@@ -2200,7 +2159,6 @@ toggleProfileDropdown(event: Event): void {
       customClass: { popup: 'rounded-4 shadow-lg border-0' }
     }).then((result) => {
       if (result.isConfirmed) {
-        // 1. Disconnect active websockets
         if (this.validationSocket && this.validationSocket.readyState === WebSocket.OPEN) {
           this.validationSocket.close();
         }
@@ -2208,8 +2166,7 @@ toggleProfileDropdown(event: Event): void {
           this.migrationSocket.close();
         }
 
-        // 2. Clear this component's own local slots (not auth tokens —
-        // AuthService owns those)
+
         localStorage.removeItem('source_crm_slot');
         localStorage.removeItem('target_crm_slot');
 
@@ -2228,22 +2185,19 @@ toggleProfileDropdown(event: Event): void {
   downloadCSV(raw_data: any[], filename: string) {
     if (!raw_data || raw_data.length === 0) return;
 
-    // 1. Deeply flatten the data so NO JSON objects appear in your cells!
     const data = raw_data.map((row) => this.flattenObject(row));
 
-    // 2. Extract all unique headers to build the CSV columns
     const headerSet = new Set<string>();
     data.forEach((row) => Object.keys(row).forEach((key) => headerSet.add(key)));
     const headers = Array.from(headerSet);
 
     const csvRows = [];
-    csvRows.push(headers.join(',')); // Add Header Row
+    csvRows.push(headers.join(','));
 
     for (const row of data) {
       const values = headers.map((header) => {
         let val = row[header];
 
-        // Catch any leftover arrays
         if (val !== null && typeof val === 'object') {
           val = JSON.stringify(val);
         }
@@ -2274,7 +2228,6 @@ toggleProfileDropdown(event: Event): void {
   }
 
    runMigration() {
-    // 1. Preliminary UI Checks (Immediate feedback)
     if (this.hasPendingEdits) {
       this.toastr.warning(
         'You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.',
@@ -2288,10 +2241,8 @@ toggleProfileDropdown(event: Event): void {
       return;
     }
 
-    // 2. Fetch validation state (Hard errors vs Soft warnings)
     const { errors, warnings } = this.getValidationIssues();
 
-    // Handle Hard Errors immediately
     if (errors.length > 0) {
       this.jobStatus = 'Failed';
       this.toastr.error(errors[0], 'Migration Error');
@@ -2300,7 +2251,6 @@ toggleProfileDropdown(event: Event): void {
 
     const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
 
-    // 3. Decide whether to show a "Warning" Modal or a "Success Confirmation" Modal
     if (warnings.missingFields.length > 0 || warnings.incompleteRefs.length > 0) {
       this.show_warning_modal(warnings);
     } else {
@@ -2311,22 +2261,19 @@ toggleProfileDropdown(event: Event): void {
   private getValidationIssues() {
     const errors: string[] = [];
     const warnings = {
-      missingFields: this.getMissingRequiredFields(), // Returns string[]
-      incompleteRefs: this.getIncompleteReferenceMappings() // Returns string[]
+      missingFields: this.getMissingRequiredFields(),
+      incompleteRefs: this.getIncompleteReferenceMappings()
     };
 
-    // Query Validation (Hard Error)
     if (this.customQuery && !this.validateQuery()) {
       errors.push('Please fix your query criteria before running.');
     }
 
-    // Mapping Count Check
     const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
     if (activeMappings.length === 0) {
       errors.push('Please map at least one field before running the migration.');
     }
 
-    // Update/Upsert Specific Logic
     const isUpdateMode = this.operationMode === 'update' || this.operationMode === 'upsert';
     if (isUpdateMode) {
       if (!this.externalIdField) {
@@ -2348,7 +2295,6 @@ toggleProfileDropdown(event: Event): void {
       }
     }
 
-    // Object Existence Check
     if (!this.selectedSourceObject || !this.selectedTargetObject) {
       errors.push('Source and Target objects must be selected.');
     }
@@ -2442,7 +2388,6 @@ toggleProfileDropdown(event: Event): void {
   });
 }
 
-  // --- Separated execution logic for clean popup handling ---
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
     this.errorData = [];
@@ -2470,8 +2415,6 @@ toggleProfileDropdown(event: Event): void {
     });
 
     let safeQuery = this.customQuery.trim();
-
-    // --- ADD THIS SAME CLEANING BLOCK HERE ---
     if (this.sourceCrmId.toLowerCase() === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
       safeQuery = safeQuery.replace(/\/\*[\s\S]*?\*\//g, '').trim();
 
@@ -2511,7 +2454,11 @@ toggleProfileDropdown(event: Event): void {
     };
 
     const payload = { queue: [job] };
+
+    this.closeSocket(this.migrationSocket);
+
     const ws = new WebSocket(`${environment.wsUrl}/ws/migrate`);
+    this.migrationSocket = ws;
 
     ws.onopen = () => {
       ws.send(JSON.stringify(payload));
@@ -2528,7 +2475,6 @@ toggleProfileDropdown(event: Event): void {
         if (data.status) {
           this.jobStatus = data.status;
 
-          // --- POST-MIGRATION POPUP ---
           if (data.status === 'Finished') {
             this.isGlobalLoading = false;
             const successCount = data.successData ? data.successData.length : 0;
@@ -2538,7 +2484,6 @@ toggleProfileDropdown(event: Event): void {
             let swalIcon: 'success' | 'warning' | 'error' = 'success';
             let swalTitle = 'Migration Complete!';
 
-            // Skipped records (Update mode intentionally not creating new records)
             if (errorCount > 0 && successCount > 0) {
               swalIcon = 'warning';
               swalTitle = 'Migration Finished with Errors';
@@ -2585,7 +2530,6 @@ toggleProfileDropdown(event: Event): void {
 
         this.cdr.detectChanges();
         setTimeout(() => {
-          // Auto-scroll the terminal
           const logContainer = document.querySelector('#terminal-window');
           if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
         }, 10);
@@ -2594,6 +2538,7 @@ toggleProfileDropdown(event: Event): void {
 
     ws.onerror = () => {
       this.zone.run(() => {
+        if (this.migrationSocket === ws) this.migrationSocket = null;
         this.isGlobalLoading = false;
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
         this.jobStatus = 'Failed';
@@ -2611,6 +2556,7 @@ toggleProfileDropdown(event: Event): void {
 
     ws.onclose = () => {
       this.zone.run(() => {
+        if (this.migrationSocket === ws) this.migrationSocket = null;
         this.isGlobalLoading = false;
         if (this.jobStatus === 'Running' || this.jobStatus === 'Initializing...') {
           this.jobStatus = 'Disconnected';

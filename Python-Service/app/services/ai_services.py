@@ -8,7 +8,6 @@ from typing import Dict, List, Any
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
 EMBEDDING_MODEL = "mxbai-embed-large" 
 
-# In-memory cache to prevent re-embedding the same target fields
 _TARGET_CACHE: Dict[str, List[float]] = {}
 
 # ====================================================
@@ -112,12 +111,10 @@ class LocalAiService:
         if not raw_name and not label:
             return ""
 
-        # Step A: Clean standard CRM noise (__c, __r, camelCase, underscores)
         clean_name = raw_name.replace('__c', '').replace('__r', '')
         s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1 \2', clean_name)
         base_string = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').lower().strip()
 
-        # Step B: Check Synonym Taxonomy cheat sheet
         condensed_key = base_string.replace(' ', '')
         taxonomy_expansion = CRM_FIELD_CONTEXT.get(condensed_key, "")
 
@@ -127,13 +124,11 @@ class LocalAiService:
         else:
             if base_string:
                 parts.append(base_string)
-            # Include human label if different from field name
             if label:
                 clean_label = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', label).replace('_', ' ').lower().strip()
                 if clean_label != base_string:
                     parts.append(clean_label)
 
-        # Include description context if available (truncated for vector efficiency)
         if desc:
             clean_desc = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(desc)).lower().strip()[:80]
             parts.append(clean_desc)
@@ -168,7 +163,6 @@ class LocalAiService:
             'createdat', 'updatedat', 'updateddate', 'deleted'
         }
         
-        # Exclude system fields from target selection
         target_fields = [
             f for f in target_fields 
             if f.get("name", "").lower() not in restricted_targets
@@ -176,13 +170,10 @@ class LocalAiService:
 
         if not target_fields:
             return {"mappings": []}
-        # ====================================================
 
-        # 1. Clean and enrich text for source and target fields
         src_texts = [LocalAiService.prep_text(f) for f in source_fields]
         tgt_texts = [LocalAiService.prep_text(f) for f in target_fields] 
         
-        # 2. Check Cache for Target Vectors to avoid redundant API calls
         tgt_texts_to_fetch = []
         tgt_indices_to_fetch = []
         tgt_vectors = [None] * len(target_fields)
@@ -195,7 +186,6 @@ class LocalAiService:
                 tgt_texts_to_fetch.append(cache_key)
                 tgt_indices_to_fetch.append(i)
 
-        # 3. Fetch Embeddings from Ollama
         src_vectors = await LocalAiService.get_embeddings(src_texts)
         
         if tgt_texts_to_fetch:
@@ -204,7 +194,6 @@ class LocalAiService:
                 tgt_vectors[idx] = vec
                 _TARGET_CACHE[text] = vec 
 
-        # Pre-compute magnitudes for high-speed mathematical loops
         src_mags = [LocalAiService._precompute_magnitude(v) for v in src_vectors]
         tgt_mags = [LocalAiService._precompute_magnitude(v) for v in tgt_vectors]
 
@@ -212,13 +201,11 @@ class LocalAiService:
         claimed_targets = set() 
         all_potential_matches = []
 
-        # High-Accuracy Data Type Categories
         numeric_types = {'number', 'integer', 'double', 'currency', 'float', 'decimal', 'percent'}
         text_types = {'string', 'text', 'textarea', 'picklist', 'reference', 'id', 'url', 'phone', 'email'}
         date_types = {'date', 'datetime', 'timestamp'}
         bool_types = {'boolean', 'checkbox'}
 
-        # 4. Score all field combinations
         for idx_src, src_vec in enumerate(src_vectors):
             src_field = source_fields[idx_src]
             src_type = src_field.get("type", "string").lower()
@@ -228,7 +215,6 @@ class LocalAiService:
                 tgt_field = target_fields[idx_tgt]
                 tgt_type = tgt_field.get("type", "string").lower()
 
-                # STRICT TYPE ENFORCEMENT
                 is_exact_type = src_type == tgt_type
                 is_forgiving = (
                     (src_type in text_types and tgt_type in text_types) or
@@ -240,14 +226,11 @@ class LocalAiService:
                 if not (is_exact_type or is_forgiving):
                     continue
 
-                # Math calculation (Cosine Similarity)
                 similarity = LocalAiService.fast_cosine_similarity(src_vec, tgt_vec, src_mag, tgt_mags[idx_tgt])
                 
-                # BONUS 1: Exact Cleaned Text Match
                 if src_texts[idx_src] == tgt_texts[idx_tgt]:
                     similarity += 0.20
 
-                # BONUS 2: Exact Data Type Match
                 if is_exact_type:
                     similarity += 0.05 
                 
@@ -258,7 +241,6 @@ class LocalAiService:
                         "confidence": similarity
                     })
 
-        # 5. Collision Prevention: Sort matches by highest confidence first
         all_potential_matches.sort(key=lambda x: x["confidence"], reverse=True)
 
         for match in all_potential_matches:

@@ -12,20 +12,19 @@ class HubspotMigrator:
 
     async def extract(self, client, creds, obj_name, query, mappings, send_log):
         token = creds.get("access_token")
-        user_id = creds.get("user_id") # <-- Needed for refresh
+        user_id = creds.get("user_id")
         domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
         safe_obj = obj_name.lower()
         source_records = []
         
-        # --- Support both UI mapping formats ---
+        
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
             if source_field and source_field not in properties:
                 properties.append(source_field)
-        # ------------------------------------------------
 
         try:
             url = f"{domain}/crm/v3/objects/{safe_obj}/search"
@@ -43,7 +42,6 @@ class HubspotMigrator:
                     await send_log(f" [HubSpot Extraction] Invalid query format. Ignoring.")
 
             while True:
-                # Silent Retry Loop for Extraction
                 while True:
                     res = await client.post(url, headers=headers, json=payload)
                     
@@ -72,11 +70,9 @@ class HubspotMigrator:
                     props = rec.get("properties", {})
                     if props:
                         for k, v in props.items(): 
-                            # --- Safeguard against nested objects in HubSpot ---
                             if isinstance(v, dict):
                                 flat_rec[k] = str(v)
                             elif isinstance(v, list):
-                                # Convert lists to semicolon-separated strings (standard for CSVs)
                                 flat_rec[k] = ";".join([str(i) for i in v])
                             else:
                                 flat_rec[k] = v
@@ -148,7 +144,6 @@ class HubspotMigrator:
                         dedupe_val = c["targetRecord"].get(dedupe_key)
                         if dedupe_val:
                             hs_records.append({
-                                # Use .get() instead of .pop() to keep the email in the properties body!
                                 "id": str(dedupe_val),
                                 "idProperty": dedupe_key,
                                 "properties": c["targetRecord"]
@@ -171,16 +166,14 @@ class HubspotMigrator:
                 req_payload = {"inputs": hs_records}
                 
                 try:
-                    # ---  Silent Retry Loop for Uploads ---
                     while True:
                         res = await client.post(endpoint, json=req_payload, headers=headers)
                         
-                        # Catch Expiration Mid-Upload
                         if res.status_code == 401:
                             await send_log(f" HubSpot token expired mid-migration. Silently refreshing...")
                             token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
                             headers["Authorization"] = f"Bearer {token}"
-                            continue # Retry exact chunk
+                            continue
 
                         if res.status_code == 429:
                             retry_after = int(res.headers.get("Retry-After", 10))
@@ -269,7 +262,6 @@ class HubspotMigrator:
                         continue
 
                     if hs_res.get("success"):
-                        # ---  Strict String Cast ---
                         raw_id = hs_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         

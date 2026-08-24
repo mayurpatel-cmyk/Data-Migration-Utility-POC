@@ -99,10 +99,8 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
         token_data = response.json()
 
     try:
-        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
         supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        # INSERT: Fresh Salesforce connection
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "salesforce",
@@ -171,10 +169,8 @@ async def zoho_callback(code: str, state: str, request: Request):
         token_data = response.json()
 
     try:
-        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
         supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        # INSERT: Fresh Zoho connection
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "zoho",
@@ -208,7 +204,6 @@ def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_curren
         "state": custom_state
     }
     
-    # Zendesk isolates accounts dynamically by the {subdomain} injected into this URL
     auth_url = f"https://{subdomain}.zendesk.com/oauth/authorizations/new?{urllib.parse.urlencode(params)}"
     
     return {"url": auth_url}
@@ -235,10 +230,8 @@ async def zendesk_callback(code: str, state: str):
         token_data = response.json()
 
     try:
-        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
         supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        # INSERT: Fresh Zendesk connection
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "zendesk",
@@ -258,10 +251,8 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     import urllib.parse
 
     HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
-    # Ensure this matches the exact redirect URI configured in your HubSpot App
     HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
 
-    # Pass the user_id in the state, matching your other CRMs
     custom_state = f"{side}::{current_user.id}"
 
     scopes = "crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write tickets"
@@ -278,7 +269,6 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
 @router.get("/auth/hubspot/callback")
 async def hubspot_callback(code: str, state: str):
     try:
-        # Extract side and user_id from state
         side, user_id = state.split("::")
     except ValueError:
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
@@ -303,23 +293,20 @@ async def hubspot_callback(code: str, state: str):
         token_data = response.json()
 
     try:
-        # UNIVERSAL WIPE: Erase whatever is currently in this slot (Source or Target)
         supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
         
-        # INSERT: Fresh HubSpot connection
         supabase.table("crm_connections").insert({
             "user_id": user_id,
             "crm_type": "hubspot",
             "connection_role": side,
             "access_token": token_data.get("access_token"),
             "refresh_token": token_data.get("refresh_token", ""),
-            "api_domain": "https://api.hubapi.com" # Setting standard Hubspot API domain
+            "api_domain": "https://api.hubapi.com" 
         }).execute()
     except Exception as e:
         print(f"Hubspot DB Insert Error: {e}")
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
-    # Redirect to frontend exactly like the other CRMs do
     return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=hubspot")
 
 # =========================================================

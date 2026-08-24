@@ -3,7 +3,6 @@ import { Component, OnInit, inject, OnDestroy, ChangeDetectorRef } from '@angula
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
-import { BreadcrumbComponent } from "src/app/theme/shared/components/breadcrumbs/breadcrumbs.component";
 import { CrmAuthService, CrmConnection } from 'src/app/services/CrmAuthService.service';
 import { ToastrService } from 'ngx-toastr';
 import { Subscription, switchMap, delay } from 'rxjs';
@@ -57,7 +56,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
   isTargetConnecting: boolean = false;
 
   ngOnInit() {
-    this.isPageLoading = true; // Start loading immediately
+    this.isPageLoading = true;
 
     this.authSubscription = this.route.queryParams.pipe(
       switchMap(params => {
@@ -78,13 +77,13 @@ export class ConnectionComponent implements OnInit, OnDestroy {
     ).subscribe({
       next: (connections: CrmConnection[]) => {
         this.parseConnections(connections);
-        this.isPageLoading = false; // Turn off page loader
+        this.isPageLoading = false;
         this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('Failed to load CRM connections', err);
         this.toastr.error('Could not load your saved connections.');
-        this.isPageLoading = false; // Turn off page loader even on error
+        this.isPageLoading = false;
         this.cdr.detectChanges();
       }
     });
@@ -167,7 +166,6 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       localStorage.removeItem('target_crm_slot');
     }
 
-    // Turn off connecting spinners if they came back from OAuth
     this.isSourceConnecting = false;
     this.isTargetConnecting = false;
 
@@ -205,7 +203,6 @@ export class ConnectionComponent implements OnInit, OnDestroy {
 
     this.crmAuthService.connectCrm(selectedCrmId, side, subdomain, region, env);
     
-    // Safety fallback: if redirect fails or gets blocked, reset loaders after 5s
     setTimeout(() => {
       this.isSourceConnecting = false;
       this.isTargetConnecting = false;
@@ -260,7 +257,7 @@ export class ConnectionComponent implements OnInit, OnDestroy {
       
     } else if (method === 'csv') {
       if (!this.isTargetConnected) return;
-      localStorage.setItem('source_crm_slot', 'csv'); // Force the context to CSV
+      localStorage.setItem('source_crm_slot', 'csv');
       
       this.router.navigate(['/data-validation'], {
         state: { sourceCrm: 'csv', targetCrm: this.selectedTarget }

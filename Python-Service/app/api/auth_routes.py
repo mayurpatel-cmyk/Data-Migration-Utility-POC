@@ -7,10 +7,8 @@ from app.api.dependencies.auth import get_current_user
 router = APIRouter()
 
 
-# Add this Pydantic model near your other payloads
 class UpdateEmailPayload(BaseModel):
     new_email: str
-# 1. Separate Payloads for better validation
 class LoginPayload(BaseModel):
     email: str
     password: str
@@ -18,7 +16,7 @@ class LoginPayload(BaseModel):
 class SignUpPayload(BaseModel):
     email: str
     password: str
-    full_name: str  # Added Full Name requirement
+    full_name: str 
 
 class RefreshPayload(BaseModel):
     refresh_token: str
@@ -37,7 +35,7 @@ def login(payload: LoginPayload):
     return {
         "success": True,
         "token": session.access_token,
-        "refresh_token": session.refresh_token, # Send refresh token to frontend
+        "refresh_token": session.refresh_token,
         "user": {
             "id": session.user.id,
             "email": session.user.email,

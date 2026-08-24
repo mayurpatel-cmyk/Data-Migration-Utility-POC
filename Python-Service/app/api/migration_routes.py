@@ -10,8 +10,6 @@ from app.services.crm_query_service import CrmQueryService
 import math
 import csv
 from fpdf import FPDF
-
-# Import our Migrators!
 from app.services.migrators.salesforce_migrator import SalesforceMigrator
 from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
@@ -42,7 +40,7 @@ MIGRATORS = {
     "hubspot": HubspotMigrator()
 }
 
-# Files/Attachments migration is Salesforce -> Salesforce only for now
+# Files/Attachments migration is Salesforce -> Salesforce only
 FILE_MIGRATOR = SalesforceFileMigrator()
 
 _SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
@@ -281,10 +279,8 @@ async def websocket_migration(websocket: WebSocket):
             for record in all_success_data:
                 safe_record = {}
                 for key, value in record.items():
-                    # Convert NaN (Not a Number) to None/null
                     if isinstance(value, float) and math.isnan(value):
                         safe_record[key] = None
-                    # Convert datetime or other objects to strings
                     elif hasattr(value, "isoformat"):
                         safe_record[key] = value.isoformat()
                     else:
@@ -293,20 +289,16 @@ async def websocket_migration(websocket: WebSocket):
             
             formatted_errors = []
             for err in all_error_data:
-                # 1. Guarantee err is a dictionary to prevent JS crashes
                 if not isinstance(err, dict):
                     err = {"Raw_Data": str(err), "Target_Error": "Unknown error format."}
                 
-                # 2. Extract the exact error message
                 error_msg = err.get("Target_Error", "API rejected this record.")
                 
-                # 3. Clean and Sanitize the record object
                 safe_record = {}
                 for k, v in err.items():
                     if k == "Target_Error":
                         continue
                     
-                    # Prevent JSON crashes from NaN or datetime objects
                     if isinstance(v, float) and math.isnan(v):
                         safe_record[k] = None
                     elif hasattr(v, "isoformat"):
@@ -314,12 +306,10 @@ async def websocket_migration(websocket: WebSocket):
                     else:
                         safe_record[k] = str(v) if v is not None else ""
                 
-                # 4. Append in the exact format Angular needs
                 formatted_errors.append({
                     "record": safe_record,
                     "error": error_msg
                 })
-                #  Generate PDF, CSVs, and Save History ---
 
 
             formatted_skipped = []
@@ -346,7 +336,6 @@ async def websocket_migration(websocket: WebSocket):
                     "reason": skip_reason
                 })
 
-        # Generate PDF, CSVs, and Save History ---
         report_urls = {}
         try:
             await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
@@ -362,7 +351,7 @@ async def websocket_migration(websocket: WebSocket):
             )
         except Exception as e:
             print(f"Failed to generate reports: {e}")
-            report_urls = {} # Fallback to empty if it fails
+            report_urls = {}
 
         
         await websocket.send_json({
@@ -372,7 +361,7 @@ async def websocket_migration(websocket: WebSocket):
             "successData": safe_success_data,
             "errorData": formatted_errors,
             "skippedData": formatted_skipped,
-            "reportUrls": report_urls  # Send the PDF URLs back to the frontend
+            "reportUrls": report_urls
 
         })
         
@@ -522,7 +511,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                 await websocket.close()
                 return
 
-        # 3. GRAB INITIAL UI ERRORS
+        # 3. INITIAL UI ERRORS
         cursor = conn.cursor()
         cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
         all_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]

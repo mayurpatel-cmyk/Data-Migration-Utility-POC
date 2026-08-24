@@ -8,7 +8,6 @@ class AuthService:
     @staticmethod
     def sign_up(email: str, password: str, full_name: str):
         try:
-            # Pass the full_name into Supabase's user metadata
             response = supabase.auth.sign_up({
                 "email": email,
                 "password": password,

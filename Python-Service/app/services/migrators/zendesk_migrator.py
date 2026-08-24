@@ -21,7 +21,6 @@ class ZendeskMigrator:
         safe_obj = obj_name.strip().lower()
         source_records = []
         
-        # 1. Determine if this is a standard object or a custom object
         standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
         is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
         
@@ -239,7 +238,6 @@ class ZendeskMigrator:
 
             data = res.json()
 
-            # ASYNC JOB POLLING: Bulk API endpoints return a Job Status ID
             if "job_status" in data:
                 job_id = data["job_status"]["id"]
                 await send_log(f" Batch accepted. Waiting for Zendesk Background Job: {job_id}...")
@@ -332,7 +330,6 @@ class ZendeskMigrator:
                 return await process_manual_upsert_chunk(chunk)
 
             if is_standard_object:
-                # DYNAMIC JSON WRAPPER: Zendesk root keys MUST match the object name exactly
                 zendesk_data_rows = [c["targetRecord"] for c in chunk]
                 req_payload = {target_object: zendesk_data_rows}
             else:
@@ -346,7 +343,6 @@ class ZendeskMigrator:
 
             return {"chunk": chunk, "status": "completed", "results": results}
 
-        # Fire off batches concurrently (5 chunks at a time to respect limits)
         batch_results = []
         for i in range(0, len(chunks), 5):
             concurrent_batch = chunks[i:i+5]
@@ -382,7 +378,6 @@ class ZendeskMigrator:
                         continue
 
                     if is_success:
-                        # --- Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         
@@ -393,7 +388,6 @@ class ZendeskMigrator:
                         all_error_data.append(orig_record)
                         total_error += 1
                     else: 
-                        # ---  Strict String Cast ---
                         raw_id = z_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                         

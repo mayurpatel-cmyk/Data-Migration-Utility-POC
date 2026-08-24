@@ -243,13 +243,11 @@ async def get_active_sessions(current_user = Depends(get_current_user)):
     if not os.path.exists(base_dir):
         return {"sessions": sessions}
     
-    # Search for all .db files recursively in the staging directory
     for filepath in glob.glob(f"{base_dir}/*/*/*.db"):
         filename = os.path.basename(filepath)
         session_id = filename.replace('.db', '')
         parts = session_id.split('_')
         
-        # Ensure it matches our Smart Session ID format: crm_object_date_time_uuid
         if len(parts) >= 4:
             crm = parts[0]
             obj = parts[1]
@@ -264,9 +262,8 @@ async def get_active_sessions(current_user = Depends(get_current_user)):
                 "object": obj.capitalize(),
                 "date": date_str,
                 "sizeMb": size_mb,
-                "timestamp": stats.st_mtime # Used for sorting
+                "timestamp": stats.st_mtime
             })
             
-    # Sort by newest first and return top 10
     sessions.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"sessions": sessions[:10]}
