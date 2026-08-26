@@ -87,7 +87,7 @@ class CrmQueryService:
             records = res.json().get("records", [])
             for r in records:
                 r.pop("attributes", None)
-            return {"records": records}
+            return {"records": records, "queryUsed": soql}
 
     @staticmethod
     async def execute_zendesk_query(creds: dict, obj_name: str, query: str, limit: int):
@@ -175,6 +175,7 @@ class CrmQueryService:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             coql_query = query.strip() if query else ""
+            used_coql = None
 
             if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
@@ -192,6 +193,7 @@ class CrmQueryService:
                     safe_fields = headers_list[:40] if headers_list else ["id"]
                     coql_query = f"select {','.join(safe_fields)} from {obj_name} where {combined_where} limit {limit}"
 
+                used_coql = coql_query
                 res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
             else:
                 safe_fields = headers_list[:40] if headers_list else ["id"]
@@ -212,7 +214,7 @@ class CrmQueryService:
                         flat_rec[k] = v
                 sample_records.append(flat_rec)
 
-            return {"records": sample_records}
+            return {"records": sample_records, "queryUsed": used_coql}
 
     @staticmethod
     async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):

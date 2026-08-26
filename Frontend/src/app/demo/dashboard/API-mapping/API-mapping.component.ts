@@ -397,6 +397,7 @@ enforceFilterLimits(): void {
   }
 }
 
+// Example getter if you need to strictly format the sourceSystem string
 get isEligibleForTimeFilter(): boolean {
   const crm = this.sourceSystem?.toLowerCase();
   return crm === 'salesforce' || crm === 'zoho';
@@ -1232,7 +1233,8 @@ toggleProfileDropdown(event: Event): void {
       const filterSuffix = (this.migrationTimeFilter.criteria && this.migrationTimeFilter.value)
         ? ` (filtered: last ${this.migrationTimeFilter.value} ${this.migrationTimeFilter.criteria})`
         : '';
-      this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${this.customQuery || 'default query'}]`];
+      const executedQuery = data.queryUsed || this.customQuery || 'default query';
+      this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
       this.previewRecords = [];
