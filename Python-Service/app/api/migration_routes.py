@@ -151,6 +151,7 @@ async def websocket_migration(websocket: WebSocket):
                 op_mode = job.get("operationMode", "insert")
                 batch_size = int(job.get("batchSize", 5000))
                 ext_id_field = job.get("externalIdField") or job.get("targetExtIdField", "")
+                time_filter = job.get("migrationTimeFilter")
                 migrate_attachments = job.get("migrateAttachments", False)
                 migrate_files = job.get("migrateFiles", False)
                 if migrate_attachments or migrate_files:
@@ -179,7 +180,7 @@ async def websocket_migration(websocket: WebSocket):
                     
                 else:
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
-                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log)
+                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,
                     "token": target_creds.get("access_token"), "instance_url": target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain"),
@@ -406,10 +407,12 @@ async def websocket_validate_stream(websocket: WebSocket):
                 return
 
             fixed_records = payload.get("fixedRecords", [])
+            query = payload.get("query", "").strip()
             mappings = payload.get("mappings", [])
             dedupe_key = payload.get("dedupeKey", "")
             sf_rules = payload.get("sfRules", {})
             target_crm = payload.get("targetCrmId", "salesforce").lower()
+            time_filter = payload.get("migrationTimeFilter")
 
             await websocket.send_json({"log": "System: Re-validating UI fixes...", "status": "Validating"})
 
@@ -460,6 +463,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         mappings = payload.get("mappings", [])
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
+        time_filter = payload.get("migrationTimeFilter")
 
         source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
         source_migrator = MIGRATORS.get(source_crm)
@@ -480,7 +484,9 @@ async def websocket_validate_stream(websocket: WebSocket):
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
-                raw_records = await source_migrator.extract(client, source_creds, obj_name, query, mappings, send_log)
+                raw_records = await source_migrator.extract(
+                    client, source_creds, obj_name, query, mappings, send_log, time_filter
+                )
                 
                 if not raw_records:
                     await send_log("No records found matching criteria.", "Validation Passed")

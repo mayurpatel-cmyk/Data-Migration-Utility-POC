@@ -7,12 +7,36 @@ def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
+def _merge_time_clause(base_query: str, time_clause: str, where_kw: str = "WHERE", and_kw: str = "AND") -> str:
+    """Safely merges a time_clause into a query that already starts with SELECT.
+    Handles a dangling WHERE (no condition after it) without leaving a
+    trailing AND/and with nothing after it -- see crm_query_service.py for
+    the full explanation, kept in sync here for the extraction path."""
+    if not time_clause:
+        return base_query
+
+    limit_match = re.search(r'(?i)\blimit\b.*$', base_query)
+    head = base_query[:limit_match.start()] if limit_match else base_query
+    tail = base_query[limit_match.start():] if limit_match else ""
+
+    where_match = re.search(r'(?i)\bwhere\b', head)
+    if where_match:
+        existing_condition = head[where_match.end():].strip()
+        if existing_condition:
+            new_head = f"{head[:where_match.end()]} {time_clause} {and_kw} {existing_condition}"
+        else:
+            new_head = f"{head[:where_match.end()]} {time_clause}"
+    else:
+        new_head = f"{head.rstrip()} {where_kw} {time_clause}"
+
+    return f"{new_head} {tail}".strip() if tail else new_head.strip()
+
 class SalesforceMigrator:
     
     # ==========================================
     # EXTRACT (Pull from Salesforce)
     # ==========================================
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         sf_token = creds.get("access_token")
         sf_instance = creds.get("instance_url", "").rstrip('/')
         
@@ -23,8 +47,25 @@ class SalesforceMigrator:
         
         clean_query = (query or "").strip()
 
+        # APPLY DYNAMIC TIME FILTER LOGIC
+        time_clause = ""
+        if time_filter and time_filter.get("value"):
+            val = int(time_filter["value"])
+            criteria = time_filter.get("criteria", "days")
+            date_field = time_filter.get("field") or "LastModifiedDate"
+            if criteria == "days":
+                time_clause = f"{date_field} = LAST_N_DAYS:{val}"
+            elif criteria == "months":
+                time_clause = f"{date_field} = LAST_N_MONTHS:{val}"
+            elif criteria == "years":
+                time_clause = f"{date_field} = LAST_N_YEARS:{val}"
+
         if clean_query.lower().startswith("select "):
             soql = clean_query
+            
+            if time_clause:
+                soql = _merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
+                    
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
             else:
@@ -32,12 +73,18 @@ class SalesforceMigrator:
                 if not re.search(r'\bid\b', select_clause, re.IGNORECASE):
                     soql = re.sub(r'(?i)^select\s+', 'SELECT Id, ', soql)
         else:
-            where_clause = f" WHERE {clean_query}" if clean_query else ""
-            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
+            where_parts = []
+            if clean_query: where_parts.append(f"({clean_query})")
+            if time_clause: where_parts.append(f"({time_clause})")
+            
+            where_combined = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+            soql = f"SELECT {fields_str} FROM {obj_name}{where_combined}"
         
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         safe_soql = urllib.parse.quote(soql)
         url = f"{sf_instance}/services/data/v60.0/query?q={safe_soql}"
+        
+        await send_log(f"[{obj_name}] Executing SOQL: {soql}")
         
         source_records = []
         while url:

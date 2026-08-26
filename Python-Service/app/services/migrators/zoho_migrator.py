@@ -1,40 +1,77 @@
 import re
 import asyncio
+from datetime import datetime, timedelta
 from app.services.crm_service import CrmService
 
-def chunk_dataset(data: list, chunk_size: int = 100):
-    for i in range(0, len(data), chunk_size):
-        yield data[i:i + chunk_size]
+def _merge_time_clause(base_query: str, time_clause: str, where_kw: str = "where", and_kw: str = "and") -> str:
+    """Safely merges a time_clause into a COQL query that already starts with
+    SELECT. Handles a dangling WHERE (no condition after it) without leaving
+    a trailing and/AND with nothing after it -- this is what produced Zoho's
+    'missing clause: where' SYNTAX_ERROR. Kept in sync with
+    crm_query_service.py's version used by the live preview endpoint."""
+    if not time_clause:
+        return base_query
+
+    limit_match = re.search(r'(?i)\blimit\b.*$', base_query)
+    head = base_query[:limit_match.start()] if limit_match else base_query
+    tail = base_query[limit_match.start():] if limit_match else ""
+
+    where_match = re.search(r'(?i)\bwhere\b', head)
+    if where_match:
+        existing_condition = head[where_match.end():].strip()
+        if existing_condition:
+            new_head = f"{head[:where_match.end()]} {time_clause} {and_kw} {existing_condition}"
+        else:
+            new_head = f"{head[:where_match.end()]} {time_clause}"
+    else:
+        new_head = f"{head.rstrip()} {where_kw} {time_clause}"
+
+    return f"{new_head} {tail}".strip() if tail else new_head.strip()
 
 class ZohoMigrator:
 
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
-        import re
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         zoho_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"):
             domain = f"https://{domain}"
             
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
+        time_clause = ""
+        if time_filter and time_filter.get("value"):
+            val = int(time_filter["value"])
+            criteria = time_filter.get("criteria", "days")
+            date_field = time_filter.get("field") or "Modified_Time"
+            
+            cutoff_date = datetime.now()
+            if criteria == "days":
+                cutoff_date -= timedelta(days=val)
+            elif criteria == "months":
+                cutoff_date -= timedelta(days=val * 30)
+            elif criteria == "years":
+                cutoff_date -= timedelta(days=val * 365)
+                
+            iso_str = cutoff_date.strftime('%Y-%m-%dT%H:%M:%S+00:00')
+            time_clause = f"{date_field} >= '{iso_str}'"
+
         try:
-            if query and query.strip():
-                coql_query = query.strip()
+            coql_query = query.strip() if query else ""
+
+            if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
-                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
-                        fields_str = ",".join(safe_fields)
-                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
-                        
-                    if " where " not in coql_query.lower():
-                        if " order by " in coql_query.lower():
-                            coql_query = re.sub(r'(?i)(\border\s+by\b)', r'where id is not null \1', coql_query, count=1)
-                        else:
-                            coql_query += " where id is not null"
+                    if time_clause:
+                        coql_query = _merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                 else:
-                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query}"
+                    where_parts = []
+                    if coql_query:
+                        where_parts.append(f"({coql_query})")
+                    if time_clause:
+                        where_parts.append(time_clause)
+                    combined_where = " and ".join(where_parts)
+                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {combined_where}"
 
                 if " limit " not in coql_query.lower():
                     coql_query += " limit 200"

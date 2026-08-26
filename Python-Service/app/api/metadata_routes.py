@@ -82,6 +82,7 @@ class PreviewFilterPayload(BaseModel):
     headers: List[str] = Field(default_factory=list)
     limit: int = 5
     role: str = "source"
+    migrationTimeFilter: Optional[Dict[str, Any]] = None 
 
 @router.post("/api/metadata/preview-filter")
 async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Depends(get_current_user)):
@@ -101,11 +102,11 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
         creds["access_token"] = token
 
         if crm_id == "salesforce":
-            return await CrmQueryService.execute_salesforce_query(creds, obj_name, query, headers_list, limit)
+            return await CrmQueryService.execute_salesforce_query(creds, obj_name, query, headers_list, limit,payload.migrationTimeFilter)
         elif crm_id == "zendesk":
             return await CrmQueryService.execute_zendesk_query(creds, obj_name, query, limit)
         elif crm_id == "zoho":
-            return await CrmQueryService.execute_zoho_query(creds, obj_name, query, headers_list, limit)
+            return await CrmQueryService.execute_zoho_query(creds, obj_name, query, headers_list, limit,payload.migrationTimeFilter)
         elif crm_id == "hubspot":
             return await CrmQueryService.execute_hubspot_query(creds, obj_name, query, headers_list, limit)
         else:

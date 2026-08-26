@@ -204,6 +204,7 @@ isProfileDropdownOpen = false;
 
     this.sourceSystem = this.sourceCrmId;
     this.targetSystem = this.targetCrmId;
+    this.migrationTimeFilter.field = this.timeFilterFieldOptions[0]?.value || '';
     this.batchSize = this.batchConfig.default;
 
     localStorage.setItem('source_crm_slot', this.sourceCrmId);
@@ -352,6 +353,54 @@ isProfileDropdownOpen = false;
     const cleaned = fields.map((f: any) => String(f).trim()).filter((f: string) => f.length > 0);
     return cleaned.length > 0 ? cleaned : null;
   }
+
+migrationTimeFilter = {
+  criteria: '',
+  value: null as number | null,
+  field: ''
+};
+
+get timeFilterFieldOptions(): { value: string; label: string }[] {
+  const crm = this.sourceSystem?.toLowerCase();
+  if (crm === 'zoho') {
+    return [
+      { value: 'Modified_Time', label: 'Last Modified' },
+      { value: 'Created_Time', label: 'Created' }
+    ];
+  }
+  return [
+    { value: 'LastModifiedDate', label: 'Last Modified' },
+    { value: 'CreatedDate', label: 'Created' }
+  ];
+}
+
+
+triggerLivePreview(): void {
+  const hasCriteria = !!this.migrationTimeFilter.criteria;
+  const hasValue = this.migrationTimeFilter.value !== null && this.migrationTimeFilter.value > 0;
+
+  if (hasCriteria && hasValue) {
+    this.applyFilter(); 
+  } 
+  else if (!hasCriteria && !hasValue) {
+    this.applyFilter();
+  }
+}
+
+enforceFilterLimits(): void {
+  if (this.migrationTimeFilter.value !== null) {
+    if (this.migrationTimeFilter.value < 1) {
+      this.migrationTimeFilter.value = 1;
+    } else if (this.migrationTimeFilter.value > 4000) {
+      this.migrationTimeFilter.value = 4000;
+    }
+  }
+}
+
+get isEligibleForTimeFilter(): boolean {
+  const crm = this.sourceSystem?.toLowerCase();
+  return crm === 'salesforce' || crm === 'zoho';
+}
 
   onQueryEdited() {
     this.queryError = null;
@@ -1158,7 +1207,8 @@ toggleProfileDropdown(event: Event): void {
       query: safeQuery,
       headers: this.previewHeaders,
       limit: this.previewLimit,
-      authToken: localStorage.getItem('supabase_token') || ''
+      authToken: localStorage.getItem('supabase_token') || '',
+      migrationTimeFilter: this.migrationTimeFilter
     };
 
     try {
@@ -1179,7 +1229,10 @@ toggleProfileDropdown(event: Event): void {
       const data = await response.json();
       this.previewRecords = data.records || [];
        this.loadSourceObjectCount(this.selectedSourceObject, safeQuery);
-      this.logMessages = [...this.logMessages, `System: Source preview updated using filter -> [${this.customQuery}]`];
+      const filterSuffix = (this.migrationTimeFilter.criteria && this.migrationTimeFilter.value)
+        ? ` (filtered: last ${this.migrationTimeFilter.value} ${this.migrationTimeFilter.criteria})`
+        : '';
+      this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${this.customQuery || 'default query'}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
       this.previewRecords = [];
@@ -2009,7 +2062,8 @@ toggleProfileDropdown(event: Event): void {
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
       sfRules: sfRules,
-      authToken: localStorage.getItem('supabase_token') || ''
+      authToken: localStorage.getItem('supabase_token') || '',
+      migrationTimeFilter: this.migrationTimeFilter
     };
 
 
@@ -2449,6 +2503,7 @@ toggleProfileDropdown(event: Event): void {
       externalIdField: this.externalIdField,
       migrateAttachments: this.isSalesforceToSalesforce ? this.migrateAttachments : false,
       migrateFiles: this.isSalesforceToSalesforce ? this.migrateFiles : false,
+      migrationTimeFilter: this.migrationTimeFilter,
 
       authToken: localStorage.getItem('supabase_token') || ''
     };

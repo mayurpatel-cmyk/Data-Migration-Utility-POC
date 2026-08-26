@@ -794,22 +794,59 @@
         </div>
 
         @if (getQuerySelectedFields() !== null) {
-        <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
-          <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
-            <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
-              [(ngModel)]="restrictMappingToQueryFields" style="cursor: pointer;">
-            <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch" style="cursor: pointer;">
-              Query fields only
-            </label>
-          </div>
-          @if (isQueryFieldFilterActive) {
-          <span class="badge bg-info-subtle text-info-emphasis small" title="Your query builder SELECT clause is limiting the source fields shown below">
-            <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
-            {{ queryFilteredFieldCount }} field{{ queryFilteredFieldCount === 1 ? '' : 's' }} from query
-          </span>
-          }
-        </div>
-        }
+<div class="d-flex flex-column gap-2 mt-1">
+  <div class="d-flex justify-content-between align-items-center gap-2">
+    <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
+      <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
+        [(ngModel)]="restrictMappingToQueryFields" style="cursor: pointer;">
+      <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch" style="cursor: pointer;">
+        Query fields only
+      </label>
+    </div>
+    @if (isQueryFieldFilterActive) {
+    <span class="badge bg-info-subtle text-info-emphasis small" title="Your query builder SELECT clause is limiting the source fields shown below">
+      <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
+      {{ queryFilteredFieldCount }} field{{ queryFilteredFieldCount === 1 ? '' : 's' }} from query
+    </span>
+    }
+  </div>
+
+  <!-- NEW: Dynamic Migration Filter for Zoho/Salesforce -->
+  @if (!restrictMappingToQueryFields && (sourceSystem?.toLowerCase() === 'salesforce' || sourceSystem?.toLowerCase() === 'zoho')) {
+<div class="d-flex align-items-center gap-2 p-2 rounded animate__animated animate__fadeIn" style="background: var(--source-soft); border: 1px solid var(--line);">
+  <i class="feather icon-calendar text-primary small"></i>
+  <span class="small fw-bold text-muted text-nowrap">Migration Filter:</span>
+  
+  <!-- Trigger live preview when criteria changes -->
+  <select class="form-select form-select-sm border-secondary-subtle shadow-sm w-auto" 
+    [(ngModel)]="migrationTimeFilter.criteria"
+    (change)="triggerLivePreview()">
+    <option value="" selected>-- Select Type --</option>
+    <option value="days">Days</option>
+    <option value="months">Months</option>
+    <option value="years">Years</option>
+  </select>
+
+  <!-- Trigger live preview when value changes (on blur/enter) -->
+  <input type="number" class="form-control form-control-sm border-secondary-subtle shadow-sm" 
+    style="width: 80px;" placeholder="Value" 
+    [(ngModel)]="migrationTimeFilter.value"
+    min="1" max="4000"
+    (input)="enforceFilterLimits()"
+    (change)="triggerLivePreview()">
+
+  <!-- Which date field the filter checks -- defaults to Last Modified if left untouched -->
+  <select class="form-select form-select-sm border-secondary-subtle shadow-sm w-auto"
+    [(ngModel)]="migrationTimeFilter.field"
+    (change)="triggerLivePreview()">
+    @for (opt of timeFilterFieldOptions; track opt.value) {
+      <option [value]="opt.value">{{ opt.label }}</option>
+    }
+  </select>
+</div>
+}
+</div>
+}
       </div>
 
       @if (targetFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
