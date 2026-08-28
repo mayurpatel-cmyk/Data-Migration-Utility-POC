@@ -811,40 +811,122 @@
     }
   </div>
 
-  <!-- NEW: Dynamic Migration Filter for Zoho/Salesforce -->
-  @if (!restrictMappingToQueryFields && (sourceSystem?.toLowerCase() === 'salesforce' || sourceSystem?.toLowerCase() === 'zoho')) {
-<div class="d-flex align-items-center gap-2 p-2 rounded animate__animated animate__fadeIn" style="background: var(--source-soft); border: 1px solid var(--line);">
-  <i class="feather icon-calendar text-primary small"></i>
-  <span class="small fw-bold text-muted text-nowrap">Migration Filter:</span>
-  
-  <!-- Trigger live preview when criteria changes -->
-  <select class="form-select form-select-sm border-secondary-subtle shadow-sm w-auto" 
-    [(ngModel)]="migrationTimeFilter.criteria"
-    (change)="triggerLivePreview()">
-    <option value="" selected>-- Select Type --</option>
-    <option value="days">Days</option>
-    <option value="months">Months</option>
-    <option value="years">Years</option>
-  </select>
+  @if (!restrictMappingToQueryFields && isEligibleForTimeFilter) {
+  <div class="position-relative" (click)="$event.stopPropagation()" style="width: fit-content;">
+    <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
+      [class.btn-outline-primary]="!isMigrationFilterActive"
+      [class.btn-primary]="isMigrationFilterActive"
+      style="border-radius: 8px;"
+      (click)="toggleMigrationFilterDropdown($event)">
+      <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
+      <span class="fw-bold">Migration Filter:</span>
+      <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
+      <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen" [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
+    </button>
 
-  <!-- Trigger live preview when value changes (on blur/enter) -->
-  <input type="number" class="form-control form-control-sm border-secondary-subtle shadow-sm" 
-    style="width: 80px;" placeholder="Value" 
-    [(ngModel)]="migrationTimeFilter.value"
-    min="1" max="4000"
-    (input)="enforceFilterLimits()"
-    (change)="triggerLivePreview()">
+    @if (isMigrationFilterOpen) {
+    <div class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
+      style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
 
-  <!-- Which date field the filter checks -- defaults to Last Modified if left untouched -->
-  <select class="form-select form-select-sm border-secondary-subtle shadow-sm w-auto"
-    [(ngModel)]="migrationTimeFilter.field"
-    (change)="triggerLivePreview()">
-    @for (opt of timeFilterFieldOptions; track opt.value) {
-      <option [value]="opt.value">{{ opt.label }}</option>
+      <div class="d-flex flex-column gap-2">
+
+        <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter mode">
+          <button type="button" class="btn"
+            [class.btn-primary]="migrationTimeFilter.mode === 'relative'"
+            [class.btn-outline-secondary]="migrationTimeFilter.mode !== 'relative'"
+            (click)="setFilterMode('relative')">
+            Relative
+          </button>
+          <button type="button" class="btn"
+            [class.btn-primary]="migrationTimeFilter.mode === 'range'"
+            [class.btn-outline-secondary]="migrationTimeFilter.mode !== 'range'"
+            (click)="setFilterMode('range')">
+            <i class="feather icon-calendar" style="font-size: 0.75rem;"></i> Date Range
+          </button>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+          <label class="small text-muted text-nowrap mb-0">Field</label>
+          <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
+            [(ngModel)]="migrationTimeFilter.field"
+            (change)="triggerLivePreview()">
+            @for (opt of timeFilterFieldOptions; track opt.value) {
+              <option [value]="opt.value">{{ opt.label }}</option>
+            }
+          </select>
+        </div>
+
+        <hr class="my-1">
+
+        @if (migrationTimeFilter.mode === 'relative') {
+        <div class="d-flex align-items-center gap-2">
+          <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
+            [(ngModel)]="migrationTimeFilter.criteria"
+            (change)="triggerLivePreview()">
+            <option value="" selected>-- Select Type --</option>
+            <option value="days">Days</option>
+            <option value="months">Months</option>
+            <option value="years">Years</option>
+          </select>
+
+          <input type="number" class="form-control form-control-sm border-secondary-subtle shadow-sm"
+            style="width: 80px; flex-shrink: 0;" placeholder="Value"
+            [(ngModel)]="migrationTimeFilter.value"
+            min="1" max="4000"
+            (input)="enforceFilterLimits()"
+            (change)="triggerLivePreview()">
+        </div>
+        }
+
+        @if (migrationTimeFilter.mode === 'range') {
+        <div class="d-flex flex-column gap-2">
+          <div class="d-flex align-items-center gap-2">
+            <div class="flex-grow-1">
+              <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
+              <input type="date" id="migrationFilterStartDate" class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                [(ngModel)]="migrationTimeFilter.startDate"
+                [max]="migrationTimeFilter.endDate || todayIsoDate"
+                (change)="onDateRangeChange()">
+            </div>
+            <div class="flex-grow-1">
+              <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
+              <input type="date" id="migrationFilterEndDate" class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                [(ngModel)]="migrationTimeFilter.endDate"
+                [min]="migrationTimeFilter.startDate"
+                [max]="todayIsoDate"
+                (change)="onDateRangeChange()">
+            </div>
+            @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
+            <button type="button" class="btn btn-sm btn-outline-secondary mt-4" (click)="clearDateRange()" title="Clear date range">
+              <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+            </button>
+            }
+          </div>
+
+          <div class="d-flex align-items-center gap-1 flex-wrap">
+            @for (preset of quickRangePresets; track preset.key) {
+              <button type="button" class="btn btn-sm"
+                [class.btn-primary]="activeQuickRangePreset === preset.key"
+                [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
+                (click)="applyQuickRange(preset.key)">
+                {{ preset.label }}
+              </button>
+            }
+          </div>
+
+          @if (dateRangeError) {
+          <div class="small text-danger d-flex align-items-center gap-1">
+            <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
+            {{ dateRangeError }}
+          </div>
+          }
+        </div>
+        }
+      </div>
+    </div>
     }
-  </select>
-</div>
-}
+  </div>
+  }
 </div>
 }
       </div>
@@ -1190,11 +1272,18 @@
                 </td>
 
                 <td class="text-center">
-                  <button
-                    class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
-                    (click)="clearMapping(mapping)">
-                    <i class="feather icon-x"></i>
-                  </button>
+                  <div class="d-flex align-items-center justify-content-center gap-1">
+                    <button
+                      class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                      (click)="clearMapping(mapping)" title="Clear target field">
+                      <i class="fa-solid fa-eraser"></i>
+                    </button>
+                    <button
+                      class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                      (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
+                      <i class="fa-regular fa-circle-xmark"></i>
+                    </button>
+                  </div>
                 </td>
               </tr>
               }
@@ -1699,12 +1788,18 @@
             </div>
           </td>
           <td class="px-2 text-center">
-
-            <button
-              class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
-              (click)="clearMapping(mapping)">
-              <i class="feather icon-x"></i>
-            </button>
+            <div class="d-flex align-items-center justify-content-center gap-1">
+              <button
+                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                (click)="clearMapping(mapping)" title="Clear target field">
+                <i class="fa-solid fa-eraser"></i>
+              </button>
+              <button
+                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
+                <i class="fa-regular fa-circle-xmark"></i>
+              </button>
+            </div>
           </td>
         </tr>
         }

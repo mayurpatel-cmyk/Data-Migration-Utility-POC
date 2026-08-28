@@ -154,6 +154,7 @@ isProfileDropdownOpen = false;
   isTargetDropdownOpen = false;
   targetSearchQuery = '';
   isHistoryDropdownOpen = false;
+  isMigrationFilterOpen = false;
 
   operationMode: string = 'insert';
   batchSize: number = 5000;
@@ -355,10 +356,15 @@ isProfileDropdownOpen = false;
   }
 
 migrationTimeFilter = {
+  mode: 'relative' as 'relative' | 'range',
   criteria: '',
   value: null as number | null,
-  field: ''
+  field: '',
+  startDate: '' as string, // ISO yyyy-MM-dd
+  endDate: '' as string    // ISO yyyy-MM-dd
 };
+
+dateRangeError: string | null = null;
 
 get timeFilterFieldOptions(): { value: string; label: string }[] {
   const crm = this.sourceSystem?.toLowerCase();
@@ -374,8 +380,64 @@ get timeFilterFieldOptions(): { value: string; label: string }[] {
   ];
 }
 
+get todayIsoDate(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+get migrationFilterSummary(): string {
+  const f = this.migrationTimeFilter;
+  if (f.mode === 'range' && f.startDate && f.endDate) {
+    return `${f.startDate} → ${f.endDate}`;
+  }
+  if (f.mode === 'relative' && f.criteria && f.value) {
+    return `Last ${f.value} ${f.criteria}`;
+  }
+  return 'No Filter';
+}
+
+get isMigrationFilterActive(): boolean {
+  const f = this.migrationTimeFilter;
+  return (f.mode === 'range' && !!f.startDate && !!f.endDate) ||
+    (f.mode === 'relative' && !!f.criteria && !!f.value);
+}
+
+get isDateRangeFilterActive(): boolean {
+  return this.migrationTimeFilter.mode === 'range' &&
+    !!this.migrationTimeFilter.startDate &&
+    !!this.migrationTimeFilter.endDate;
+}
+
+setFilterMode(mode: 'relative' | 'range'): void {
+  if (this.migrationTimeFilter.mode === mode) return;
+
+  this.migrationTimeFilter.mode = mode;
+  this.dateRangeError = null;
+
+  if (mode === 'relative') {
+    this.migrationTimeFilter.startDate = '';
+    this.migrationTimeFilter.endDate = '';
+  } else {
+    this.migrationTimeFilter.criteria = '';
+    this.migrationTimeFilter.value = null;
+  }
+
+  this.triggerLivePreview();
+}
 
 triggerLivePreview(): void {
+  if (this.migrationTimeFilter.mode === 'range') {
+    if (!this.validateDateRange()) return;
+
+    const hasStart = !!this.migrationTimeFilter.startDate;
+    const hasEnd = !!this.migrationTimeFilter.endDate;
+
+    // Only fire once the range is complete, or once it's been fully cleared
+    if ((hasStart && hasEnd) || (!hasStart && !hasEnd)) {
+      this.applyFilter();
+    }
+    return;
+  }
+
   const hasCriteria = !!this.migrationTimeFilter.criteria;
   const hasValue = this.migrationTimeFilter.value !== null && this.migrationTimeFilter.value > 0;
 
@@ -397,7 +459,112 @@ enforceFilterLimits(): void {
   }
 }
 
-// Example getter if you need to strictly format the sourceSystem string
+validateDateRange(): boolean {
+  this.dateRangeError = null;
+  const { startDate, endDate } = this.migrationTimeFilter;
+
+  if (!startDate || !endDate) return true;
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    this.dateRangeError = 'Please enter valid dates.';
+    return false;
+  }
+
+  if (start > end) {
+    this.dateRangeError = 'Start date must be on or before the end date.';
+    return false;
+  }
+
+  if (end > new Date(this.todayIsoDate)) {
+    this.dateRangeError = 'End date cannot be in the future.';
+    return false;
+  }
+
+  return true;
+}
+
+onDateRangeChange(): void {
+  this.activeQuickRangePreset = null;
+  this.triggerLivePreview();
+}
+
+clearDateRange(): void {
+  this.migrationTimeFilter.startDate = '';
+  this.migrationTimeFilter.endDate = '';
+  this.activeQuickRangePreset = null;
+  this.dateRangeError = null;
+  this.applyFilter();
+}
+
+activeQuickRangePreset: string | null = null;
+
+readonly quickRangePresets: { key: string; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: '7d', label: 'Last 7 Days' },
+  { key: '30d', label: 'Last 30 Days' },
+  { key: 'thisMonth', label: 'This Month' },
+  { key: 'lastMonth', label: 'Last Month' }
+];
+
+applyQuickRange(preset: string): void {
+  const end = new Date();
+  let start = new Date();
+
+  switch (preset) {
+    case 'today':
+      start = new Date();
+      break;
+    case '7d':
+      start.setDate(end.getDate() - 6);
+      break;
+    case '30d':
+      start.setDate(end.getDate() - 29);
+      break;
+    case 'thisMonth':
+      start = new Date(end.getFullYear(), end.getMonth(), 1);
+      break;
+    case 'lastMonth': {
+      const lastMonthStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+      const lastMonthEnd = new Date(end.getFullYear(), end.getMonth(), 0);
+      this.setDateRange(lastMonthStart, lastMonthEnd, preset);
+      return;
+    }
+    default:
+      return;
+  }
+
+  this.setDateRange(start, end, preset);
+}
+
+private setDateRange(start: Date, end: Date, preset: string): void {
+  this.migrationTimeFilter.mode = 'range';
+  this.migrationTimeFilter.criteria = '';
+  this.migrationTimeFilter.value = null;
+  this.migrationTimeFilter.startDate = this.toIsoDate(start);
+  this.migrationTimeFilter.endDate = this.toIsoDate(end);
+  this.activeQuickRangePreset = preset;
+  this.dateRangeError = null;
+  this.triggerLivePreview();
+}
+
+private toIsoDate(d: Date): string {
+  return d.toISOString().split('T')[0];
+}
+
+private getFilterSuffix(): string {
+  const f = this.migrationTimeFilter;
+  if (f.mode === 'range' && f.startDate && f.endDate) {
+    return ` (filtered: ${f.startDate} to ${f.endDate})`;
+  }
+  if (f.mode === 'relative' && f.criteria && f.value) {
+    return ` (filtered: last ${f.value} ${f.criteria})`;
+  }
+  return '';
+}
+
 get isEligibleForTimeFilter(): boolean {
   const crm = this.sourceSystem?.toLowerCase();
   return crm === 'salesforce' || crm === 'zoho';
@@ -829,6 +996,14 @@ toggleProfileDropdown(event: Event): void {
   this.isTargetDropdownOpen = false;
   this.isHistoryDropdownOpen = false;
   this.isProfileDropdownOpen = false;
+  this.isMigrationFilterOpen = false;
+}
+
+toggleMigrationFilterDropdown(event: Event) {
+  event.stopPropagation();
+  const wasOpen = this.isMigrationFilterOpen;
+  this.closeAllDropdowns();
+  this.isMigrationFilterOpen = !wasOpen;
 }
 
   // --- ADD THIS TEMPLATE CONSTANT ---
@@ -1230,9 +1405,7 @@ toggleProfileDropdown(event: Event): void {
       const data = await response.json();
       this.previewRecords = data.records || [];
        this.loadSourceObjectCount(this.selectedSourceObject, safeQuery);
-      const filterSuffix = (this.migrationTimeFilter.criteria && this.migrationTimeFilter.value)
-        ? ` (filtered: last ${this.migrationTimeFilter.value} ${this.migrationTimeFilter.criteria})`
-        : '';
+      const filterSuffix = this.getFilterSuffix();
       const executedQuery = data.queryUsed || this.customQuery || 'default query';
       this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
     } catch (error: any) {
@@ -1656,6 +1829,11 @@ toggleProfileDropdown(event: Event): void {
     mapping.targetField = '';
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
+    this.updateMappedCount();
+  }
+
+  removeMapping(mapping: any) {
+    this.mappings = this.mappings.filter((m) => m !== mapping);
     this.updateMappedCount();
   }
 
