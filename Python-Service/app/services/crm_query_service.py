@@ -4,60 +4,29 @@ import json
 from fastapi import HTTPException
 import urllib.parse
 
+from app.services.time_filter_service import (
+    merge_time_clause,
+    build_salesforce_time_clause,
+    build_zoho_time_clause,
+    TimeFilterError,
+)
+
 class CrmQueryService:
 
-    @staticmethod
-    def _merge_time_clause(base_query: str, time_clause: str, where_kw: str = "WHERE", and_kw: str = "AND") -> str:
-        """
-        Safely merges a time_clause into a query that already starts with SELECT.
-        Handles three cases:
-          - no WHERE at all              -> appends "WHERE <time_clause>"
-          - WHERE with a real condition   -> "WHERE <time_clause> AND <condition>"
-          - a *dangling* WHERE with       -> just fills it in, no trailing AND/and
-            nothing after it (e.g. a
-            cleared filter box that left
-            "...WHERE " behind)
-        Splits off any trailing LIMIT first so the "is there a real condition"
-        check isn't fooled by the limit clause itself.
-        """
-        if not time_clause:
-            return base_query
-
-        limit_match = re.search(r'(?i)\blimit\b.*$', base_query)
-        head = base_query[:limit_match.start()] if limit_match else base_query
-        tail = base_query[limit_match.start():] if limit_match else ""
-
-        where_match = re.search(r'(?i)\bwhere\b', head)
-        if where_match:
-            existing_condition = head[where_match.end():].strip()
-            if existing_condition:
-                new_head = f"{head[:where_match.end()]} {time_clause} {and_kw} {existing_condition}"
-            else:
-                new_head = f"{head[:where_match.end()]} {time_clause}"
-        else:
-            new_head = f"{head.rstrip()} {where_kw} {time_clause}"
-
-        return f"{new_head} {tail}".strip() if tail else new_head.strip()
-
-    
     @staticmethod
     async def execute_salesforce_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
         sf_token = creds.get("access_token")
         sf_instance = (creds.get("instance_url") or "").rstrip('/')
         
-        time_clause = ""
-        if time_filter and time_filter.get("value"):
-            val = max(1, min(int(time_filter["value"]), 4000))
-            criteria = time_filter.get("criteria", "days")
-            date_field = time_filter.get("field") or "LastModifiedDate"
-            if criteria == "days": time_clause = f"{date_field} = LAST_N_DAYS:{val}"
-            elif criteria == "months": time_clause = f"{date_field} = LAST_N_MONTHS:{val}"
-            elif criteria == "years": time_clause = f"{date_field} = LAST_N_YEARS:{val}"
+        try:
+            time_clause = build_salesforce_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         if query.lower().startswith("select "):
             soql = query
             if time_clause:
-                soql = CrmQueryService._merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
+                soql = merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
                     
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 safe_fields = headers_list[:40] if headers_list else ["Id", "Name"]
@@ -71,7 +40,7 @@ class CrmQueryService:
             
             where_parts = []
             if query: where_parts.append(f"({query})")
-            if time_clause: where_parts.append(f"({time_clause})")
+            if time_clause: where_parts.append(time_clause)
             where_combined = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
             
             soql = f"SELECT {fields_str} FROM {obj_name}{where_combined} LIMIT {limit}"
@@ -153,8 +122,6 @@ class CrmQueryService:
 
     @staticmethod
     async def execute_zoho_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
-        from datetime import datetime, timedelta
-
         zoho_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"): domain = f"https://{domain}"
@@ -162,16 +129,10 @@ class CrmQueryService:
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         if limit > 200: limit = 200
 
-        time_clause = ""
-        if time_filter and time_filter.get("value"):
-            val = max(1, min(int(time_filter["value"]), 4000))
-            criteria = time_filter.get("criteria", "days")
-            date_field = time_filter.get("field") or "Modified_Time"
-            cutoff = datetime.now()
-            if criteria == "days": cutoff -= timedelta(days=val)
-            elif criteria == "months": cutoff -= timedelta(days=val * 30)
-            elif criteria == "years": cutoff -= timedelta(days=val * 365)
-            time_clause = f"{date_field} >= '{cutoff.strftime('%Y-%m-%dT%H:%M:%S+00:00')}'"
+        try:
+            time_clause = build_zoho_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             coql_query = query.strip() if query else ""
@@ -180,7 +141,7 @@ class CrmQueryService:
             if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
                     if time_clause:
-                        coql_query = CrmQueryService._merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
+                        coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                     if "limit " not in coql_query.lower():
                         coql_query += f" limit {limit}"
                 else:

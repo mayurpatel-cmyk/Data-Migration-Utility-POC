@@ -1,32 +1,11 @@
 import re
 import asyncio
-from datetime import datetime, timedelta
 from app.services.crm_service import CrmService
-
-def _merge_time_clause(base_query: str, time_clause: str, where_kw: str = "where", and_kw: str = "and") -> str:
-    """Safely merges a time_clause into a COQL query that already starts with
-    SELECT. Handles a dangling WHERE (no condition after it) without leaving
-    a trailing and/AND with nothing after it -- this is what produced Zoho's
-    'missing clause: where' SYNTAX_ERROR. Kept in sync with
-    crm_query_service.py's version used by the live preview endpoint."""
-    if not time_clause:
-        return base_query
-
-    limit_match = re.search(r'(?i)\blimit\b.*$', base_query)
-    head = base_query[:limit_match.start()] if limit_match else base_query
-    tail = base_query[limit_match.start():] if limit_match else ""
-
-    where_match = re.search(r'(?i)\bwhere\b', head)
-    if where_match:
-        existing_condition = head[where_match.end():].strip()
-        if existing_condition:
-            new_head = f"{head[:where_match.end()]} {time_clause} {and_kw} {existing_condition}"
-        else:
-            new_head = f"{head[:where_match.end()]} {time_clause}"
-    else:
-        new_head = f"{head.rstrip()} {where_kw} {time_clause}"
-
-    return f"{new_head} {tail}".strip() if tail else new_head.strip()
+from app.services.time_filter_service import (
+    merge_time_clause,
+    build_zoho_time_clause,
+    TimeFilterError,
+)
 
 class ZohoMigrator:
 
@@ -40,22 +19,11 @@ class ZohoMigrator:
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
-        time_clause = ""
-        if time_filter and time_filter.get("value"):
-            val = int(time_filter["value"])
-            criteria = time_filter.get("criteria", "days")
-            date_field = time_filter.get("field") or "Modified_Time"
-            
-            cutoff_date = datetime.now()
-            if criteria == "days":
-                cutoff_date -= timedelta(days=val)
-            elif criteria == "months":
-                cutoff_date -= timedelta(days=val * 30)
-            elif criteria == "years":
-                cutoff_date -= timedelta(days=val * 365)
-                
-            iso_str = cutoff_date.strftime('%Y-%m-%dT%H:%M:%S+00:00')
-            time_clause = f"{date_field} >= '{iso_str}'"
+        try:
+            time_clause = build_zoho_time_clause(time_filter)
+        except TimeFilterError as e:
+            await send_log(f"[{obj_name}] Invalid migration filter: {e}")
+            raise
 
         try:
             coql_query = query.strip() if query else ""
@@ -63,7 +31,7 @@ class ZohoMigrator:
             if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
                     if time_clause:
-                        coql_query = _merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
+                        coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                 else:
                     where_parts = []
                     if coql_query:

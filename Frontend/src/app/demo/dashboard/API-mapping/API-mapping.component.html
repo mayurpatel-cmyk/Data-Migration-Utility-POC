@@ -830,21 +830,6 @@
 
       <div class="d-flex flex-column gap-2">
 
-        <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter mode">
-          <button type="button" class="btn"
-            [class.btn-primary]="migrationTimeFilter.mode === 'relative'"
-            [class.btn-outline-secondary]="migrationTimeFilter.mode !== 'relative'"
-            (click)="setFilterMode('relative')">
-            Relative
-          </button>
-          <button type="button" class="btn"
-            [class.btn-primary]="migrationTimeFilter.mode === 'range'"
-            [class.btn-outline-secondary]="migrationTimeFilter.mode !== 'range'"
-            (click)="setFilterMode('range')">
-            <i class="feather icon-calendar" style="font-size: 0.75rem;"></i> Date Range
-          </button>
-        </div>
-
         <div class="d-flex align-items-center gap-2">
           <label class="small text-muted text-nowrap mb-0">Field</label>
           <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
@@ -858,27 +843,6 @@
 
         <hr class="my-1">
 
-        @if (migrationTimeFilter.mode === 'relative') {
-        <div class="d-flex align-items-center gap-2">
-          <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
-            [(ngModel)]="migrationTimeFilter.criteria"
-            (change)="triggerLivePreview()">
-            <option value="" selected>-- Select Type --</option>
-            <option value="days">Days</option>
-            <option value="months">Months</option>
-            <option value="years">Years</option>
-          </select>
-
-          <input type="number" class="form-control form-control-sm border-secondary-subtle shadow-sm"
-            style="width: 80px; flex-shrink: 0;" placeholder="Value"
-            [(ngModel)]="migrationTimeFilter.value"
-            min="1" max="4000"
-            (input)="enforceFilterLimits()"
-            (change)="triggerLivePreview()">
-        </div>
-        }
-
-        @if (migrationTimeFilter.mode === 'range') {
         <div class="d-flex flex-column gap-2">
           <div class="d-flex align-items-center gap-2">
             <div class="flex-grow-1">
@@ -921,7 +885,6 @@
           </div>
           }
         </div>
-        }
       </div>
     </div>
     }
