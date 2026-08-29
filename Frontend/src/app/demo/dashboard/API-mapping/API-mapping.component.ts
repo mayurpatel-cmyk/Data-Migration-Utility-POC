@@ -359,6 +359,10 @@ migrationTimeFilter = {
   field: '',
   startDate: '' as string, // ISO yyyy-MM-dd
   endDate: '' as string,   // ISO yyyy-MM-dd
+  // Minutes AHEAD of UTC (e.g. India = 330). getTimezoneOffset() returns the
+  // opposite sign (minutes WEST of UTC), so it's negated here. Sent with every
+  // filter payload so the backend can compute local-day boundaries instead of
+  // UTC-day boundaries -- see time_filter_service.py.
   utcOffsetMinutes: -new Date().getTimezoneOffset()
 };
 
@@ -1345,7 +1349,7 @@ toggleMigrationFilterDropdown(event: Event) {
 
       const data = await response.json();
       this.previewRecords = data.records || [];
-       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery);
+      this.loadSourceObjectCount(this.selectedSourceObject, safeQuery, this.migrationTimeFilter);
       const filterSuffix = this.getFilterSuffix();
       const executedQuery = data.queryUsed || this.customQuery || 'default query';
       this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
@@ -1364,7 +1368,7 @@ toggleMigrationFilterDropdown(event: Event) {
     }
   }
 
-    async loadSourceObjectCount(objectName: string, query: string = '') {
+  async loadSourceObjectCount(objectName: string, query: string = '', timeFilter: { field: string; startDate: string; endDate: string; utcOffsetMinutes: number } | null = null) {
     if (!objectName || !this.sourceCrmId) {
       this.selectedSourceObjectCount = null;
       return;
@@ -1376,6 +1380,12 @@ toggleMigrationFilterDropdown(event: Event) {
     try {
       const params = new URLSearchParams({ role: 'source' });
       if (query) params.set('query', query);
+      // Only send a filter that's actually complete -- a half-filled range
+      // (e.g. startDate typed, endDate not yet) would otherwise 400 the
+      // count request while the preview table itself is still waiting too.
+      if (timeFilter && timeFilter.startDate && timeFilter.endDate) {
+        params.set('timeFilter', JSON.stringify(timeFilter));
+      }
 
       const response = await fetch(
         `${environment.apiUrl}/api/metadata/${this.sourceCrmId}/count/${encodeURIComponent(objectName)}?${params.toString()}`,

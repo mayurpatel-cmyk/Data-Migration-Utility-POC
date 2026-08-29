@@ -231,41 +231,48 @@ class CrmQueryService:
                 
             return {"records": flattened_records}
 
-    # =========================================================
-    # OBJECT RECORD COUNT (per-CRM totals for object selector / preview)
-    # =========================================================
     @staticmethod
-    async def get_object_count(creds: dict, obj_name: str, crm_type: str, query: str = "") -> int:
+    async def get_object_count(creds: dict, obj_name: str, crm_type: str, query: str = "", time_filter: dict = None) -> int:
         crm = crm_type.lower()
 
         if crm == "salesforce":
-            return await CrmQueryService._salesforce_count(creds, obj_name, query)
+            return await CrmQueryService._salesforce_count(creds, obj_name, query, time_filter)
         elif crm == "zoho":
-            return await CrmQueryService._zoho_count(creds, obj_name)
+            return await CrmQueryService._zoho_count(creds, obj_name, query, time_filter)
         elif crm == "zendesk":
-            return await CrmQueryService._zendesk_count(creds, obj_name)
+            return await CrmQueryService._zendesk_count(creds, obj_name, query)
         elif crm == "hubspot":
             return await CrmQueryService._hubspot_count(creds, obj_name, query)
         else:
             raise HTTPException(status_code=400, detail="Unsupported CRM Engine")
 
     @staticmethod
-    async def _salesforce_count(creds: dict, obj_name: str, query: str) -> int:
+    async def _salesforce_count(creds: dict, obj_name: str, query: str, time_filter: dict = None) -> int:
         sf_token = creds.get("access_token")
         sf_instance = (creds.get("instance_url") or "").rstrip('/')
 
-        where_clause = ""
-        if query and query.strip():
-            stripped = query.strip()
-            if stripped.lower().startswith("select "):
-                match = re.search(r'(?i)\bwhere\b(.*?)(\blimit\b.*)?$', stripped)
-                if match and match.group(1).strip():
-                    where_clause = f" WHERE {match.group(1).strip()}"
-            else:
-                where_clause = f" WHERE {stripped}"
+        try:
+            time_clause = build_salesforce_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-        soql = f"SELECT COUNT() FROM {obj_name}{where_clause}"
-        url = f"{sf_instance}/services/data/v60.0/query?q={urllib.parse.quote(soql)}"
+        stripped = (query or "").strip()
+
+        if stripped.lower().startswith("select "):
+            count_soql = re.sub(r'(?i)^select\s+.*?\s+from\s+', 'SELECT COUNT() FROM ', stripped, count=1)
+            count_soql = re.sub(r'(?i)\blimit\b\s+\d+', '', count_soql).strip()
+            if time_clause:
+                count_soql = merge_time_clause(count_soql, time_clause, where_kw="WHERE", and_kw="AND")
+        else:
+            where_parts = []
+            if stripped:
+                where_parts.append(f"({stripped})")
+            if time_clause:
+                where_parts.append(time_clause)
+            where_combined = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+            count_soql = f"SELECT COUNT() FROM {obj_name}{where_combined}"
+
+        url = f"{sf_instance}/services/data/v60.0/query?q={urllib.parse.quote(count_soql)}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.get(url, headers={"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"})
@@ -274,23 +281,59 @@ class CrmQueryService:
             return res.json().get("totalSize", 0)
 
     @staticmethod
-    async def _zoho_count(creds: dict, obj_name: str) -> int:
+    async def _zoho_count(creds: dict, obj_name: str, query: str = "", time_filter: dict = None) -> int:
         zoho_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"):
             domain = f"https://{domain}"
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        url = f"{domain}/crm/v6/{obj_name}/actions/count"
+
+        try:
+            time_clause = build_zoho_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        stripped = (query or "").strip()
+
+        # No filter at all -> the cheap unfiltered module total.
+        if not stripped and not time_clause:
+            url = f"{domain}/crm/v6/{obj_name}/actions/count"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"Zoho rejected count request: {res.text}")
+                return res.json().get("count", 0)
+
+        # Otherwise run a filtered COQL aggregate count so it matches the
+        # preview's record set exactly instead of the unfiltered module total.
+        if stripped.lower().startswith("select "):
+            coql_query = re.sub(r'(?i)^select\s+.*?\s+from\s+', 'select COUNT(id) from ', stripped, count=1)
+            coql_query = re.sub(r'(?i)\blimit\b\s+\d+', '', coql_query).strip()
+            if time_clause:
+                coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
+        else:
+            where_parts = []
+            if stripped:
+                where_parts.append(f"({stripped})")
+            if time_clause:
+                where_parts.append(time_clause)
+            coql_query = f"select COUNT(id) from {obj_name} where {' and '.join(where_parts)}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.get(url, headers=headers)
+            res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
             if res.status_code != 200:
-                raise HTTPException(status_code=400, detail=f"Zoho rejected count request: {res.text}")
-            return res.json().get("count", 0)
+                raise HTTPException(status_code=400, detail=f"Zoho rejected count query: {res.text}")
+            rows = res.json().get("data", [])
+            if not rows:
+                return 0
+            for value in rows[0].values():
+                if isinstance(value, (int, float)):
+                    return int(value)
+            return 0
 
     @staticmethod
-    async def _zendesk_count(creds: dict, obj_name: str) -> int:
+    async def _zendesk_count(creds: dict, obj_name: str, query: str = "") -> int:
         zd_token = creds.get("access_token")
         zd_subdomain = creds.get("subdomain")
         safe_obj = obj_name.lower()
@@ -301,9 +344,19 @@ class CrmQueryService:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             if is_standard:
-                if not safe_obj.endswith("s"):
-                    safe_obj = f"{safe_obj}s"
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/{safe_obj}/count.json"
+                singular = safe_obj[:-1] if safe_obj.endswith("s") else safe_obj
+                clean_query = re.sub(r'(?i)^(select\s+.*\s+from\s+[a-zA-Z0-9_]+\s*(where\s+)?)', '', (query or "")).strip()
+
+                if clean_query:
+                    full_query = f"{clean_query} type:{singular}"
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page=1"
+                    res = await client.get(url, headers=headers)
+                    if res.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Zendesk rejected count request: {res.text}")
+                    return res.json().get("count", 0)
+
+                plural = safe_obj if safe_obj.endswith("s") else f"{safe_obj}s"
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/{plural}/count.json"
             else:
                 url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/count"
 

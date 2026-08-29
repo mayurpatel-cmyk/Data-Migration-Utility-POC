@@ -702,11 +702,14 @@
               @if (selectedSourceObject) {
       <span class="badge small fw-normal text-nowrap"
         style="background: var(--source-soft); color: var(--source);"
-        title="Total records in this object">
+        [title]="(customQuery || isMigrationFilterActive) ? 'Records matching your query and filter' : 'Total records in this object'">
         @if (isSourceCountLoading) {
         <span class="spinner-border spinner-border-sm" style="width: 0.65rem; height: 0.65rem;"></span>
         } @else if (selectedSourceObjectCount !== null) {
-        <i class="feather icon-database" style="font-size: 0.7rem;"></i> {{ selectedSourceObjectCount | number }} records
+        <i class="feather icon-database" style="font-size: 0.7rem;"></i> {{ selectedSourceObjectCount | number }} record{{ selectedSourceObjectCount === 1 ? '' : 's' }}
+        @if (customQuery || isMigrationFilterActive) {
+        <span class="text-muted">(filtered)</span>
+        }
         }
       </span>
       }

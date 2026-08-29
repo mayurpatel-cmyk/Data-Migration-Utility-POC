@@ -601,14 +601,22 @@ async def get_crm_object_count(
     object_name: str,
     role: str = "source",
     query: str = "",
+    timeFilter: str = "",
     current_user = Depends(get_current_user)
 ):
     crm_lower = crm_id.lower()
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_lower, role)
 
+    time_filter = None
+    if timeFilter:
+        try:
+            time_filter = json.loads(timeFilter)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=400, detail="timeFilter must be valid JSON.")
+
     async def _fetch(token):
         creds["access_token"] = token
-        return await CrmQueryService.get_object_count(creds, object_name, crm_lower, query)
+        return await CrmQueryService.get_object_count(creds, object_name, crm_lower, query, time_filter)
 
     try:
         count = await _fetch(creds["access_token"])
