@@ -155,8 +155,6 @@ def _parse_date_range(
         raise TimeFilterError("migrationTimeFilter.startDate must be on or before endDate.")
 
     if apply_offset:
-        # start/end were computed as local calendar-day boundaries; converting
-        # "local time" -> "UTC instant" means subtracting the offset.
         offset = timedelta(minutes=offset_minutes)
         start_dt -= offset
         end_dt -= offset
@@ -231,8 +229,6 @@ def build_zendesk_custom_object_time_filter(time_filter: Optional[dict]) -> List
     if not parsed:
         return []
     field, start_dt, end_dt = parsed
-    # Custom object system fields use the "_at" suffix (created_at/updated_at),
-    # not the search-token form (created/updated) used above for standard objects.
     if not field.endswith("_at"):
         field = f"{field}_at"
     start_lit = start_dt.strftime("%Y-%m-%dT00:00:00Z")
