@@ -108,10 +108,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   reviewPanelMinimized: boolean = false;
   reviewFilter: 'mapped' | 'unmapped' = 'mapped';
 
-  // Review Panel: draggable positioning (top/left, px) -- recomputed to
-  // center-of-viewport each time the panel opens, then updated live while
-  // dragging. Native CSS `resize: both` (see .floating-review-panel) already
-  // handles dynamic resizing, so drag only needs to own position.
   readonly reviewPanelDefaultWidth = 1000;
   readonly reviewPanelDefaultHeight = 680;
   reviewPanelTop = 100;
@@ -139,7 +135,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   restrictMappingToQueryFields = true;
 
   currentUser: any = null;
-isProfileDropdownOpen = false;
+  isProfileDropdownOpen = false;
 
   // Execution Variables
   jobStatus = 'Idle';
@@ -202,8 +198,8 @@ isProfileDropdownOpen = false;
 
   ngOnInit(): void {
     this.getUserData();
-// this.fetchRecoverableSessions();
-// this.preloadEntirePage();
+    // this.fetchRecoverableSessions();
+    // this.preloadEntirePage();
     const navState = history.state;
     this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
@@ -339,7 +335,7 @@ isProfileDropdownOpen = false;
     try {
       parsed = JSON.parse(query.replace(/\/\*[\s\S]*?\*\//g, '').trim());
     } catch {
-      return null; 
+      return null;
     }
 
     const properties = parsed?.properties;
@@ -366,194 +362,185 @@ isProfileDropdownOpen = false;
     return cleaned.length > 0 ? cleaned : null;
   }
 
-migrationTimeFilter = {
-  field: '',
-  startDate: '' as string, // ISO yyyy-MM-dd
-  endDate: '' as string,   // ISO yyyy-MM-dd
-  utcOffsetMinutes: -new Date().getTimezoneOffset()
-};
+  migrationTimeFilter = {
+    field: '',
+    startDate: '' as string, // ISO yyyy-MM-dd
+    endDate: '' as string, // ISO yyyy-MM-dd
+    utcOffsetMinutes: -new Date().getTimezoneOffset()
+  };
 
-dateRangeError: string | null = null;
+  dateRangeError: string | null = null;
 
-get timeFilterFieldOptions(): { value: string; label: string }[] {
-  const crm = this.sourceSystem?.toLowerCase();
-  if (crm === 'zoho') {
+  get timeFilterFieldOptions(): { value: string; label: string }[] {
+    const crm = this.sourceSystem?.toLowerCase();
+    if (crm === 'zoho') {
+      return [
+        { value: 'Modified_Time', label: 'Last Modified' },
+        { value: 'Created_Time', label: 'Created' }
+      ];
+    }
+    if (crm === 'zendesk') {
+      return [
+        { value: 'updated', label: 'Last Updated' },
+        { value: 'created', label: 'Created' }
+      ];
+    }
+    if (crm === 'hubspot') {
+      return [
+        { value: 'hs_lastmodifieddate', label: 'Last Modified' },
+        { value: 'createdate', label: 'Created' }
+      ];
+    }
     return [
-      { value: 'Modified_Time', label: 'Last Modified' },
-      { value: 'Created_Time', label: 'Created' }
+      { value: 'LastModifiedDate', label: 'Last Modified' },
+      { value: 'CreatedDate', label: 'Created' }
     ];
   }
-  if (crm === 'zendesk') {
-    return [
-      { value: 'updated', label: 'Last Updated' },
-      { value: 'created', label: 'Created' }
-    ];
-  }
-  if (crm === 'hubspot') {
-    return [
-      { value: 'hs_lastmodifieddate', label: 'Last Modified' },
-      { value: 'createdate', label: 'Created' }
-    ];
-  }
-  return [
-    { value: 'LastModifiedDate', label: 'Last Modified' },
-    { value: 'CreatedDate', label: 'Created' }
-  ];
-}
 
-get todayIsoDate(): string {
-  return new Date().toISOString().split('T')[0];
-}
-
-get migrationFilterSummary(): string {
-  const f = this.migrationTimeFilter;
-  if (f.startDate && f.endDate) {
-    return `${f.startDate} → ${f.endDate}`;
-  }
-  if (f.startDate) {
-    return `${f.startDate} → today`;
-  }
-  return 'No Filter';
-}
-
-get isMigrationFilterActive(): boolean {
-  // A "From" date alone is a complete, valid filter now -- the backend
-  // defaults the "To" side to today when it's left blank (see
-  // time_filter_service.py). Only startDate needs to be present.
-  return !!this.migrationTimeFilter.startDate;
-}
-
-triggerLivePreview(): void {
-  // validateDateRange() is the single gate: it returns true for every state
-  // we want to fire on (both cleared, "From" only -- open-ended through
-  // today, or a complete valid range) and false for the one state we don't
-  // (an end date with no start, or a malformed/reversed range), so there's
-  // no separate hasStart/hasEnd check needed here anymore.
-  if (!this.validateDateRange()) return;
-  this.applyFilter();
-}
-
-validateDateRange(): boolean {
-  this.dateRangeError = null;
-  const { startDate, endDate } = this.migrationTimeFilter;
-
-  if (!startDate && !endDate) return true;
-
-  if (endDate && !startDate) {
-    this.dateRangeError = "Please select a 'From' date as well — an end date on its own isn't enough to filter by.";
-    return false;
+  get todayIsoDate(): string {
+    return new Date().toISOString().split('T')[0];
   }
 
-  const start = new Date(startDate);
-  if (isNaN(start.getTime())) {
-    this.dateRangeError = 'Please enter a valid start date.';
-    return false;
+  get migrationFilterSummary(): string {
+    const f = this.migrationTimeFilter;
+    if (f.startDate && f.endDate) {
+      return `${f.startDate} → ${f.endDate}`;
+    }
+    if (f.startDate) {
+      return `${f.startDate} → today`;
+    }
+    return 'No Filter';
   }
 
-  if (!endDate) {
-    // Open-ended: the backend defaults "To" to today when it's left blank.
+  get isMigrationFilterActive(): boolean {
+    return !!this.migrationTimeFilter.startDate;
+  }
+
+  triggerLivePreview(): void {
+    if (!this.validateDateRange()) return;
+    this.applyFilter();
+  }
+
+  validateDateRange(): boolean {
+    this.dateRangeError = null;
+    const { startDate, endDate } = this.migrationTimeFilter;
+
+    if (!startDate && !endDate) return true;
+
+    if (endDate && !startDate) {
+      this.dateRangeError = "Please select a 'From' date as well — an end date on its own isn't enough to filter by.";
+      return false;
+    }
+
+    const start = new Date(startDate);
+    if (isNaN(start.getTime())) {
+      this.dateRangeError = 'Please enter a valid start date.';
+      return false;
+    }
+
+    if (!endDate) {
+      return true;
+    }
+
+    const end = new Date(endDate);
+    if (isNaN(end.getTime())) {
+      this.dateRangeError = 'Please enter a valid end date.';
+      return false;
+    }
+
+    if (start > end) {
+      this.dateRangeError = 'Start date must be on or before the end date.';
+      return false;
+    }
+
+    if (end > new Date(this.todayIsoDate)) {
+      this.dateRangeError = 'End date cannot be in the future.';
+      return false;
+    }
+
     return true;
   }
 
-  const end = new Date(endDate);
-  if (isNaN(end.getTime())) {
-    this.dateRangeError = 'Please enter a valid end date.';
-    return false;
+  onDateRangeChange(): void {
+    this.activeQuickRangePreset = null;
+    this.triggerLivePreview();
   }
 
-  if (start > end) {
-    this.dateRangeError = 'Start date must be on or before the end date.';
-    return false;
+  clearDateRange(): void {
+    this.migrationTimeFilter.startDate = '';
+    this.migrationTimeFilter.endDate = '';
+    this.activeQuickRangePreset = null;
+    this.dateRangeError = null;
+    this.applyFilter();
   }
 
-  if (end > new Date(this.todayIsoDate)) {
-    this.dateRangeError = 'End date cannot be in the future.';
-    return false;
-  }
+  activeQuickRangePreset: string | null = null;
 
-  return true;
-}
+  readonly quickRangePresets: { key: string; label: string }[] = [
+    { key: 'today', label: 'Today' },
+    { key: '7d', label: 'Last 7 Days' },
+    { key: '30d', label: 'Last 30 Days' },
+    { key: 'thisMonth', label: 'This Month' },
+    { key: 'lastMonth', label: 'Last Month' }
+  ];
 
-onDateRangeChange(): void {
-  this.activeQuickRangePreset = null;
-  this.triggerLivePreview();
-}
+  applyQuickRange(preset: string): void {
+    const end = new Date();
+    let start = new Date();
 
-clearDateRange(): void {
-  this.migrationTimeFilter.startDate = '';
-  this.migrationTimeFilter.endDate = '';
-  this.activeQuickRangePreset = null;
-  this.dateRangeError = null;
-  this.applyFilter();
-}
-
-activeQuickRangePreset: string | null = null;
-
-readonly quickRangePresets: { key: string; label: string }[] = [
-  { key: 'today', label: 'Today' },
-  { key: '7d', label: 'Last 7 Days' },
-  { key: '30d', label: 'Last 30 Days' },
-  { key: 'thisMonth', label: 'This Month' },
-  { key: 'lastMonth', label: 'Last Month' }
-];
-
-applyQuickRange(preset: string): void {
-  const end = new Date();
-  let start = new Date();
-
-  switch (preset) {
-    case 'today':
-      start = new Date();
-      break;
-    case '7d':
-      start.setDate(end.getDate() - 6);
-      break;
-    case '30d':
-      start.setDate(end.getDate() - 29);
-      break;
-    case 'thisMonth':
-      start = new Date(end.getFullYear(), end.getMonth(), 1);
-      break;
-    case 'lastMonth': {
-      const lastMonthStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
-      const lastMonthEnd = new Date(end.getFullYear(), end.getMonth(), 0);
-      this.setDateRange(lastMonthStart, lastMonthEnd, preset);
-      return;
+    switch (preset) {
+      case 'today':
+        start = new Date();
+        break;
+      case '7d':
+        start.setDate(end.getDate() - 6);
+        break;
+      case '30d':
+        start.setDate(end.getDate() - 29);
+        break;
+      case 'thisMonth':
+        start = new Date(end.getFullYear(), end.getMonth(), 1);
+        break;
+      case 'lastMonth': {
+        const lastMonthStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(end.getFullYear(), end.getMonth(), 0);
+        this.setDateRange(lastMonthStart, lastMonthEnd, preset);
+        return;
+      }
+      default:
+        return;
     }
-    default:
-      return;
+
+    this.setDateRange(start, end, preset);
   }
 
-  this.setDateRange(start, end, preset);
-}
-
-private setDateRange(start: Date, end: Date, preset: string): void {
-  this.migrationTimeFilter.startDate = this.toIsoDate(start);
-  this.migrationTimeFilter.endDate = this.toIsoDate(end);
-  this.activeQuickRangePreset = preset;
-  this.dateRangeError = null;
-  this.triggerLivePreview();
-}
-
-private toIsoDate(d: Date): string {
-  return d.toISOString().split('T')[0];
-}
-
-private getFilterSuffix(): string {
-  const f = this.migrationTimeFilter;
-  if (f.startDate && f.endDate) {
-    return ` (filtered: ${f.startDate} to ${f.endDate})`;
+  private setDateRange(start: Date, end: Date, preset: string): void {
+    this.migrationTimeFilter.startDate = this.toIsoDate(start);
+    this.migrationTimeFilter.endDate = this.toIsoDate(end);
+    this.activeQuickRangePreset = preset;
+    this.dateRangeError = null;
+    this.triggerLivePreview();
   }
-  if (f.startDate) {
-    return ` (filtered: ${f.startDate} to today)`;
-  }
-  return '';
-}
 
-get isEligibleForTimeFilter(): boolean {
-  const crm = this.sourceSystem?.toLowerCase();
-  return crm === 'salesforce' || crm === 'zoho' || crm === 'zendesk' || crm === 'hubspot';
-}
+  private toIsoDate(d: Date): string {
+    return d.toISOString().split('T')[0];
+  }
+
+  private getFilterSuffix(): string {
+    const f = this.migrationTimeFilter;
+    if (f.startDate && f.endDate) {
+      return ` (filtered: ${f.startDate} to ${f.endDate})`;
+    }
+    if (f.startDate) {
+      return ` (filtered: ${f.startDate} to today)`;
+    }
+    return '';
+  }
+
+  get isEligibleForTimeFilter(): boolean {
+    const crm = this.sourceSystem?.toLowerCase();
+    return crm === 'salesforce' || crm === 'zoho' || crm === 'zendesk' || crm === 'hubspot';
+  }
 
   onQueryEdited() {
     this.queryError = null;
@@ -578,11 +565,7 @@ get isEligibleForTimeFilter(): boolean {
 
     const queryFieldSet = this.getQueryFieldFilterSet();
     if (queryFieldSet) {
-      filtered = filtered.filter(
-        (m) =>
-          queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
-          !!m.targetField 
-      );
+      filtered = filtered.filter((m) => queryFieldSet.has((m.sourceField || '').toLowerCase()) || !!m.targetField);
     }
 
     if (this.hideMappedFields) {
@@ -611,7 +594,7 @@ get isEligibleForTimeFilter(): boolean {
   private getLiveRecordHeaders(): string[] {
     if (!this.previewRecords || this.previewRecords.length === 0) return [];
     const headerSet = new Set<string>();
-    const sampleSize = Math.min(this.previewRecords.length, 25); 
+    const sampleSize = Math.min(this.previewRecords.length, 25);
     for (let i = 0; i < sampleSize; i++) {
       Object.keys(this.previewRecords[i] || {}).forEach((k) => headerSet.add(k));
     }
@@ -630,28 +613,27 @@ get isEligibleForTimeFilter(): boolean {
   }
 
   getUserData(): void {
-  const storedUser = localStorage.getItem('supabase_user');
-  if (!storedUser) {
-    this.currentUser = null;
-    return;
+    const storedUser = localStorage.getItem('supabase_user');
+    if (!storedUser) {
+      this.currentUser = null;
+      return;
+    }
+    try {
+      this.currentUser = JSON.parse(storedUser);
+    } catch (error) {
+      console.error('Failed to parse user data from local storage', error);
+      this.currentUser = null;
+    }
   }
-  try {
-    this.currentUser = JSON.parse(storedUser);
-  } catch (error) {
-    console.error('Failed to parse user data from local storage', error);
-    this.currentUser = null;
-  }
-}
 
-toggleProfileDropdown(event: Event): void {
-  event.stopPropagation();
-  const wasOpen = this.isProfileDropdownOpen;
-  this.closeAllDropdowns();
-  this.isProfileDropdownOpen = !wasOpen;
-}
+  toggleProfileDropdown(event: Event): void {
+    event.stopPropagation();
+    const wasOpen = this.isProfileDropdownOpen;
+    this.closeAllDropdowns();
+    this.isProfileDropdownOpen = !wasOpen;
+  }
 
   changePreviewLimit(newLimit: number) {
-
     this.previewLimit = Number(newLimit);
 
     if (this.selectedSourceObject) {
@@ -678,7 +660,6 @@ toggleProfileDropdown(event: Event): void {
   get hasPendingEdits(): boolean {
     if (!this.validationResults?.invalidRecords) return false;
 
-  
     return this.validationResults.invalidRecords.some((rec: any) => rec._editedFields && Object.keys(rec._editedFields).length > 0);
   }
 
@@ -690,7 +671,7 @@ toggleProfileDropdown(event: Event): void {
     if (srcType === tgtType) return false;
 
     if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
-  
+
     if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType))
       return false;
 
@@ -857,7 +838,10 @@ toggleProfileDropdown(event: Event): void {
           else {
             const snippetFields =
               this.sourceFields && this.sourceFields.length > 0
-                ? this.sourceFields.slice(0, 15).map((f) => f.name).join(', ')
+                ? this.sourceFields
+                    .slice(0, 15)
+                    .map((f) => f.name)
+                    .join(', ')
                 : 'Id';
 
             suggestions.push({
@@ -939,7 +923,6 @@ toggleProfileDropdown(event: Event): void {
     }
   }
 
-
   injectFieldAtCursor(fieldName: string) {
     if (this.monacoEditorInstance) {
       const position = this.monacoEditorInstance.getPosition();
@@ -976,90 +959,64 @@ toggleProfileDropdown(event: Event): void {
   }
 
   closeAllDropdowns() {
-  this.mappings.forEach((m) => (m.isDropdownOpen = false));
-  this.isSourceDropdownOpen = false;
-  this.isTargetDropdownOpen = false;
-  this.isHistoryDropdownOpen = false;
-  this.isProfileDropdownOpen = false;
-  this.isMigrationFilterOpen = false;
-}
-
-toggleMigrationFilterDropdown(event: Event) {
-  event.stopPropagation();
-  const wasOpen = this.isMigrationFilterOpen;
-  this.closeAllDropdowns();
-  this.isMigrationFilterOpen = !wasOpen;
-}
-
-/**
- * "Query fields only" is what gates whether the Migration Filter button
- * even renders (@if !restrictMappingToQueryFields). Switching it off is
- * the moment the filter becomes available, so open it straight away
- * instead of making the user click the button a second time to expand it.
- *
- * The checkbox's native `click` bubbles to document first (closing every
- * dropdown via the document:click listener), and `change` fires right
- * after -- so setting isMigrationFilterOpen here runs after, not before,
- * that reset and reliably wins.
- */
-onRestrictToQueryFieldsChange(): void {
-  if (!this.restrictMappingToQueryFields && this.isEligibleForTimeFilter) {
-    this.isMigrationFilterOpen = true;
+    this.mappings.forEach((m) => (m.isDropdownOpen = false));
+    this.isSourceDropdownOpen = false;
+    this.isTargetDropdownOpen = false;
+    this.isHistoryDropdownOpen = false;
+    this.isProfileDropdownOpen = false;
+    this.isMigrationFilterOpen = false;
   }
-}
 
-/**
- * Opens the Auto-Map Review panel centered in the viewport at its (larger)
- * default size -- big enough to see most mappings without the fully
- * maximized 90vw x 90vh mode, and left resizable (`resize: both`, see
- * .floating-review-panel) since the maximized mode intentionally turns
- * native resize off. The user can still go fullscreen via the header
- * toggle if they want it. Call this instead of setting showReviewPanel
- * directly so every entry point (manual "Open Review" button, heuristic
- * auto-map, hybrid AI auto-map) gets the same placement.
- */
-openReviewPanel(): void {
-  this.reviewPanelExpanded = false;
-  this.reviewPanelMinimized = false;
-  this.reviewPanelLeft = Math.max(20, (window.innerWidth - this.reviewPanelDefaultWidth) / 2);
-  this.reviewPanelTop = Math.max(20, (window.innerHeight - this.reviewPanelDefaultHeight) / 2);
-  this.showReviewPanel = true;
-}
+  toggleMigrationFilterDropdown(event: Event) {
+    event.stopPropagation();
+    const wasOpen = this.isMigrationFilterOpen;
+    this.closeAllDropdowns();
+    this.isMigrationFilterOpen = !wasOpen;
+  }
 
-/** Starts a drag on mousedown over the panel header -- ignores clicks that
- * land on the header's own buttons (maximize/minimize/close) so those keep
- * working normally instead of initiating a drag. */
-startReviewPanelDrag(event: MouseEvent): void {
-  if (this.reviewPanelExpanded) return;
-  if ((event.target as HTMLElement).closest('button')) return;
+  onRestrictToQueryFieldsChange(): void {
+    if (!this.restrictMappingToQueryFields && this.isEligibleForTimeFilter) {
+      this.isMigrationFilterOpen = true;
+    }
+  }
 
-  const panelEl = (event.currentTarget as HTMLElement).closest('.floating-review-panel') as HTMLElement;
-  if (!panelEl) return;
+  openReviewPanel(): void {
+    this.reviewPanelExpanded = false;
+    this.reviewPanelMinimized = false;
+    this.reviewPanelLeft = Math.max(20, (window.innerWidth - this.reviewPanelDefaultWidth) / 2);
+    this.reviewPanelTop = Math.max(20, (window.innerHeight - this.reviewPanelDefaultHeight) / 2);
+    this.showReviewPanel = true;
+  }
 
-  const rect = panelEl.getBoundingClientRect();
-  this.reviewPanelDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-  this.reviewPanelDragging = true;
-  event.preventDefault();
-}
+  startReviewPanelDrag(event: MouseEvent): void {
+    if (this.reviewPanelExpanded) return;
+    if ((event.target as HTMLElement).closest('button')) return;
 
-@HostListener('document:mousemove', ['$event'])
-onReviewPanelDrag(event: MouseEvent): void {
-  if (!this.reviewPanelDragging) return;
+    const panelEl = (event.currentTarget as HTMLElement).closest('.floating-review-panel') as HTMLElement;
+    if (!panelEl) return;
 
-  // Keep at least a corner of the header reachable so a panel dragged to
-  // the edge can always be dragged back, instead of getting stuck off-screen.
-  const margin = 60;
-  const maxLeft = window.innerWidth - margin;
-  const maxTop = window.innerHeight - margin;
+    const rect = panelEl.getBoundingClientRect();
+    this.reviewPanelDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    this.reviewPanelDragging = true;
+    event.preventDefault();
+  }
 
-  this.reviewPanelLeft = Math.min(Math.max(event.clientX - this.reviewPanelDragOffset.x, 0), maxLeft);
-  this.reviewPanelTop = Math.min(Math.max(event.clientY - this.reviewPanelDragOffset.y, 0), maxTop);
-}
+  @HostListener('document:mousemove', ['$event'])
+  onReviewPanelDrag(event: MouseEvent): void {
+    if (!this.reviewPanelDragging) return;
 
-@HostListener('document:mouseup')
-onReviewPanelDragEnd(): void {
-  this.reviewPanelDragging = false;
-}
+    const margin = 60;
+    const maxLeft = window.innerWidth - margin;
+    const maxTop = window.innerHeight - margin;
+
+    this.reviewPanelLeft = Math.min(Math.max(event.clientX - this.reviewPanelDragOffset.x, 0), maxLeft);
+    this.reviewPanelTop = Math.min(Math.max(event.clientY - this.reviewPanelDragOffset.y, 0), maxTop);
+  }
+
+  @HostListener('document:mouseup')
+  onReviewPanelDragEnd(): void {
+    this.reviewPanelDragging = false;
+  }
 
   // --- ADD THIS TEMPLATE CONSTANT ---
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
@@ -1280,14 +1237,6 @@ onReviewPanelDragEnd(): void {
     this.loadMetadata();
   }
 
-  /**
-   * Salesforce orgs return hundreds of objects, many prefixed "Case..."
-   * (CaseComment, CaseHistory, CaseTeamTemplate, CaseShare, etc.) alongside
-   * the actual "Case" object. A plain substring filter buries the exact
-   * match you're looking for among all of those, so results are ranked:
-   * exact name/label match first, then "starts with" the query, then any
-   * other substring match -- each tier still alphabetical internally.
-   */
   private rankEntityMatches(entities: any[], query: string): any[] {
     const q = query.trim().toLowerCase();
     if (!q) return entities;
@@ -1366,7 +1315,7 @@ onReviewPanelDragEnd(): void {
           ? '{\n  "filter": {\n    "$and": [\n      { "custom_object_fields.your_field": { "$eq": "value" } }\n    ]\n  }\n}'
           : 'e.g., type:ticket status<solved created>2023-01-01',
         helpText: isCustom
-          ? "Use JSON. Prefix custom fields with 'custom_object_fields.'. Leave blank for all records. Add a top-level \"fields\": [...] array to restrict which fields are mappable."
+          ? 'Use JSON. Prefix custom fields with \'custom_object_fields.\'. Leave blank for all records. Add a top-level "fields": [...] array to restrict which fields are mappable.'
           : 'Use Zendesk native search syntax to filter by tags, status, or dates.',
         icon: 'icon-search',
         buttonText: 'Apply Filter',
@@ -1377,12 +1326,13 @@ onReviewPanelDragEnd(): void {
         title: 'HubSpot Search Filter',
         placeholder:
           '{\n  "filterGroups": [\n    {\n      "filters": [\n        { "propertyName": "hs_object_id", "operator": "GT", "value": "0" }\n      ]\n    }\n  ]\n}',
-        helpText: 'Use HubSpot JSON search syntax to filter records. Leave blank to fetch all. Add a top-level "properties": [...] array to restrict which fields are returned and mappable.',
+        helpText:
+          'Use HubSpot JSON search syntax to filter records. Leave blank to fetch all. Add a top-level "properties": [...] array to restrict which fields are returned and mappable.',
         icon: 'icon-filter',
         buttonText: 'Apply Filter',
         loadingText: 'Filtering...'
       };
-       } else if (crm === 'salesforce') {
+    } else if (crm === 'salesforce') {
       return {
         title: 'SOQL Query Editor',
         placeholder: 'e.g., SELECT Id, Name FROM Account WHERE Amount > 5000 LIMIT 100',
@@ -1426,6 +1376,10 @@ onReviewPanelDragEnd(): void {
 
   async applyFilter() {
     if (!this.customQuery || !this.selectedSourceObject) return;
+
+    if (!this.validateDateRange()) {
+      return;
+    }
 
     if (!this.validateQuery()) {
       return;
@@ -1501,7 +1455,11 @@ onReviewPanelDragEnd(): void {
     }
   }
 
-  async loadSourceObjectCount(objectName: string, query: string = '', timeFilter: { field: string; startDate: string; endDate: string; utcOffsetMinutes: number } | null = null) {
+  async loadSourceObjectCount(
+    objectName: string,
+    query: string = '',
+    timeFilter: { field: string; startDate: string; endDate: string; utcOffsetMinutes: number } | null = null
+  ) {
     if (!objectName || !this.sourceCrmId) {
       this.selectedSourceObjectCount = null;
       return;
@@ -1513,9 +1471,6 @@ onReviewPanelDragEnd(): void {
     try {
       const params = new URLSearchParams({ role: 'source' });
       if (query) params.set('query', query);
-      // "From" alone is now a complete, valid filter (backend defaults "To"
-      // to today) -- only an end date with no start is the incomplete state
-      // worth withholding, since that one still 400s server-side.
       if (timeFilter && timeFilter.startDate) {
         params.set('timeFilter', JSON.stringify(timeFilter));
       }
@@ -1557,7 +1512,6 @@ onReviewPanelDragEnd(): void {
 
     const queryLower = this.customQuery.trim().toLowerCase();
     const crm = this.sourceCrmId.toLowerCase();
-
 
     const applySquiggle = (errorMsg: string, offendingText: string): boolean => {
       this.queryError = errorMsg;
@@ -1900,7 +1854,6 @@ onReviewPanelDragEnd(): void {
       });
   }
 
-  
   private cancelPendingMappingWork(): void {
     this.mappingCancel$.next();
 
@@ -1970,7 +1923,7 @@ onReviewPanelDragEnd(): void {
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
     // =========================================================
     const claimedTargetFields = new Set<string>(this.mappings.filter((m) => m.targetField).map((m) => m.targetField));
-    const queryFieldSet = this.getQueryFieldFilterSet(); 
+    const queryFieldSet = this.getQueryFieldFilterSet();
 
     this.mappings.forEach((m) => {
       if (m.targetField) return;
@@ -2127,59 +2080,59 @@ onReviewPanelDragEnd(): void {
           .getAiAutoMapping(currentChunk, this.targetFields)
           .pipe(takeUntil(this.mappingCancel$))
           .subscribe({
-          next: (response: any) => {
-            if (response && Array.isArray(response.mappings)) {
-              response.mappings.forEach((backendMap: any) => {
-                const localRow = this.mappings.find((m) => m.sourceField === backendMap.sourceField);
-                const targetAlreadyClaimed = this.mappings.some(
-                  (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
-                );
- 
-                const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
+            next: (response: any) => {
+              if (response && Array.isArray(response.mappings)) {
+                response.mappings.forEach((backendMap: any) => {
+                  const localRow = this.mappings.find((m) => m.sourceField === backendMap.sourceField);
+                  const targetAlreadyClaimed = this.mappings.some(
+                    (m) => m.sourceField !== backendMap.sourceField && m.targetField === backendMap.targetField
+                  );
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
-                  localRow.targetField = backendMap.targetField;
+                  const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
 
-                  if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
-                    localRow.relationalExtIdField = 'Id';
+                  if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
+                    localRow.targetField = backendMap.targetField;
+
+                    if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
+                      localRow.relationalExtIdField = 'Id';
+                    }
+                    localRow._mappedBy = 'ai';
+                    aiMatchCount++;
                   }
-                  localRow._mappedBy = 'ai';
-                  aiMatchCount++;
-                }
+                });
+              }
+
+              currentChunk.forEach((field) => {
+                const mappingRow = this.mappings.find((m) => m.sourceField === field.name);
+                if (mappingRow) mappingRow._isAiProcessing = false;
               });
-            }
 
-            currentChunk.forEach((field) => {
-              const mappingRow = this.mappings.find((m) => m.sourceField === field.name);
-              if (mappingRow) mappingRow._isAiProcessing = false;
-            });
+              this.autoMapProgress.current += currentChunk.length;
+              this.mappings = [...this.mappings];
+              this.cdr.detectChanges();
 
-            this.autoMapProgress.current += currentChunk.length;
-            this.mappings = [...this.mappings];
-            this.cdr.detectChanges();
+              if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
 
-            if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
+              currentIndex += CHUNK_SIZE;
+              processNextChunk();
+            },
+            error: (error: any) => {
+              console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
+              this.isAutoMapping = false;
 
-            currentIndex += CHUNK_SIZE;
-            processNextChunk();
-          },
-          error: (error: any) => {
-            console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
-            this.isAutoMapping = false;
+              this.mappings.forEach((m) => (m._isAiProcessing = false));
+              this.mappings = [...this.mappings];
+              this.cdr.detectChanges();
 
-            this.mappings.forEach((m) => (m._isAiProcessing = false));
-            this.mappings = [...this.mappings];
-            this.cdr.detectChanges();
-
-            if (this.toastr) {
-              if (error.status === 404) {
-                this.toastr.error('Backend endpoint not found (404).', 'Connection Error');
-              } else {
-                this.toastr.warning('The SureShift Agent connection was interrupted. Partial mappings saved.', 'Incomplete');
+              if (this.toastr) {
+                if (error.status === 404) {
+                  this.toastr.error('Backend endpoint not found (404).', 'Connection Error');
+                } else {
+                  this.toastr.warning('The SureShift Agent connection was interrupted. Partial mappings saved.', 'Incomplete');
+                }
               }
             }
-          }
-        });
+          });
       };
 
       processNextChunk();
@@ -2212,6 +2165,12 @@ onReviewPanelDragEnd(): void {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
+    if (!this.validateDateRange()) {
+      this.jobStatus = 'Validation Failed';
+      this.toastr.error(this.dateRangeError!, 'Migration Filter Error');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
 
     if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.externalIdField) {
       this.jobStatus = 'Validation Failed';
@@ -2230,7 +2189,7 @@ onReviewPanelDragEnd(): void {
       this.jobStatus = 'Validation Failed';
       this.toastr.error(
         `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID (or indexed/lookup) field in ${this.targetSystem}, ` +
-        `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
+          `so it can't be used to match records for ${this.operationMode.toUpperCase()}. Mark the field as an External ID in ${this.targetSystem} Setup, or choose a different field.`,
         'Field Not Usable for Matching'
       );
       return;
@@ -2243,9 +2202,10 @@ onReviewPanelDragEnd(): void {
     ) {
       this.jobStatus = 'Validation Failed';
       const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
-      const message = rawMapping && this.getQueryFieldFilterSet()
-        ? `Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`
-        : `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`;
+      const message =
+        rawMapping && this.getQueryFieldFilterSet()
+          ? `Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`
+          : `The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column, so every record would fail to match. Map a source field to it first.`;
       this.toastr.error(message, 'External ID Not Mapped');
       return;
     }
@@ -2278,16 +2238,16 @@ onReviewPanelDragEnd(): void {
     this.cdr.detectChanges();
 
     const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField)).map((m) => {
-        const targetMeta = this.targetFields.find((t) => t.name === m.targetField);
-        return {
-          csvField: m.sourceField,
-          sfField: m.targetField,
-          sourceField: m.sourceField,
-          targetField: m.targetField,
-          type: targetMeta?.type || 'string',
-          isRequired: targetMeta?.isRequired || targetMeta?.required || false
-        };
-      });
+      const targetMeta = this.targetFields.find((t) => t.name === m.targetField);
+      return {
+        csvField: m.sourceField,
+        sfField: m.targetField,
+        sourceField: m.sourceField,
+        targetField: m.targetField,
+        type: targetMeta?.type || 'string',
+        isRequired: targetMeta?.isRequired || targetMeta?.required || false
+      };
+    });
 
     const sfRules: any = {};
     this.targetFields.forEach((field) => {
@@ -2327,7 +2287,6 @@ onReviewPanelDragEnd(): void {
       authToken: localStorage.getItem('supabase_token') || '',
       migrationTimeFilter: this.migrationTimeFilter
     };
-
 
     this.closeSocket(this.validationSocket);
 
@@ -2482,7 +2441,6 @@ onReviewPanelDragEnd(): void {
           this.migrationSocket.close();
         }
 
-
         localStorage.removeItem('source_crm_slot');
         localStorage.removeItem('target_crm_slot');
 
@@ -2543,7 +2501,7 @@ onReviewPanelDragEnd(): void {
     document.body.removeChild(a);
   }
 
-   runMigration() {
+  runMigration() {
     if (this.hasPendingEdits) {
       this.toastr.warning(
         'You have un-validated fixes in the grid. Please click "Re-Validate Fixes" before running the migration.',
@@ -2585,6 +2543,10 @@ onReviewPanelDragEnd(): void {
       errors.push('Please fix your query criteria before running.');
     }
 
+    if (!this.validateDateRange()) {
+      errors.push(this.dateRangeError!);
+    }
+
     const activeMappings = this.restrictToQueryFields(this.mappings.filter((m) => m.targetField !== ''));
     if (activeMappings.length === 0) {
       errors.push('Please map at least one field before running the migration.');
@@ -2593,17 +2555,23 @@ onReviewPanelDragEnd(): void {
     const isUpdateMode = this.operationMode === 'update' || this.operationMode === 'upsert';
     if (isUpdateMode) {
       if (!this.externalIdField) {
-        errors.push(`Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`);
+        errors.push(
+          `Please select an External ID field to match existing ${this.targetSystem} records for ${this.operationMode.toUpperCase()}.`
+        );
       } else {
         const targetFieldMeta = this.targetFields.find((f) => f.name === this.externalIdField);
         const isEligible = this.isExternalIdEligible(targetFieldMeta || { name: '', label: '' });
 
         if (!isEligible) {
-          errors.push(`"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID in ${this.targetSystem}. Mark it in Setup or choose another field.`);
+          errors.push(
+            `"${this.getTargetFieldLabel(this.externalIdField)}" isn't marked as an External ID in ${this.targetSystem}. Mark it in Setup or choose another field.`
+          );
         } else if (!activeMappings.some((m) => m.targetField === this.externalIdField)) {
           const rawMapping = this.mappings.find((m) => m.targetField === this.externalIdField);
           if (rawMapping && this.getQueryFieldFilterSet()) {
-            errors.push(`Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`);
+            errors.push(
+              `Your External ID source field "${rawMapping.sourceField}" isn't in your query's SELECT list, so it won't be extracted. Add it to your query, or unmap it and choose a field the query actually selects.`
+            );
           } else {
             errors.push(`The External ID field "${this.getTargetFieldLabel(this.externalIdField)}" isn't mapped to a source column.`);
           }
@@ -2618,7 +2586,7 @@ onReviewPanelDragEnd(): void {
     return { errors, warnings };
   }
 
-  private show_warning_modal(warnings: { missingFields: string[], incompleteRefs: string[] }) {
+  private show_warning_modal(warnings: { missingFields: string[]; incompleteRefs: string[] }) {
     let warningHtml = '<div class="text-start mt-2">';
 
     if (warnings.missingFields.length > 0) {
@@ -2671,38 +2639,40 @@ onReviewPanelDragEnd(): void {
   }
 
   downloadAudit(type: 'valid' | 'invalid') {
-  if (!this.currentSessionId) {
-    this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
-    return;
+    if (!this.currentSessionId) {
+      this.toastr.error('Session expired. Please run the validation stream again to generate a new report.', 'No Session');
+      return;
+    }
+
+    if (type === 'invalid' && this.validationResults?.invalidRecords) {
+      this.toastr.info(`Generating error audit report...`, 'Downloading');
+      this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
+      return;
+    }
+
+    this.toastr.info(`Generating valid audit report...`, 'Downloading');
+    const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
+    const token = localStorage.getItem('supabase_token') || '';
+
+    this.http
+      .get(url, {
+        responseType: 'blob',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .subscribe({
+        next: (blob) => {
+          const objectUrl = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = objectUrl;
+          a.download = `Validation_Audit_${type}_${this.currentSessionId}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(objectUrl);
+        },
+        error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
+      });
   }
-
-  if (type === 'invalid' && this.validationResults?.invalidRecords) {
-    this.toastr.info(`Generating error audit report...`, 'Downloading');
-    this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
-    return;
-  }
-
-  this.toastr.info(`Generating valid audit report...`, 'Downloading');
-  const url = `${environment.apiUrl}/api/audit/download/${this.currentSessionId}?type=${type}`;
-  const token = localStorage.getItem('supabase_token') || '';
-
-  this.http.get(url, {
-    responseType: 'blob',
-    headers: { Authorization: `Bearer ${token}` }
-  }).subscribe({
-    next: (blob) => {
-      const objectUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = `Validation_Audit_${type}_${this.currentSessionId}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(objectUrl);
-    },
-    error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
-  });
-}
 
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
@@ -2820,11 +2790,15 @@ onReviewPanelDragEnd(): void {
                       <h2 class="text-success mb-0 fw-bold">${successCount}</h2>
                       <span class="small fw-bold text-success-emphasis text-uppercase">Successful</span>
                     </div>
-                    ${skippedCount > 0 ? `
+                    ${
+                      skippedCount > 0
+                        ? `
                     <div class="p-3 border rounded border-warning-subtle bg-warning-subtle w-100 shadow-sm">
                       <h2 class="text-warning-emphasis mb-0 fw-bold">${skippedCount}</h2>
                       <span class="small fw-bold text-warning-emphasis text-uppercase">Skipped (No Match)</span>
-                    </div>` : ''}
+                    </div>`
+                        : ''
+                    }
                     <div class="p-3 border rounded border-danger-subtle bg-danger-subtle w-100 shadow-sm">
                       <h2 class="text-danger mb-0 fw-bold">${errorCount}</h2>
                       <span class="small fw-bold text-danger-emphasis text-uppercase">Rejected</span>

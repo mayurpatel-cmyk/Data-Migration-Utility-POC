@@ -1,8 +1,4 @@
 <style>
-  /* ============================================================
-     Design tokens -- shared with connection.component.html's
-     "Sync Rail" system, so both screens read as one product.
-     ============================================================ */
   :host {
     --ink: #10131a;
     --paper: #f6f7fb;
@@ -382,24 +378,15 @@
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    /* NOTE: top/left intentionally excluded -- they're driven by the
-       component while dragging (see startReviewPanelDrag) and animating
-       them here would make dragging feel laggy/delayed. */
     transition: width 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.2s ease;
     border: 1px solid #dee2e6;
 
-    /* Native Drag-to-Resize -- stays on by default; only the fully
-       maximized `.expanded` state below turns it off, since there's
-       nothing left to resize into at 90vw x 90vh. */
     resize: both;
     overflow: hidden;
     min-width: 450px;
     min-height: 350px;
   }
 
-  /* Maximize/Expanded State -- forces position+size regardless of the
-     inline top/left the drag handler set, and drops native resize since
-     fullscreen has nothing left to resize into. */
   .floating-review-panel.expanded {
     top: 5vh !important;
     left: 5vw !important;
@@ -464,19 +451,7 @@
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
   }
 
-  /* ============================================================
-     UI polish only -- no logic/bindings touched below.
 
-     1) Cursor affordance: native <button>/<select> elements keep
-        the OS default arrow cursor unless told otherwise (Bootstrap
-        intentionally doesn't override this), and the many
-        `cursor-pointer` classes already sprinkled through the
-        template below had no matching rule anywhere in this file --
-        so none of them were actually doing anything. Defining them
-        here (plus a couple of element-level rules) makes every
-        clickable control, dropdown trigger/option, filter control,
-        and profile-menu item show the hand cursor on hover.
-     ============================================================ */
   .cursor-pointer {
     cursor: pointer !important;
   }
@@ -500,6 +475,7 @@
   .form-check-input:disabled {
     cursor: not-allowed;
   }
+
   .migration-filter-clear-spacer {
     display: block;
     visibility: hidden;
@@ -539,16 +515,15 @@
     border-color: #a52834;
   }
 
-  /* Profile menu trigger (avatar + name + chevron) -- cursor comes
-     from .cursor-pointer above; this just adds a subtle hover
-     affordance to match the other interactive chrome in the header. */
+  .migration-filter-error {
+    color: #dc3545;
+    font-weight: 600;
+  }
+
   .profile-trigger:hover {
     background-color: var(--paper);
   }
 
-  /* Review panel header "Close" (X) button -- was a barely-visible
-     translucent white pill on the dark header; now reads clearly as a
-     destructive/close action. */
   .panel-close-btn {
     background-color: #dc3545 !important;
     color: #fff !important;
@@ -584,8 +559,7 @@
       <a href="javascript:" (click)="returnToHome()" class="d-flex align-items-center me-2" title="Back to Home">
         <img src="assets/images/gemini-svg.svg" alt="darkMode-logo" class="api-mapping-logo" />
       </a>
-      <button
-        class="btn btn-sm me-2 btn-hover-lift d-flex align-items-center gap-1"
+      <button class="btn btn-sm me-2 btn-hover-lift d-flex align-items-center gap-1"
         style="background: transparent; border: 1.5px solid var(--line); color: var(--muted); border-radius: 999px; font-weight: 600;"
         (click)="goBackToConnection()" title="Back to Connections">
         <i class="feather icon-arrow-left"></i> Back
@@ -677,35 +651,34 @@
         }
       </div>
     </div>
-    
-<div class="border-start ps-3 ms-1 d-flex align-items-center position-relative"
-  (click)="$event.stopPropagation()">
-  <a class="d-flex align-items-center gap-2 cursor-pointer profile-trigger text-decoration-none px-2 py-1 rounded"
-    (click)="toggleProfileDropdown($event)" title="Account">
-    <img src="assets/images/user/310818.png" alt="user-image" class="rounded-circle"
-      style="width: 32px; height: 32px; object-fit: cover;" />
-    <span class="d-none d-md-inline small fw-bold text-dark text-truncate" style="max-width: 140px;">
-      {{ currentUser?.full_name || 'Guest' }}
-    </span>
-    <i class="feather icon-chevron-down text-muted small"></i>
-  </a>
 
-  @if (isProfileDropdownOpen) {
-  <div class="dropdown-menu show shadow-lg border-0 position-absolute end-0 mt-1 p-0 overflow-hidden"
-    style="top: 100%; min-width: 240px; z-index: 1060;">
-    <div class="p-3 border-bottom bg-light">
-      <h6 class="mb-0 fw-bold text-dark">
-        Hello, <span class="fw-normal text-muted">{{ currentUser?.full_name || 'Guest' }}</span>
-      </h6>
-      <p class="text-muted small mb-0 text-truncate">{{ currentUser?.email || 'User' }}</p>
+    <div class="border-start ps-3 ms-1 d-flex align-items-center position-relative" (click)="$event.stopPropagation()">
+      <a class="d-flex align-items-center gap-2 cursor-pointer profile-trigger text-decoration-none px-2 py-1 rounded"
+        (click)="toggleProfileDropdown($event)" title="Account">
+        <img src="assets/images/user/310818.png" alt="user-image" class="rounded-circle"
+          style="width: 32px; height: 32px; object-fit: cover;" />
+        <span class="d-none d-md-inline small fw-bold text-dark text-truncate" style="max-width: 140px;">
+          {{ currentUser?.full_name || 'Guest' }}
+        </span>
+        <i class="feather icon-chevron-down text-muted small"></i>
+      </a>
+
+      @if (isProfileDropdownOpen) {
+      <div class="dropdown-menu show shadow-lg border-0 position-absolute end-0 mt-1 p-0 overflow-hidden"
+        style="top: 100%; min-width: 240px; z-index: 1060;">
+        <div class="p-3 border-bottom bg-light">
+          <h6 class="mb-0 fw-bold text-dark">
+            Hello, <span class="fw-normal text-muted">{{ currentUser?.full_name || 'Guest' }}</span>
+          </h6>
+          <p class="text-muted small mb-0 text-truncate">{{ currentUser?.email || 'User' }}</p>
+        </div>
+        <a class="dropdown-item d-flex align-items-center gap-2 py-2 text-danger cursor-pointer" (click)="logout()">
+          <i class="feather icon-log-out"></i>
+          <span>Logout</span>
+        </a>
+      </div>
+      }
     </div>
-    <a class="dropdown-item d-flex align-items-center gap-2 py-2 text-danger cursor-pointer" (click)="logout()">
-      <i class="feather icon-log-out"></i>
-      <span>Logout</span>
-    </a>
-  </div>
-  }
-</div>
   </div>
 </div>
 
@@ -777,8 +750,8 @@
           [style.border-color]="queryError ? '#dc3545' : 'var(--line)'"
           style="height: 120px; border-width: 2px !important;">
           <ngx-monaco-editor [options]="editorOptions" [(ngModel)]="customQuery" (ngModelChange)="onQueryEdited()"
-  (onInit)="onEditorInit($event)" style="height: 100%; width: 100%;">
-</ngx-monaco-editor>
+            (onInit)="onEditorInit($event)" style="height: 100%; width: 100%;">
+          </ngx-monaco-editor>
         </div>
 
         @if (queryError) {
@@ -794,8 +767,7 @@
           </div>
           <button class="btn btn-sm shadow-sm btn-hover-lift-primary px-3"
             style="background: var(--source); color: #fff; border: none; border-radius: 9px; font-weight: 700;"
-            (click)="applyFilter()"
-            [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
+            (click)="applyFilter()" [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
             <i class="feather" [ngClass]="isPreviewLoading ? 'icon-loader fa-spin' : 'icon-filter'"></i>
             {{ isPreviewLoading ? queryContext.loadingText : queryContext.buttonText }}
           </button>
@@ -803,7 +775,8 @@
       </div>
     </div>
 
-    <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1" style="min-height: 0; overflow: hidden; border-radius: 0.75rem;">
+    <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1"
+      style="min-height: 0; overflow: hidden; border-radius: 0.75rem;">
       <div
         class="card-header bg-white py-3 border-bottom flex-shrink-0 d-flex justify-content-between align-items-center">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
@@ -813,27 +786,28 @@
             {{ visiblePreviewHeaders.length }} col{{ visiblePreviewHeaders.length === 1 ? '' : 's' }}
           </span>
           @if (isQueryFieldFilterActive) {
-          <span class="badge bg-info-subtle text-info-emphasis small fw-normal" title="Columns narrowed to your query's SELECT list">
+          <span class="badge bg-info-subtle text-info-emphasis small fw-normal"
+            title="Columns narrowed to your query's SELECT list">
             <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
             From query
           </span>
           }
         </h6>
         <div class="d-flex align-items-center gap-2 animate__animated animate__fadeIn">
-              @if (selectedSourceObject) {
-      <span class="badge small fw-normal text-nowrap"
-        style="background: var(--source-soft); color: var(--source);"
-        [title]="(customQuery || isMigrationFilterActive) ? 'Records matching your query and filter' : 'Total records in this object'">
-        @if (isSourceCountLoading) {
-        <span class="spinner-border spinner-border-sm" style="width: 0.65rem; height: 0.65rem;"></span>
-        } @else if (selectedSourceObjectCount !== null) {
-        <i class="feather icon-database" style="font-size: 0.7rem;"></i> {{ selectedSourceObjectCount | number }} record{{ selectedSourceObjectCount === 1 ? '' : 's' }}
-        @if (customQuery || isMigrationFilterActive) {
-        <span class="text-muted">(filtered)</span>
-        }
-        }
-      </span>
-      }
+          @if (selectedSourceObject) {
+          <span class="badge small fw-normal text-nowrap" style="background: var(--source-soft); color: var(--source);"
+            [title]="(customQuery || isMigrationFilterActive) ? 'Records matching your query and filter' : 'Total records in this object'">
+            @if (isSourceCountLoading) {
+            <span class="spinner-border spinner-border-sm" style="width: 0.65rem; height: 0.65rem;"></span>
+            } @else if (selectedSourceObjectCount !== null) {
+            <i class="feather icon-database" style="font-size: 0.7rem;"></i> {{ selectedSourceObjectCount | number }}
+            record{{ selectedSourceObjectCount === 1 ? '' : 's' }}
+            @if (customQuery || isMigrationFilterActive) {
+            <span class="text-muted">(filtered)</span>
+            }
+            }
+          </span>
+          }
           <!-- <span class="preview-row-count-pill">{{ previewRecords.length }} row{{ previewRecords.length === 1 ? '' : 's' }}</span> -->
           <label class="small fw-bold text-muted mb-0">Rows:</label>
           <select class="form-select form-select-sm shadow-sm border-secondary-subtle"
@@ -862,8 +836,7 @@
                 <th class="border-bottom-0 px-3 py-2">Data Columns</th>
                 }
                 @for (header of visiblePreviewHeaders; track header) {
-                <th class="border-bottom-0 text-truncate px-3 py-2"
-                  style="max-width: 180px;">{{ header }}</th>
+                <th class="border-bottom-0 text-truncate px-3 py-2" style="max-width: 180px;">{{ header }}</th>
                 }
               </tr>
             </thead>
@@ -886,8 +859,7 @@
               }
               @for (row of previewRecords; track $index; let i = $index) {
               <tr>
-                <td class="text-center preview-row-index-cell fw-bold border-end align-middle"
-                  style="width: 40px;">
+                <td class="text-center preview-row-index-cell fw-bold border-end align-middle" style="width: 40px;">
                   {{ i + 1 }}
                 </td>
                 @for (header of visiblePreviewHeaders; track header) {
@@ -914,123 +886,124 @@
           <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
             <i class="feather icon-git-merge text-info"></i> Field Mapping
           </h6>
-          <span class="badge" style="background: var(--source-soft); color: var(--source);">{{ mappedCount }} / {{ mappings.length }} Mapped</span>
+          <span class="badge" style="background: var(--source-soft); color: var(--source);">{{ mappedCount }} / {{
+            mappings.length }} Mapped</span>
         </div>
 
         @if (getQuerySelectedFields() !== null) {
-<div class="d-flex flex-column gap-2 mt-1">
-  <div class="d-flex justify-content-between align-items-center gap-2">
-    <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
-      <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
-        [(ngModel)]="restrictMappingToQueryFields" (change)="onRestrictToQueryFieldsChange()" style="cursor: pointer;">
-      <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch" style="cursor: pointer;">
-        Query fields only
-      </label>
-    </div>
-    @if (isQueryFieldFilterActive) {
-    <span class="badge bg-info-subtle text-info-emphasis small" title="Your query builder SELECT clause is limiting the source fields shown below">
-      <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
-      {{ queryFilteredFieldCount }} field{{ queryFilteredFieldCount === 1 ? '' : 's' }} from query
-    </span>
-    }
-  </div>
-
-  @if (!restrictMappingToQueryFields && isEligibleForTimeFilter) {
-  <div class="position-relative" (click)="$event.stopPropagation()" style="width: fit-content;">
-    <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
-      [class.btn-outline-primary]="!isMigrationFilterActive"
-      [class.btn-primary]="isMigrationFilterActive"
-      style="border-radius: 8px;"
-      (click)="toggleMigrationFilterDropdown($event)">
-      <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
-      <span class="fw-bold">Migration Filter:</span>
-      <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
-      <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen" [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
-    </button>
-
-    @if (isMigrationFilterOpen) {
-    <div class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
-      style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
-
-      <div class="d-flex flex-column gap-2">
-
-        <div class="d-flex align-items-center gap-2">
-          <label class="small text-muted text-nowrap mb-0">Field</label>
-          <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
-            [(ngModel)]="migrationTimeFilter.field"
-            (change)="triggerLivePreview()">
-            @for (opt of timeFilterFieldOptions; track opt.value) {
-              <option [value]="opt.value">{{ opt.label }}</option>
+        <div class="d-flex flex-column gap-2 mt-1">
+          <div class="d-flex justify-content-between align-items-center gap-2">
+            <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
+              <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
+                [(ngModel)]="restrictMappingToQueryFields" (change)="onRestrictToQueryFieldsChange()"
+                style="cursor: pointer;">
+              <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch"
+                style="cursor: pointer;">
+                Query fields only
+              </label>
+            </div>
+            @if (isQueryFieldFilterActive) {
+            <span class="badge bg-info-subtle text-info-emphasis small"
+              title="Your query builder SELECT clause is limiting the source fields shown below">
+              <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
+              {{ queryFilteredFieldCount }} field{{ queryFilteredFieldCount === 1 ? '' : 's' }} from query
+            </span>
             }
-          </select>
-        </div>
+          </div>
 
-        <hr class="my-1">
+          @if (!restrictMappingToQueryFields && isEligibleForTimeFilter) {
+          <div class="position-relative" (click)="$event.stopPropagation()" style="width: fit-content;">
+            <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
+              [class.btn-outline-primary]="!isMigrationFilterActive" [class.btn-primary]="isMigrationFilterActive"
+              style="border-radius: 8px;" (click)="toggleMigrationFilterDropdown($event)">
+              <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
+              <span class="fw-bold">Migration Filter:</span>
+              <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
+              <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen"
+                [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
+            </button>
 
-        <div class="d-flex flex-column gap-2">
-          <div class="d-flex align-items-start gap-2">
-            <div class="flex-grow-1">
-              <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
-              <input type="date" id="migrationFilterStartDate" class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
-                [(ngModel)]="migrationTimeFilter.startDate"
-                [max]="migrationTimeFilter.endDate || todayIsoDate"
-                (change)="onDateRangeChange()">
-            </div>
-            <div class="flex-grow-1">
-              <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
-              <input type="date" id="migrationFilterEndDate" class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
-                [(ngModel)]="migrationTimeFilter.endDate"
-                [min]="migrationTimeFilter.startDate"
-                [max]="todayIsoDate"
-                placeholder="Defaults to today"
-                title="Leave blank to filter through today"
-                (change)="onDateRangeChange()">
-            </div>
-            @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
-            <div class="flex-shrink-0 migration-filter-clear-wrap">
-              <label class="small text-muted mb-0 migration-filter-clear-spacer" aria-hidden="true">&nbsp;</label>
-              <div class="migration-filter-clear-row">
-                <button type="button" class="btn btn-sm migration-filter-clear-btn"
-                  (click)="clearDateRange()" title="Clear date range">
-                  <i class="feather icon-x" style="font-size: 0.75rem;"></i>
-                </button>
+            @if (isMigrationFilterOpen) {
+            <div
+              class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
+              style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+
+              <div class="d-flex flex-column gap-2">
+
+                <div class="d-flex align-items-center gap-2">
+                  <label class="small text-muted text-nowrap mb-0">Field</label>
+                  <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
+                    [(ngModel)]="migrationTimeFilter.field" (change)="triggerLivePreview()">
+                    @for (opt of timeFilterFieldOptions; track opt.value) {
+                    <option [value]="opt.value">{{ opt.label }}</option>
+                    }
+                  </select>
+                </div>
+
+                <hr class="my-1">
+
+                <div class="d-flex flex-column gap-2">
+                  <div class="d-flex align-items-start gap-2">
+                    <div class="flex-grow-1">
+                      <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
+                      <input type="date" id="migrationFilterStartDate"
+                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                        [(ngModel)]="migrationTimeFilter.startDate" [max]="migrationTimeFilter.endDate || todayIsoDate"
+                        (change)="onDateRangeChange()">
+                    </div>
+                    <div class="flex-grow-1">
+                      <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
+                      <input type="date" id="migrationFilterEndDate"
+                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                        [(ngModel)]="migrationTimeFilter.endDate" [min]="migrationTimeFilter.startDate"
+                        [max]="todayIsoDate" placeholder="Defaults to today" title="Leave blank to filter through today"
+                        (change)="onDateRangeChange()">
+                    </div>
+                    @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
+                    <div class="flex-shrink-0 migration-filter-clear-wrap">
+                      <label class="small text-muted mb-0 migration-filter-clear-spacer"
+                        aria-hidden="true">&nbsp;</label>
+                      <div class="migration-filter-clear-row">
+                        <button type="button" class="btn btn-sm migration-filter-clear-btn" (click)="clearDateRange()"
+                          title="Clear date range">
+                          <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+                        </button>
+                      </div>
+                    </div>
+                    }
+                  </div>
+
+                  @if (migrationTimeFilter.startDate && !migrationTimeFilter.endDate) {
+                  <div class="small text-muted d-flex align-items-center gap-1">
+                    <i class="feather icon-info" style="font-size: 0.75rem;"></i>
+                    Filtering from {{ migrationTimeFilter.startDate }} through today.
+                  </div>
+                  }
+
+                  <div class="d-flex align-items-center gap-1 flex-wrap">
+                    @for (preset of quickRangePresets; track preset.key) {
+                    <button type="button" class="btn btn-sm" [class.btn-primary]="activeQuickRangePreset === preset.key"
+                      [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
+                      (click)="applyQuickRange(preset.key)">
+                      {{ preset.label }}
+                    </button>
+                    }
+                  </div>
+
+                  @if (dateRangeError) {
+                  <div class="small migration-filter-error d-flex align-items-center gap-1">
+                    <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
+                    {{ dateRangeError }}
+                  </div>
+                  }
+                </div>
               </div>
             </div>
             }
           </div>
-
-          @if (migrationTimeFilter.startDate && !migrationTimeFilter.endDate) {
-          <div class="small text-muted d-flex align-items-center gap-1">
-            <i class="feather icon-info" style="font-size: 0.75rem;"></i>
-            Filtering from {{ migrationTimeFilter.startDate }} through today.
-          </div>
-          }
-
-          <div class="d-flex align-items-center gap-1 flex-wrap">
-            @for (preset of quickRangePresets; track preset.key) {
-              <button type="button" class="btn btn-sm"
-                [class.btn-primary]="activeQuickRangePreset === preset.key"
-                [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
-                (click)="applyQuickRange(preset.key)">
-                {{ preset.label }}
-              </button>
-            }
-          </div>
-
-          @if (dateRangeError) {
-          <div class="small text-danger d-flex align-items-center gap-1">
-            <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
-            {{ dateRangeError }}
-          </div>
           }
         </div>
-      </div>
-    </div>
-    }
-  </div>
-  }
-</div>
-}
+        }
       </div>
 
       @if (targetFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
@@ -1048,10 +1021,10 @@
 
         <div class="p-3 rounded shadow-sm mb-3 flex-shrink-0"
           style="background: var(--source-soft); border: 1px solid #c9d7ea; transition: 0.3s ease;"
-          [class.opacity-50]="!selectedTargetObject"
-          [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
+          [class.opacity-50]="!selectedTargetObject" [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
           <div class="d-flex justify-content-between align-items-center mb-2">
-            <h6 class="fw-bold m-0" style="color: var(--source);"><i class="feather icon-sliders me-1"></i> Migration Settings
+            <h6 class="fw-bold m-0" style="color: var(--source);"><i class="feather icon-sliders me-1"></i> Migration
+              Settings
             </h6>
           </div>
           <div class="d-flex flex-wrap gap-3 mb-2">
@@ -1093,13 +1066,15 @@
                 </span>
                 <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
                   <option value="" selected>-- Select Field --</option>
-                  @for (field of (operationMode === 'insert' ? targetFields : getExternalIdEligibleFields()); track field.name) {
+                  @for (field of (operationMode === 'insert' ? targetFields : getExternalIdEligibleFields()); track
+                  field.name) {
                   <option [value]="field.name">{{ field.label }}</option>
                   }
                 </select>
                 @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
                 <div class="small text-danger mt-1">
-                  No fields on {{ selectedTargetObject }} are marked as a matchable unique/external key in {{ targetSystem }}.
+                  No fields on {{ selectedTargetObject }} are marked as a matchable unique/external key in {{
+                  targetSystem }}.
                   Mark one in {{ targetSystem }} Setup before running {{ operationMode.toUpperCase() }}.
                 </div>
                 }
@@ -1203,7 +1178,8 @@
             class="d-flex flex-column align-items-center justify-content-center h-100 text-muted opacity-75 pt-2 animate__animated animate__fadeIn">
             <i class="feather icon-filter mb-3" style="font-size: 3.5rem;"></i>
             <h5 class="fw-bold">No Matching Source Fields</h5>
-            <p class="small mb-2">None of your mapped source fields match this object's schema, or your query's SELECT list is empty.</p>
+            <p class="small mb-2">None of your mapped source fields match this object's schema, or your query's SELECT
+              list is empty.</p>
             <button class="btn btn-sm btn-outline-secondary" (click)="restrictMappingToQueryFields = false">
               Show all fields instead
             </button>
@@ -1419,8 +1395,8 @@
               <!-- NEW: On-Demand Review Button -->
               <button
                 class="btn btn-light border-info text-info shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
-                (click)="openReviewPanel()"
-                [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
+                (click)="openReviewPanel()" [disabled]="mappings.length === 0 || isAutoMapping"
+                title="Open Review Panel">
                 <i class="feather icon-eye fs-5"></i> Open Review
               </button>
 
@@ -1758,15 +1734,12 @@
 <!-- ========================================================= -->
 @if (showReviewPanel) {
 <div class="floating-review-panel animate__animated animate__fadeInUp" [class.minimized]="reviewPanelMinimized"
-  [class.expanded]="reviewPanelExpanded"
-  [style.top.px]="reviewPanelTop" [style.left.px]="reviewPanelLeft">
+  [class.expanded]="reviewPanelExpanded" [style.top.px]="reviewPanelTop" [style.left.px]="reviewPanelLeft">
 
   <!-- Panel Header (drag to move; click to maximize if minimized) -->
   <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0 panel-header"
-    style="border-radius: 8px 8px 0 0;"
-    (mousedown)="startReviewPanelDrag($event)"
-    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null"
-    title="Drag to move">
+    style="border-radius: 8px 8px 0 0;" (mousedown)="startReviewPanelDrag($event)"
+    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null" title="Drag to move">
     <div class="d-flex align-items-center gap-2">
       <i class="feather icon-check-circle text-success fs-5"></i>
       <h6 class="m-0 fw-bold">Auto-Map Review</h6>
@@ -1787,9 +1760,9 @@
         (click)="reviewPanelMinimized = true; reviewPanelExpanded = false; $event.stopPropagation()" title="Minimize">
         <i class="feather icon-minus fs-5"></i>
       </button>
-      <button class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
-        style="width: 22px; height: 22px;"
-        (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
+      <button
+        class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
+        style="width: 22px; height: 22px;" (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
         <i class="feather icon-x" style="font-size: 0.85rem;"></i>
       </button>
       } @else {
@@ -1797,9 +1770,9 @@
         (click)="reviewPanelMinimized = false; $event.stopPropagation()" title="Restore">
         <i class="feather icon-maximize-2 fs-5"></i>
       </button>
-      <button class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
-        style="width: 22px; height: 22px;"
-        (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
+      <button
+        class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
+        style="width: 22px; height: 22px;" (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
         <i class="feather icon-x" style="font-size: 0.85rem;"></i>
       </button>
       }
@@ -1839,7 +1812,8 @@
             <div
               class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
               <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
-              <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1 flex-shrink-0"
+              <span
+                class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1 flex-shrink-0"
                 style="font-size: 0.6rem;">
                 {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
               </span>
