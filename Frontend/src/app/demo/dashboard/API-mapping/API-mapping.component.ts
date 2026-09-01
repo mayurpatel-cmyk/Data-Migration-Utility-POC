@@ -108,6 +108,17 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   reviewPanelMinimized: boolean = false;
   reviewFilter: 'mapped' | 'unmapped' = 'mapped';
 
+  // Review Panel: draggable positioning (top/left, px) -- recomputed to
+  // center-of-viewport each time the panel opens, then updated live while
+  // dragging. Native CSS `resize: both` (see .floating-review-panel) already
+  // handles dynamic resizing, so drag only needs to own position.
+  readonly reviewPanelDefaultWidth = 650;
+  readonly reviewPanelDefaultHeight = 550;
+  reviewPanelTop = 100;
+  reviewPanelLeft = 100;
+  private reviewPanelDragging = false;
+  private reviewPanelDragOffset = { x: 0, y: 0 };
+
   selectedSourceObject = '';
   selectedTargetObject = '';
   isLoading = false;
@@ -399,36 +410,54 @@ get migrationFilterSummary(): string {
   if (f.startDate && f.endDate) {
     return `${f.startDate} → ${f.endDate}`;
   }
+  if (f.startDate) {
+    return `${f.startDate} → today`;
+  }
   return 'No Filter';
 }
 
 get isMigrationFilterActive(): boolean {
-  return !!this.migrationTimeFilter.startDate && !!this.migrationTimeFilter.endDate;
+  // A "From" date alone is a complete, valid filter now -- the backend
+  // defaults the "To" side to today when it's left blank (see
+  // time_filter_service.py). Only startDate needs to be present.
+  return !!this.migrationTimeFilter.startDate;
 }
 
 triggerLivePreview(): void {
+  // validateDateRange() is the single gate: it returns true for every state
+  // we want to fire on (both cleared, "From" only -- open-ended through
+  // today, or a complete valid range) and false for the one state we don't
+  // (an end date with no start, or a malformed/reversed range), so there's
+  // no separate hasStart/hasEnd check needed here anymore.
   if (!this.validateDateRange()) return;
-
-  const hasStart = !!this.migrationTimeFilter.startDate;
-  const hasEnd = !!this.migrationTimeFilter.endDate;
-
-  // Only fire once the range is complete, or once it's been fully cleared
-  if ((hasStart && hasEnd) || (!hasStart && !hasEnd)) {
-    this.applyFilter();
-  }
+  this.applyFilter();
 }
 
 validateDateRange(): boolean {
   this.dateRangeError = null;
   const { startDate, endDate } = this.migrationTimeFilter;
 
-  if (!startDate || !endDate) return true;
+  if (!startDate && !endDate) return true;
+
+  if (endDate && !startDate) {
+    this.dateRangeError = "Please select a 'From' date as well — an end date on its own isn't enough to filter by.";
+    return false;
+  }
 
   const start = new Date(startDate);
-  const end = new Date(endDate);
+  if (isNaN(start.getTime())) {
+    this.dateRangeError = 'Please enter a valid start date.';
+    return false;
+  }
 
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    this.dateRangeError = 'Please enter valid dates.';
+  if (!endDate) {
+    // Open-ended: the backend defaults "To" to today when it's left blank.
+    return true;
+  }
+
+  const end = new Date(endDate);
+  if (isNaN(end.getTime())) {
+    this.dateRangeError = 'Please enter a valid end date.';
     return false;
   }
 
@@ -514,6 +543,9 @@ private getFilterSuffix(): string {
   const f = this.migrationTimeFilter;
   if (f.startDate && f.endDate) {
     return ` (filtered: ${f.startDate} to ${f.endDate})`;
+  }
+  if (f.startDate) {
+    return ` (filtered: ${f.startDate} to today)`;
   }
   return '';
 }
@@ -976,6 +1008,56 @@ onRestrictToQueryFieldsChange(): void {
   }
 }
 
+/**
+ * Opens the Auto-Map Review panel centered in the viewport (rather than
+ * pinned to a corner) so there's room to actually read source/target
+ * labels and type badges. Call this instead of setting showReviewPanel
+ * directly so every entry point (manual "Open Review" button, heuristic
+ * auto-map, hybrid AI auto-map) gets the same centered placement.
+ */
+openReviewPanel(): void {
+  this.reviewPanelExpanded = false;
+  this.reviewPanelMinimized = false;
+  this.reviewPanelLeft = Math.max(20, (window.innerWidth - this.reviewPanelDefaultWidth) / 2);
+  this.reviewPanelTop = Math.max(20, (window.innerHeight - this.reviewPanelDefaultHeight) / 2);
+  this.showReviewPanel = true;
+}
+
+/** Starts a drag on mousedown over the panel header -- ignores clicks that
+ * land on the header's own buttons (maximize/minimize/close) so those keep
+ * working normally instead of initiating a drag. */
+startReviewPanelDrag(event: MouseEvent): void {
+  if (this.reviewPanelExpanded) return;
+  if ((event.target as HTMLElement).closest('button')) return;
+
+  const panelEl = (event.currentTarget as HTMLElement).closest('.floating-review-panel') as HTMLElement;
+  if (!panelEl) return;
+
+  const rect = panelEl.getBoundingClientRect();
+  this.reviewPanelDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  this.reviewPanelDragging = true;
+  event.preventDefault();
+}
+
+@HostListener('document:mousemove', ['$event'])
+onReviewPanelDrag(event: MouseEvent): void {
+  if (!this.reviewPanelDragging) return;
+
+  // Keep at least a corner of the header reachable so a panel dragged to
+  // the edge can always be dragged back, instead of getting stuck off-screen.
+  const margin = 60;
+  const maxLeft = window.innerWidth - margin;
+  const maxTop = window.innerHeight - margin;
+
+  this.reviewPanelLeft = Math.min(Math.max(event.clientX - this.reviewPanelDragOffset.x, 0), maxLeft);
+  this.reviewPanelTop = Math.min(Math.max(event.clientY - this.reviewPanelDragOffset.y, 0), maxTop);
+}
+
+@HostListener('document:mouseup')
+onReviewPanelDragEnd(): void {
+  this.reviewPanelDragging = false;
+}
+
   // --- ADD THIS TEMPLATE CONSTANT ---
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
  - Leave blank to fetch all records.
@@ -1428,10 +1510,10 @@ onRestrictToQueryFieldsChange(): void {
     try {
       const params = new URLSearchParams({ role: 'source' });
       if (query) params.set('query', query);
-      // Only send a filter that's actually complete -- a half-filled range
-      // (e.g. startDate typed, endDate not yet) would otherwise 400 the
-      // count request while the preview table itself is still waiting too.
-      if (timeFilter && timeFilter.startDate && timeFilter.endDate) {
+      // "From" alone is now a complete, valid filter (backend defaults "To"
+      // to today) -- only an end date with no start is the incomplete state
+      // worth withholding, since that one still 400s server-side.
+      if (timeFilter && timeFilter.startDate) {
         params.set('timeFilter', JSON.stringify(timeFilter));
       }
 
@@ -1982,9 +2064,8 @@ onRestrictToQueryFieldsChange(): void {
         if (this.toastr) this.toastr.success(`Intelligently aligned ${heuristicMatchCount} fields!`, 'Auto-Map Complete');
         if (this.logMessages) this.logMessages.unshift(`System: Fast-pass local mapping matched ${heuristicMatchCount} fields.`);
 
-        this.showReviewPanel = true;
-        this.reviewPanelMinimized = false;
         this.reviewFilter = 'mapped';
+        this.openReviewPanel();
       } else {
         if (this.toastr) this.toastr.info(`No matches found.`, 'Auto-Map Finished');
       }
@@ -2027,8 +2108,7 @@ onRestrictToQueryFieldsChange(): void {
               this.reviewFilter = 'unmapped';
             }
 
-            this.showReviewPanel = true;
-            this.reviewPanelMinimized = false;
+            this.openReviewPanel();
 
             this.mappings = [...this.mappings];
             if (typeof this.updateMappedCount === 'function') this.updateMappedCount();

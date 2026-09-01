@@ -12,6 +12,9 @@ in this one file.
 
 Only `mode: "range"` (explicit startDate/endDate) is supported. Relative
 filtering (LAST_N_DAYS / LAST_N_MONTHS / LAST_N_YEARS) has been removed.
+The range can be open-ended on the "To" side only: a `startDate` with no
+`endDate` defaults the end to the caller's current local date; an `endDate`
+with no `startDate` is rejected (see `_parse_date_range`).
 
 Salesforce and Zoho both filter on an absolute instant (a datetime literal),
 so their builders apply `utcOffsetMinutes` to convert the caller's local
@@ -87,6 +90,15 @@ def _parse_date_range(
     "no filter" rather than an error so a stale cached frontend build
     degrades gracefully instead of hard-failing mid-rollout).
 
+    The range can be open-ended on the "To" side: if only `startDate` is
+    given, `endDate` defaults to the caller's current local date (using
+    `utcOffsetMinutes`) -- "From Jan 1" quietly means "from Jan 1 through
+    today" rather than forcing the user to type in today's date by hand.
+    The reverse isn't allowed: `endDate` alone with no `startDate` raises,
+    since "everything up to X" isn't a range this filter can express (every
+    builder here ANDs two bounds together, so there's no sentinel meaning
+    "unbounded start").
+
     `utcOffsetMinutes` (optional, defaults to 0/UTC) shifts the calendar-day
     boundaries so "Jan 1" means midnight in the caller's local timezone
     rather than midnight UTC -- otherwise a record modified in the last few
@@ -95,6 +107,10 @@ def _parse_date_range(
     India = +330). Pass `apply_offset=False` for a target (like Zendesk)
     whose API already resolves plain date literals in the account's own
     time zone -- applying the offset there would shift the boundary twice.
+    The offset is still read (and validated) even when apply_offset=False,
+    since it's also used to compute "today" for the open-ended-range default
+    above, which should reflect the caller's local day regardless of how
+    the target CRM consumes the resulting literal.
 
     Raises TimeFilterError when a range filter IS present but incomplete
     or invalid, so the caller can surface a real 400 instead of silently
@@ -112,8 +128,22 @@ def _parse_date_range(
 
     if not start_raw and not end_raw:
         return None
-    if not start_raw or not end_raw:
-        raise TimeFilterError("migrationTimeFilter requires both startDate and endDate.")
+
+    try:
+        offset_minutes = int(time_filter.get("utcOffsetMinutes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise TimeFilterError(f"migrationTimeFilter.utcOffsetMinutes must be an integer: {exc}") from exc
+
+    if end_raw and not start_raw:
+        raise TimeFilterError(
+            "Select a 'From' date as well -- an end date on its own isn't enough to build a range."
+        )
+
+    if start_raw and not end_raw:
+        # Open-ended: "From X" means "from X through today" in the caller's
+        # own local day, not the server's.
+        local_now = datetime.utcnow() + timedelta(minutes=offset_minutes)
+        end_raw = local_now.strftime(_DATE_FMT)
 
     try:
         start_dt = datetime.strptime(start_raw, _DATE_FMT)
@@ -125,11 +155,6 @@ def _parse_date_range(
         raise TimeFilterError("migrationTimeFilter.startDate must be on or before endDate.")
 
     if apply_offset:
-        try:
-            offset_minutes = int(time_filter.get("utcOffsetMinutes") or 0)
-        except (TypeError, ValueError) as exc:
-            raise TimeFilterError(f"migrationTimeFilter.utcOffsetMinutes must be an integer: {exc}") from exc
-
         # start/end were computed as local calendar-day boundaries; converting
         # "local time" -> "UTC instant" means subtracting the offset.
         offset = timedelta(minutes=offset_minutes)
