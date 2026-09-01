@@ -516,6 +516,11 @@
             <span class="fw-bold" style="color: var(--ink);">{{ entity.label }}</span>
             <div class="small" style="font-family: monospace; color: var(--muted);">{{ entity.name }}</div>
           </div>
+          } @empty {
+          <div class="text-center text-muted small py-3">
+            <i class="feather icon-search" style="font-size: 1.25rem;"></i>
+            <div class="mt-1">No entities match "{{ sourceSearchQuery }}"</div>
+          </div>
           }
         </div>
         }
@@ -550,6 +555,11 @@
             [class.bg-light]="selectedTargetObject === obj.name">
             <span class="fw-bold" style="color: var(--ink);">{{ obj.label }}</span>
             <div class="small" style="font-family: monospace; color: var(--muted);">{{ obj.name }}</div>
+          </div>
+          } @empty {
+          <div class="text-center text-muted small py-3">
+            <i class="feather icon-search" style="font-size: 1.25rem;"></i>
+            <div class="mt-1">No objects match "{{ targetSearchQuery }}"</div>
           </div>
           }
         </div>
@@ -1276,7 +1286,7 @@
               class="btn btn-light border-secondary-subtle text-danger shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
               (click)="resetAllMappings()" [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping"
               title="Clear All">
-              <i class="feather icon-trash-2 fs-5"></i> Clear All
+              <<i class="fa-solid fa-eraser"></i> Clear All
             </button>
 
             <div class="ms-auto d-flex align-items-center gap-3">

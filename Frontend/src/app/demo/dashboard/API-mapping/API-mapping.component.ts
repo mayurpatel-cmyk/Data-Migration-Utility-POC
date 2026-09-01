@@ -1195,16 +1195,39 @@ onRestrictToQueryFieldsChange(): void {
     this.loadMetadata();
   }
 
+  /**
+   * Salesforce orgs return hundreds of objects, many prefixed "Case..."
+   * (CaseComment, CaseHistory, CaseTeamTemplate, CaseShare, etc.) alongside
+   * the actual "Case" object. A plain substring filter buries the exact
+   * match you're looking for among all of those, so results are ranked:
+   * exact name/label match first, then "starts with" the query, then any
+   * other substring match -- each tier still alphabetical internally.
+   */
+  private rankEntityMatches(entities: any[], query: string): any[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return entities;
+
+    const rank = (e: any): number => {
+      const name = (e.name || '').toLowerCase();
+      const label = (e.label || '').toLowerCase();
+      if (name === q || label === q) return 0;
+      if (name.startsWith(q) || label.startsWith(q)) return 1;
+      return 2;
+    };
+
+    return entities
+      .filter((e) => (e.label || '').toLowerCase().includes(q) || (e.name || '').toLowerCase().includes(q))
+      .sort((a, b) => rank(a) - rank(b) || (a.label || '').localeCompare(b.label || ''));
+  }
+
   getFilteredSourceEntities(): any[] {
     if (!this.sourceSearchQuery) return this.sourceEntities;
-    const lowerQuery = this.sourceSearchQuery.toLowerCase();
-    return this.sourceEntities.filter((e) => e.label.toLowerCase().includes(lowerQuery) || e.name.toLowerCase().includes(lowerQuery));
+    return this.rankEntityMatches(this.sourceEntities, this.sourceSearchQuery);
   }
 
   getFilteredTargetEntities(): any[] {
     if (!this.targetSearchQuery) return this.targetEntities;
-    const lowerQuery = this.targetSearchQuery.toLowerCase();
-    return this.targetEntities.filter((e) => e.label.toLowerCase().includes(lowerQuery) || e.name.toLowerCase().includes(lowerQuery));
+    return this.rankEntityMatches(this.targetEntities, this.targetSearchQuery);
   }
 
   getSourceEntityLabel(entityName: string): string {
@@ -2146,8 +2169,8 @@ onRestrictToQueryFieldsChange(): void {
 
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
-        title: 'Are you sure you want to run validation on this object?',
-        text: `This will securely stream and test all live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+        title: 'Validate Entire Database?',
+        text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
         icon: 'info',
         showCancelButton: true,
         confirmButtonColor: '#0d6efd',
