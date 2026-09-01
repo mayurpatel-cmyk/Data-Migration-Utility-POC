@@ -112,8 +112,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   // center-of-viewport each time the panel opens, then updated live while
   // dragging. Native CSS `resize: both` (see .floating-review-panel) already
   // handles dynamic resizing, so drag only needs to own position.
-  readonly reviewPanelDefaultWidth = 650;
-  readonly reviewPanelDefaultHeight = 550;
+  readonly reviewPanelDefaultWidth = 1000;
+  readonly reviewPanelDefaultHeight = 680;
   reviewPanelTop = 100;
   reviewPanelLeft = 100;
   private reviewPanelDragging = false;
@@ -1009,11 +1009,14 @@ onRestrictToQueryFieldsChange(): void {
 }
 
 /**
- * Opens the Auto-Map Review panel centered in the viewport (rather than
- * pinned to a corner) so there's room to actually read source/target
- * labels and type badges. Call this instead of setting showReviewPanel
+ * Opens the Auto-Map Review panel centered in the viewport at its (larger)
+ * default size -- big enough to see most mappings without the fully
+ * maximized 90vw x 90vh mode, and left resizable (`resize: both`, see
+ * .floating-review-panel) since the maximized mode intentionally turns
+ * native resize off. The user can still go fullscreen via the header
+ * toggle if they want it. Call this instead of setting showReviewPanel
  * directly so every entry point (manual "Open Review" button, heuristic
- * auto-map, hybrid AI auto-map) gets the same centered placement.
+ * auto-map, hybrid AI auto-map) gets the same placement.
  */
 openReviewPanel(): void {
   this.reviewPanelExpanded = false;
