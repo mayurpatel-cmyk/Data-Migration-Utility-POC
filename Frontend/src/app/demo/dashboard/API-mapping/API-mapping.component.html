@@ -500,48 +500,43 @@
   .form-check-input:disabled {
     cursor: not-allowed;
   }
-
-  /* ============================================================
-     2) Migration Filter "Clear" (date range) button.
-
-     Previously sized/positioned with an inline `mt-4` fixed top
-     margin as a stand-in for real alignment with the From/To
-     inputs above it, and had no distinct hover/active state of its
-     own beyond the shared `.btn-outline-danger` default. The
-     `.migration-filter-clear-spacer` label (added alongside this
-     class in the template) mirrors the real "From"/"To" label's
-     height so the button's flex row aligns with the *inputs*, not
-     an arbitrary margin.
-     ============================================================ */
   .migration-filter-clear-spacer {
     display: block;
-    height: 1.2rem;
     visibility: hidden;
+  }
+
+  .migration-filter-clear-row {
+    height: 31px;
+    display: flex;
+    align-items: center;
   }
 
   .migration-filter-clear-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 31px;
-    height: 31px;
+    width: 24px;
+    height: 24px;
     padding: 0;
-    border-radius: 8px;
+    border-radius: 6px;
     line-height: 1;
+    background-color: #dc3545;
+    border: 1px solid #dc3545;
+    color: #fff;
     transition: background-color 0.15s ease, border-color 0.15s ease,
-      color 0.15s ease, transform 0.1s ease;
+      transform 0.1s ease;
   }
 
   .migration-filter-clear-btn:hover:not(:disabled) {
-    background-color: #dc3545;
-    border-color: #dc3545;
+    background-color: #bb2d3b;
+    border-color: #bb2d3b;
     color: #fff;
   }
 
   .migration-filter-clear-btn:active:not(:disabled) {
-    transform: scale(0.94);
-    background-color: #bb2d3b;
-    border-color: #bb2d3b;
+    transform: scale(0.92);
+    background-color: #a52834;
+    border-color: #a52834;
   }
 
   /* Profile menu trigger (avatar + name + chevron) -- cursor comes
@@ -973,7 +968,7 @@
         <hr class="my-1">
 
         <div class="d-flex flex-column gap-2">
-          <div class="d-flex align-items-center gap-2">
+          <div class="d-flex align-items-start gap-2">
             <div class="flex-grow-1">
               <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
               <input type="date" id="migrationFilterStartDate" class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
@@ -993,11 +988,13 @@
             </div>
             @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
             <div class="flex-shrink-0 migration-filter-clear-wrap">
-              <label class="small mb-0 migration-filter-clear-spacer" aria-hidden="true">&nbsp;</label>
-              <button type="button" class="btn btn-sm btn-outline-danger migration-filter-clear-btn"
-                (click)="clearDateRange()" title="Clear date range">
-                <i class="feather icon-x" style="font-size: 1rem;"></i>
-              </button>
+              <label class="small text-muted mb-0 migration-filter-clear-spacer" aria-hidden="true">&nbsp;</label>
+              <div class="migration-filter-clear-row">
+                <button type="button" class="btn btn-sm migration-filter-clear-btn"
+                  (click)="clearDateRange()" title="Clear date range">
+                  <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+                </button>
+              </div>
             </div>
             }
           </div>
