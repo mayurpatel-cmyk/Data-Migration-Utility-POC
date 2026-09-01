@@ -6,6 +6,7 @@ from app.services.time_filter_service import (
     build_zoho_time_clause,
     TimeFilterError,
 )
+from app.services.query_field_utils import ensure_fields_selected
 
 class ZohoMigrator:
 
@@ -19,6 +20,7 @@ class ZohoMigrator:
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
+        # APPLY DYNAMIC TIME FILTER LOGIC (date-range only; see time_filter_service.py)
         try:
             time_clause = build_zoho_time_clause(time_filter)
         except TimeFilterError as e:
@@ -30,6 +32,19 @@ class ZohoMigrator:
 
             if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
+                    # COQL has no real "*" wildcard -- unlike SOQL, sending
+                    # it literally is a syntax error. "*" is purely this
+                    # app's own placeholder convention (the default query
+                    # the UI generates), so it's swapped for a real field
+                    # list here before ever reaching Zoho's API.
+                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
+                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
+                    else:
+                        # Floor-not-ceiling guarantee -- every mapped field
+                        # must actually be queried, or it comes back
+                        # silently empty even though it shows as "mapped".
+                        # See query_field_utils.py.
+                        coql_query = ensure_fields_selected(coql_query, safe_fields)
                     if time_clause:
                         coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                 else:

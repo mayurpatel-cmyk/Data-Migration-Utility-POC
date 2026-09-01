@@ -7,6 +7,7 @@ from app.services.time_filter_service import (
     build_salesforce_time_clause,
     TimeFilterError,
 )
+from app.services.query_field_utils import ensure_fields_selected
 
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
@@ -44,9 +45,13 @@ class SalesforceMigrator:
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
             else:
-                select_clause = re.split(r'(?i)\s+from\s+', soql)[0]
-                if not re.search(r'\bid\b', select_clause, re.IGNORECASE):
-                    soql = re.sub(r'(?i)^select\s+', 'SELECT Id, ', soql)
+                # A hand-written/auto-generated SELECT list is a floor, not
+                # a ceiling -- every field mapped in the UI must actually be
+                # queried, or it comes back silently empty in the extracted
+                # records even though the mapping table says it's mapped.
+                # headers_list already guarantees "Id" is included, so this
+                # single union replaces the old id-only injection below it.
+                soql = ensure_fields_selected(soql, headers_list)
         else:
             where_parts = []
             if clean_query: where_parts.append(f"({clean_query})")

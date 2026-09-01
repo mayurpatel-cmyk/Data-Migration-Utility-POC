@@ -13,6 +13,7 @@ from app.services.time_filter_service import (
     build_hubspot_time_filters,
     TimeFilterError,
 )
+from app.services.query_field_utils import ensure_fields_selected
 
 class CrmQueryService:
 
@@ -35,6 +36,8 @@ class CrmQueryService:
                 safe_fields = headers_list[:40] if headers_list else ["Id", "Name"]
                 fields_str = ", ".join(safe_fields)
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
+            else:
+                soql = ensure_fields_selected(soql, headers_list)
             
             if "limit " not in soql.lower():
                 soql += f" LIMIT {limit}"
@@ -175,6 +178,12 @@ class CrmQueryService:
 
             if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
+                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
+                        safe_fields = headers_list[:40] if headers_list else ["id"]
+                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
+                    else:
+                        # Floor-not-ceiling guarantee -- see query_field_utils.py.
+                        coql_query = ensure_fields_selected(coql_query, headers_list)
                     if time_clause:
                         coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                     if "limit " not in coql_query.lower():

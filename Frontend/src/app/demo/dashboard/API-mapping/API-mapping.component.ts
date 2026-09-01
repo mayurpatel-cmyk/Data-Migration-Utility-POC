@@ -2218,7 +2218,7 @@ onReviewPanelDragEnd(): void {
 
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
-        title: 'Validate Entire Database?',
+        title: 'Are you sure you want to start the ${this.selectedSourceObject} object validation?',
         text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
         icon: 'info',
         showCancelButton: true,
