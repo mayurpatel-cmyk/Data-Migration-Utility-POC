@@ -8,6 +8,9 @@ from app.services.time_filter_service import (
     merge_time_clause,
     build_salesforce_time_clause,
     build_zoho_time_clause,
+    build_zendesk_time_clause,
+    build_zendesk_custom_object_time_filter,
+    build_hubspot_time_filters,
     TimeFilterError,
 )
 
@@ -59,7 +62,7 @@ class CrmQueryService:
             return {"records": records, "queryUsed": soql}
 
     @staticmethod
-    async def execute_zendesk_query(creds: dict, obj_name: str, query: str, limit: int):
+    async def execute_zendesk_query(creds: dict, obj_name: str, query: str, limit: int, time_filter: dict = None):
         zd_token = creds.get("access_token")
         zd_subdomain = creds.get("subdomain")
         safe_obj = obj_name.lower()
@@ -68,22 +71,32 @@ class CrmQueryService:
         standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
         is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
 
+        try:
+            time_clause = build_zendesk_time_clause(time_filter)
+            custom_time_filters = build_zendesk_custom_object_time_filter(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             if is_standard:
                 if safe_obj.endswith("s"): safe_obj = safe_obj[:-1]
                 clean_query = re.sub(r'(?i)^(select\s+.*\s+from\s+[a-zA-Z0-9_]+\s*(where\s+)?)', '', query).strip()
-                full_query = f"{clean_query} type:{safe_obj}" if clean_query else f"type:{safe_obj}"
+                query_parts = [p for p in [clean_query, time_clause] if p]
+                full_query = f"{' '.join(query_parts)} type:{safe_obj}" if query_parts else f"type:{safe_obj}"
                 
                 url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page={limit}"
                 res = await client.get(url, headers=headers)
                 
                 if res.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
-                return {"records": res.json().get("results", [])}
+                return {"records": res.json().get("results", []), "queryUsed": full_query}
                 
             else:
                 explicit_fields = None
-                if query.strip():
+                had_explicit_query = bool(query.strip())
+                json_payload: dict = {}
+
+                if had_explicit_query:
                     try:
                         json_payload = json.loads(query)
                     except json.JSONDecodeError:
@@ -95,6 +108,10 @@ class CrmQueryService:
                         if cleaned:
                             explicit_fields = cleaned
 
+                if custom_time_filters:
+                    json_payload = CrmQueryService._merge_zendesk_custom_filter(json_payload, custom_time_filters)
+
+                if had_explicit_query or custom_time_filters:
                     url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
                     res = await client.post(url, headers=headers, json=json_payload)
                 else:
@@ -119,6 +136,24 @@ class CrmQueryService:
                         flat_rec = {k: v for k, v in flat_rec.items() if k in explicit_fields or k in always_keep}
                     flattened_records.append(flat_rec)
                 return {"records": flattened_records}
+
+    @staticmethod
+    def _merge_zendesk_custom_filter(payload: dict, extra_clauses: list) -> dict:
+        """ANDs extra_clauses into payload['filter']['and'], creating that
+        structure if the caller's JSON didn't already have one, and wrapping
+        a bare single-condition filter dict into an 'and' list if needed."""
+        payload = dict(payload)
+        existing_filter = payload.get("filter")
+
+        if isinstance(existing_filter, dict) and isinstance(existing_filter.get("and"), list):
+            and_list = list(existing_filter["and"]) + extra_clauses
+        elif isinstance(existing_filter, dict) and existing_filter:
+            and_list = [existing_filter] + extra_clauses
+        else:
+            and_list = list(extra_clauses)
+
+        payload["filter"] = {"and": and_list}
+        return payload
 
     @staticmethod
     async def execute_zoho_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
@@ -178,8 +213,7 @@ class CrmQueryService:
             return {"records": sample_records, "queryUsed": used_coql}
 
     @staticmethod
-    async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int):
-        import json
+    async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
         hs_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         
@@ -187,6 +221,11 @@ class CrmQueryService:
             "Authorization": f"Bearer {hs_token}",
             "Content-Type": "application/json"
         }
+
+        try:
+            time_filters = build_hubspot_time_filters(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             properties = headers_list[:50] if headers_list else ["hs_object_id", "createdate", "lastmodifieddate"]
@@ -212,6 +251,9 @@ class CrmQueryService:
                             payload["properties"] = cleaned[:50]
                 except json.JSONDecodeError:
                     raise HTTPException(status_code=400, detail="Invalid JSON payload provided for HubSpot Search filter.")
+
+            if time_filters:
+                payload["filterGroups"] = CrmQueryService._merge_hubspot_time_filters(payload.get("filterGroups"), time_filters)
             
             res = await client.post(url, headers=headers, json=payload)
             
@@ -232,6 +274,20 @@ class CrmQueryService:
             return {"records": flattened_records}
 
     @staticmethod
+    def _merge_hubspot_time_filters(filter_groups, time_filters: list) -> list:
+        """ANDs time_filters into every existing filterGroup (HubSpot ORs
+        across groups, ANDs within one), or creates a single group if none
+        existed -- adding a standalone group instead would OR the date range
+        with everything else rather than intersecting it."""
+        if not filter_groups:
+            return [{"filters": list(time_filters)}]
+        return [
+            {**group, "filters": list(group.get("filters", [])) + time_filters}
+            for group in filter_groups
+        ]
+
+    
+    @staticmethod
     async def get_object_count(creds: dict, obj_name: str, crm_type: str, query: str = "", time_filter: dict = None) -> int:
         crm = crm_type.lower()
 
@@ -240,9 +296,9 @@ class CrmQueryService:
         elif crm == "zoho":
             return await CrmQueryService._zoho_count(creds, obj_name, query, time_filter)
         elif crm == "zendesk":
-            return await CrmQueryService._zendesk_count(creds, obj_name, query)
+            return await CrmQueryService._zendesk_count(creds, obj_name, query, time_filter)
         elif crm == "hubspot":
-            return await CrmQueryService._hubspot_count(creds, obj_name, query)
+            return await CrmQueryService._hubspot_count(creds, obj_name, query, time_filter)
         else:
             raise HTTPException(status_code=400, detail="Unsupported CRM Engine")
 
@@ -333,11 +389,16 @@ class CrmQueryService:
             return 0
 
     @staticmethod
-    async def _zendesk_count(creds: dict, obj_name: str, query: str = "") -> int:
+    async def _zendesk_count(creds: dict, obj_name: str, query: str = "", time_filter: dict = None) -> int:
         zd_token = creds.get("access_token")
         zd_subdomain = creds.get("subdomain")
         safe_obj = obj_name.lower()
         headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
+
+        try:
+            time_clause = build_zendesk_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
         is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
@@ -346,9 +407,10 @@ class CrmQueryService:
             if is_standard:
                 singular = safe_obj[:-1] if safe_obj.endswith("s") else safe_obj
                 clean_query = re.sub(r'(?i)^(select\s+.*\s+from\s+[a-zA-Z0-9_]+\s*(where\s+)?)', '', (query or "")).strip()
+                query_parts = [p for p in [clean_query, time_clause] if p]
 
-                if clean_query:
-                    full_query = f"{clean_query} type:{singular}"
+                if query_parts:
+                    full_query = f"{' '.join(query_parts)} type:{singular}"
                     url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page=1"
                     res = await client.get(url, headers=headers)
                     if res.status_code != 200:
@@ -366,12 +428,17 @@ class CrmQueryService:
             return res.json().get("count", {}).get("value", 0)
 
     @staticmethod
-    async def _hubspot_count(creds: dict, obj_name: str, query: str) -> int:
+    async def _hubspot_count(creds: dict, obj_name: str, query: str, time_filter: dict = None) -> int:
         hs_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
 
         headers = {"Authorization": f"Bearer {hs_token}", "Content-Type": "application/json"}
         url = f"{domain}/crm/v3/objects/{obj_name}/search"
+
+        try:
+            time_filters = build_hubspot_time_filters(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         payload: dict = {"limit": 1, "properties": []}
         if query and query.strip():
@@ -381,6 +448,9 @@ class CrmQueryService:
                     payload["filterGroups"] = query_dict["filterGroups"]
             except json.JSONDecodeError:
                 pass  
+
+        if time_filters:
+            payload["filterGroups"] = CrmQueryService._merge_hubspot_time_filters(payload.get("filterGroups"), time_filters)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(url, headers=headers, json=payload)

@@ -104,11 +104,11 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
         if crm_id == "salesforce":
             return await CrmQueryService.execute_salesforce_query(creds, obj_name, query, headers_list, limit,payload.migrationTimeFilter)
         elif crm_id == "zendesk":
-            return await CrmQueryService.execute_zendesk_query(creds, obj_name, query, limit)
+            return await CrmQueryService.execute_zendesk_query(creds, obj_name, query, limit, payload.migrationTimeFilter)
         elif crm_id == "zoho":
             return await CrmQueryService.execute_zoho_query(creds, obj_name, query, headers_list, limit,payload.migrationTimeFilter)
         elif crm_id == "hubspot":
-            return await CrmQueryService.execute_hubspot_query(creds, obj_name, query, headers_list, limit)
+            return await CrmQueryService.execute_hubspot_query(creds, obj_name, query, headers_list, limit, payload.migrationTimeFilter)
         else:
             raise HTTPException(status_code=400, detail="Unsupported CRM Engine")
 

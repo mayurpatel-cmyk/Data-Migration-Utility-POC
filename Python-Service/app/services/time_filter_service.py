@@ -12,13 +12,24 @@ in this one file.
 
 Only `mode: "range"` (explicit startDate/endDate) is supported. Relative
 filtering (LAST_N_DAYS / LAST_N_MONTHS / LAST_N_YEARS) has been removed.
+
+Salesforce and Zoho both filter on an absolute instant (a datetime literal),
+so their builders apply `utcOffsetMinutes` to convert the caller's local
+calendar day into the correct UTC instant. Zendesk's Search API resolves
+plain YYYY-MM-DD date literals using the account's own time zone (it isn't
+given an instant at all), so `build_zendesk_time_clause` intentionally skips
+the offset math -- shifting it would double-convert the boundary. HubSpot
+needs the same absolute-instant treatment as Salesforce/Zoho, just expressed
+as epoch milliseconds instead of a literal string.
 """
 import re
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 DEFAULT_SALESFORCE_DATE_FIELD = "LastModifiedDate"
 DEFAULT_ZOHO_DATE_FIELD = "Modified_Time"
+DEFAULT_ZENDESK_DATE_FIELD = "updated"        # Zendesk Search API query token
+DEFAULT_HUBSPOT_DATE_FIELD = "hs_lastmodifieddate"  # HubSpot property name
 
 _DATE_FMT = "%Y-%m-%d"
 
@@ -63,7 +74,11 @@ def merge_time_clause(base_query: str, time_clause: str, where_kw: str = "WHERE"
     return f"{new_head} {tail}".strip() if tail else new_head.strip()
 
 
-def _parse_date_range(time_filter: Optional[dict], default_field: str) -> Optional[Tuple[str, datetime, datetime]]:
+def _parse_date_range(
+    time_filter: Optional[dict],
+    default_field: str,
+    apply_offset: bool = True,
+) -> Optional[Tuple[str, datetime, datetime]]:
     """
     Extracts (field, start_dt, end_dt) from a migrationTimeFilter payload.
 
@@ -77,7 +92,9 @@ def _parse_date_range(time_filter: Optional[dict], default_field: str) -> Option
     rather than midnight UTC -- otherwise a record modified in the last few
     hours of a local day can fall outside the range because the day
     boundary was computed in UTC. Positive values are ahead of UTC (e.g.
-    India = +330).
+    India = +330). Pass `apply_offset=False` for a target (like Zendesk)
+    whose API already resolves plain date literals in the account's own
+    time zone -- applying the offset there would shift the boundary twice.
 
     Raises TimeFilterError when a range filter IS present but incomplete
     or invalid, so the caller can surface a real 400 instead of silently
@@ -107,17 +124,28 @@ def _parse_date_range(time_filter: Optional[dict], default_field: str) -> Option
     if start_dt > end_dt:
         raise TimeFilterError("migrationTimeFilter.startDate must be on or before endDate.")
 
-    try:
-        offset_minutes = int(time_filter.get("utcOffsetMinutes") or 0)
-    except (TypeError, ValueError) as exc:
-        raise TimeFilterError(f"migrationTimeFilter.utcOffsetMinutes must be an integer: {exc}") from exc
+    if apply_offset:
+        try:
+            offset_minutes = int(time_filter.get("utcOffsetMinutes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise TimeFilterError(f"migrationTimeFilter.utcOffsetMinutes must be an integer: {exc}") from exc
 
-    offset = timedelta(minutes=offset_minutes)
-    start_dt -= offset
-    end_dt -= offset
+        # start/end were computed as local calendar-day boundaries; converting
+        # "local time" -> "UTC instant" means subtracting the offset.
+        offset = timedelta(minutes=offset_minutes)
+        start_dt -= offset
+        end_dt -= offset
 
     field = (time_filter.get("field") or default_field).strip() or default_field
     return field, start_dt, end_dt
+
+
+def _epoch_millis(dt: datetime) -> str:
+    """dt is a naive datetime representing a UTC instant (see _parse_date_range
+    with apply_offset=True). Computed manually rather than via dt.timestamp(),
+    which would incorrectly interpret a naive datetime as the server's local
+    time instead of UTC."""
+    return str(int((dt - datetime(1970, 1, 1)).total_seconds() * 1000))
 
 
 def build_salesforce_time_clause(time_filter: Optional[dict]) -> str:
@@ -142,3 +170,66 @@ def build_zoho_time_clause(time_filter: Optional[dict]) -> str:
     start_lit = start_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     end_lit = end_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     return f"({field} >= '{start_lit}' and {field} <= '{end_lit}')"
+
+
+def build_zendesk_time_clause(time_filter: Optional[dict]) -> str:
+    """Returns a Zendesk Search API query fragment (e.g. "updated>=2024-01-01
+    updated<=2024-01-31"), or '' if no filter should be applied. Space is an
+    implicit AND in Zendesk's search syntax, so this can just be appended to
+    an existing query string with a space. Date-only literals -- see the
+    apply_offset note on _parse_date_range for why no UTC shift happens here.
+
+    Only meaningful for STANDARD objects (tickets/users/organizations/...),
+    which go through the Search API. Custom object records use a different,
+    JSON-based filter -- see build_zendesk_custom_object_time_filter."""
+    parsed = _parse_date_range(time_filter, DEFAULT_ZENDESK_DATE_FIELD, apply_offset=False)
+    if not parsed:
+        return ""
+    field, start_dt, end_dt = parsed
+    start_lit = start_dt.strftime("%Y-%m-%d")
+    end_lit = end_dt.strftime("%Y-%m-%d")
+    return f"{field}>={start_lit} {field}<={end_lit}"
+
+
+def build_zendesk_custom_object_time_filter(time_filter: Optional[dict]) -> List[dict]:
+    """Returns a list of Zendesk custom-object record-search filter clauses
+    (field/operator/value triplets, to be AND-ed into the request body's
+    `filter.and` array), or [] if no filter should be applied.
+
+    NOTE: verify `greater_than`/`less_than` are the exact operator names your
+    Zendesk API version expects for custom object record search before
+    relying on this in production -- Zendesk's filter DSL for custom objects
+    isn't uniform across every Zendesk product/version, and this hasn't been
+    exercised against a live org.
+    """
+    parsed = _parse_date_range(time_filter, "created_at", apply_offset=False)
+    if not parsed:
+        return []
+    field, start_dt, end_dt = parsed
+    # Custom object system fields use the "_at" suffix (created_at/updated_at),
+    # not the search-token form (created/updated) used above for standard objects.
+    if not field.endswith("_at"):
+        field = f"{field}_at"
+    start_lit = start_dt.strftime("%Y-%m-%dT00:00:00Z")
+    end_lit = end_dt.strftime("%Y-%m-%dT23:59:59Z")
+    return [
+        {"field": field, "operator": "greater_than", "value": start_lit},
+        {"field": field, "operator": "less_than", "value": end_lit},
+    ]
+
+
+def build_hubspot_time_filters(time_filter: Optional[dict]) -> List[dict]:
+    """Returns a list of HubSpot Search API filter clauses (GTE/LTE on the
+    configured date property, values as epoch-millisecond strings), or []
+    if no filter should be applied. Merge these into every existing
+    filterGroup (HubSpot ORs across groups, ANDs within one) -- adding a new
+    standalone group would OR the date range with everything else instead of
+    intersecting it."""
+    parsed = _parse_date_range(time_filter, DEFAULT_HUBSPOT_DATE_FIELD)
+    if not parsed:
+        return []
+    field, start_dt, end_dt = parsed
+    return [
+        {"propertyName": field, "operator": "GTE", "value": _epoch_millis(start_dt)},
+        {"propertyName": field, "operator": "LTE", "value": _epoch_millis(end_dt)},
+    ]

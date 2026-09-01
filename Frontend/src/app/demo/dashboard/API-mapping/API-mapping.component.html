@@ -801,7 +801,7 @@
   <div class="d-flex justify-content-between align-items-center gap-2">
     <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
       <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
-        [(ngModel)]="restrictMappingToQueryFields" style="cursor: pointer;">
+        [(ngModel)]="restrictMappingToQueryFields" (change)="onRestrictToQueryFieldsChange()" style="cursor: pointer;">
       <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch" style="cursor: pointer;">
         Query fields only
       </label>
@@ -865,7 +865,7 @@
             </div>
             @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
             <button type="button" class="btn btn-sm btn-outline-secondary mt-4" (click)="clearDateRange()" title="Clear date range">
-              <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+              <<i class="fa-solid fa-eraser" style="font-size: 0.75rem;"></i>
             </button>
             }
           </div>
@@ -1093,7 +1093,7 @@
                       <button
                         class="btn btn-light border-secondary-subtle text-muted d-flex align-items-center px-1 py-1 btn-hover-lift"
                         (click)="mappingSearchQuery = ''" title="Clear Filter">
-                        <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+                        <<i class="fa-solid fa-eraser" style="font-size: 0.75rem;"></i>
                       </button>
                       }
                     </div>
@@ -1242,12 +1242,12 @@
                     <button
                       class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
                       (click)="clearMapping(mapping)" title="Clear target field">
-                      <i class="fa-solid fa-eraser"></i>
+                      <<i class="fa-solid fa-eraser" style="font-size: 0.75rem;"></i>
                     </button>
                     <button
                       class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
                       (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
-                      <i class="fa-regular fa-circle-xmark"></i>
+                      <i class="fa-regular fa-circle-xmark" style="font-size: 0.75rem;"></i>
                     </button>
                   </div>
                 </td>

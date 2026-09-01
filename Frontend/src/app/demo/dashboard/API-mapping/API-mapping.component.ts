@@ -359,10 +359,6 @@ migrationTimeFilter = {
   field: '',
   startDate: '' as string, // ISO yyyy-MM-dd
   endDate: '' as string,   // ISO yyyy-MM-dd
-  // Minutes AHEAD of UTC (e.g. India = 330). getTimezoneOffset() returns the
-  // opposite sign (minutes WEST of UTC), so it's negated here. Sent with every
-  // filter payload so the backend can compute local-day boundaries instead of
-  // UTC-day boundaries -- see time_filter_service.py.
   utcOffsetMinutes: -new Date().getTimezoneOffset()
 };
 
@@ -374,6 +370,18 @@ get timeFilterFieldOptions(): { value: string; label: string }[] {
     return [
       { value: 'Modified_Time', label: 'Last Modified' },
       { value: 'Created_Time', label: 'Created' }
+    ];
+  }
+  if (crm === 'zendesk') {
+    return [
+      { value: 'updated', label: 'Last Updated' },
+      { value: 'created', label: 'Created' }
+    ];
+  }
+  if (crm === 'hubspot') {
+    return [
+      { value: 'hs_lastmodifieddate', label: 'Last Modified' },
+      { value: 'createdate', label: 'Created' }
     ];
   }
   return [
@@ -512,7 +520,7 @@ private getFilterSuffix(): string {
 
 get isEligibleForTimeFilter(): boolean {
   const crm = this.sourceSystem?.toLowerCase();
-  return crm === 'salesforce' || crm === 'zoho';
+  return crm === 'salesforce' || crm === 'zoho' || crm === 'zendesk' || crm === 'hubspot';
 }
 
   onQueryEdited() {
@@ -949,6 +957,23 @@ toggleMigrationFilterDropdown(event: Event) {
   const wasOpen = this.isMigrationFilterOpen;
   this.closeAllDropdowns();
   this.isMigrationFilterOpen = !wasOpen;
+}
+
+/**
+ * "Query fields only" is what gates whether the Migration Filter button
+ * even renders (@if !restrictMappingToQueryFields). Switching it off is
+ * the moment the filter becomes available, so open it straight away
+ * instead of making the user click the button a second time to expand it.
+ *
+ * The checkbox's native `click` bubbles to document first (closing every
+ * dropdown via the document:click listener), and `change` fires right
+ * after -- so setting isMigrationFilterOpen here runs after, not before,
+ * that reset and reliably wins.
+ */
+onRestrictToQueryFieldsChange(): void {
+  if (!this.restrictMappingToQueryFields && this.isEligibleForTimeFilter) {
+    this.isMigrationFilterOpen = true;
+  }
 }
 
   // --- ADD THIS TEMPLATE CONSTANT ---
@@ -2121,8 +2146,8 @@ toggleMigrationFilterDropdown(event: Event) {
 
     if (!isRevalidation) {
       const confirmResult = await Swal.fire({
-        title: 'Validate Entire Database?',
-        text: `This will securely stream and test ALL live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
+        title: 'Are you sure you want to run validation on this object?',
+        text: `This will securely stream and test all live records from ${this.selectedSourceObject} in chunks. It can safely handle millions of rows without crashing your browser.`,
         icon: 'info',
         showCancelButton: true,
         confirmButtonColor: '#0d6efd',
