@@ -1899,13 +1899,11 @@ onReviewPanelDragEnd(): void {
     const restrictedTargetFields = [
       'id',
       'hs_object_id',
-      'url',
       'createddate',
       'lastmodifieddate',
       'createdbyid',
       'lastmodifiedbyid',
       'systemmodstamp',
-      'isdeleted',
       'hs_createdate',
       'hs_lastmodifieddate',
       'createdate',
@@ -1921,8 +1919,7 @@ onReviewPanelDragEnd(): void {
       '$process_flow',
       'createdat',
       'updatedat',
-      'updateddate',
-      'deleted'
+      'updateddate'
     ];
 
     // =========================================================
