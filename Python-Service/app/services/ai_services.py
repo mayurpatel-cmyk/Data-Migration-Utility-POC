@@ -145,10 +145,10 @@ class LocalAiService:
         # ====================================================
         restricted_targets = {
             # General & Primary Keys
-            'id', 'hs_object_id', 'url',
+            'id', 'hs_object_id',
             
             # Salesforce
-            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted',
+            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp',
             
             # HubSpot
             'hs_createdate', 'hs_lastmodifieddate', 'createdate', 'archived',

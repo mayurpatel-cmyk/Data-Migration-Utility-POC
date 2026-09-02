@@ -175,7 +175,7 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
         # ====================================================
         restricted_targets = {
             'id', 'hs_object_id', 'url',
-            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp', 'isdeleted',
+            'createddate', 'lastmodifieddate', 'createdbyid', 'lastmodifiedbyid', 'systemmodstamp',
             'hs_createdate', 'hs_lastmodifieddate', 'createdate', 'archived',
             'created_at', 'updated_at', 'submitter_id',
             'created_time', 'modified_time', 'created_by', 'modified_by', '$state', '$process_flow',
