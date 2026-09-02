@@ -1017,6 +1017,20 @@
       </div>
       }
 
+      @if (targetFields.length > 0 && getFieldAccessViolations().length > 0 && operationMode !== 'delete') {
+      <div
+        class="alert alert-danger py-2 mb-0 d-flex align-items-center gap-2 small border-danger-subtle flex-shrink-0 border-start-0 border-end-0 rounded-0 animate__animated animate__fadeIn">
+        <i class="feather icon-lock text-danger fs-5"></i>
+        <div>
+          <strong class="text-dark">No Write Access in {{ targetSystem }}:</strong>
+          <span class="text-danger fw-bold ms-1">{{ getFieldAccessViolationsLabel() }}</span>
+          <span class="text-muted ms-1">— unmap {{ getFieldAccessViolations().length > 1 ? 'these fields' : 'this
+            field' }} or connect a user with field-level {{ operationMode === 'insert' ? 'create' : 'edit' }}
+            rights.</span>
+        </div>
+      </div>
+      }
+
       <div class="card-body p-3 d-flex flex-column flex-grow-1 overflow-hidden">
 
         <div class="p-3 rounded shadow-sm mb-3 flex-shrink-0"
@@ -1294,6 +1308,14 @@
                           <i class="feather icon-alert-triangle"></i> Invalid Cast
                         </span>
                         }
+                        @if (!isFieldWritable(getFieldMeta(mapping.targetField, 'target'))) {
+                        <span
+                          class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle rounded-pill py-1"
+                          style="font-size: 0.6rem;"
+                          title="The connected {{ targetSystem }} user doesn't have field-level write access to this field. Remove it from the mapping.">
+                          <i class="feather icon-lock"></i> No Write Access
+                        </span>
+                        }
                         }
                       </div>
 
@@ -1301,6 +1323,9 @@
                         @if (isTypeMismatch(mapping)) {
                         <i class="feather icon-alert-triangle text-danger"
                           title="Migration Warning: Incompatible data types may cause the API insert/update to fail."></i>
+                        } @else if (!isFieldWritable(getFieldMeta(mapping.targetField, 'target'))) {
+                        <i class="feather icon-lock text-danger"
+                          title="No field-level write access: this field will be rejected by {{ targetSystem }}."></i>
                         } @else if (mapping.targetField) {
                         <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}"
                           style="font-size: 0.6rem;">
@@ -1346,6 +1371,10 @@
                         <div>
                           <span class="fw-bold text-dark">{{ field.label }}
                             @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
+                            @if (!isFieldWritable(field)) {
+                            <i class="feather icon-lock text-danger ms-1" style="font-size: 0.7rem;"
+                              title="No field-level write access for the connected {{ targetSystem }} user."></i>
+                            }
                           </span>
                           <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
                         </div>
@@ -1639,8 +1668,8 @@
           <button
             class="btn action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
             style="background: var(--surface); border: 1.5px solid var(--line); box-shadow: 0 1px 2px rgba(16,19,26,0.04);"
-            (click)="validateData()" [disabled]="getMissingRequiredFields().length > 0 || hasActiveTypeMismatches()"
-            [title]="getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (hasActiveTypeMismatches() ? 'Fix Invalid Casts First' : 'Validate Mapping')">
+            (click)="validateData()" [disabled]="getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()"
+            [title]="getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (getFieldAccessViolations().length > 0 ? 'Remove fields with no write access' : (hasActiveTypeMismatches() ? 'Fix Invalid Casts First' : 'Validate Mapping'))">
             <div class="rounded-circle d-flex align-items-center justify-content-center mb-1"
               style="width: 38px; height: 38px; background: var(--paper); border: 1px solid var(--line);">
               <i class="feather icon-check-square fs-5" style="color: var(--muted);"></i>
@@ -1651,8 +1680,8 @@
             class="btn shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded position-relative"
             style="background: linear-gradient(90deg, var(--source), var(--target)); color: #fff; border: none; box-shadow: 0 6px 16px -6px rgba(47,93,158,0.5);"
             [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0 && !hasPendingEdits}"
-            [disabled]="hasPendingEdits || getMissingRequiredFields().length > 0 || hasActiveTypeMismatches()"
-            [title]="hasPendingEdits ? 'You must click Re-Validate before running' : (getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : 'Execute Migration')"
+            [disabled]="hasPendingEdits || getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()"
+            [title]="hasPendingEdits ? 'You must click Re-Validate before running' : (getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (getFieldAccessViolations().length > 0 ? 'Remove fields with no write access' : 'Execute Migration'))"
             (click)="runMigration()">
             @if (hasPendingEdits) {
             <span
@@ -1664,7 +1693,7 @@
             <div class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center mb-1"
               style="width: 38px; height: 38px;">
               <i class="feather"
-                [ngClass]="(hasPendingEdits || getMissingRequiredFields().length > 0 || hasActiveTypeMismatches()) ? 'icon-lock' : 'icon-play'"
+                [ngClass]="(hasPendingEdits || getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()) ? 'icon-lock' : 'icon-play'"
                 class="fs-5 text-white"></i>
             </div>
             <span class="fw-bold text-white" style="font-size: 0.8rem;">Run Job</span>
@@ -1811,14 +1840,14 @@
 
   <!-- Scrollable Mapping Area (Re-uses your exact mapping rows) -->
   <div class="panel-body p-0">
-    <table class="table table-hover table-borderless align-middle mb-0 w-100">
+    <table class="table table-hover table-borderless align-middle mb-0 w-100" style="table-layout: fixed;">
       <tbody>
         @for (mapping of mappings; track mapping.sourceField; let i = $index) {
         <!-- Conditionally show rows based on the selected tab -->
         @if ((reviewFilter === 'mapped' && mapping.targetField) || (reviewFilter === 'unmapped' &&
         !mapping.targetField)) {
         <tr class="border-bottom">
-          <td class="px-3 py-2" style="width: 45%;" title="{{ mapping.sourceLabel }}">
+          <td class="px-3 py-2" style="width: 40%;" title="{{ mapping.sourceLabel }}">
             <div
               class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
               <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
@@ -1829,10 +1858,10 @@
               </span>
             </div>
           </td>
-          <td class="text-center text-muted px-0" style="width: 20px;">
+          <td class="text-center text-muted px-0" style="width: 8%;">
             <i class="feather icon-arrow-right small"></i>
           </td>
-          <td class="px-3 py-2" style="width: 55%;">
+          <td class="px-3 py-2" style="width: 38%;">
             <div class="position-relative" (click)="$event.stopPropagation()">
               <div
                 class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center"
@@ -1861,6 +1890,14 @@
                     <i class="feather icon-cpu"></i> AI
                   </span>
                   }
+                  @if (!isFieldWritable(getFieldMeta(mapping.targetField, 'target'))) {
+                  <span
+                    class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle rounded-pill py-1"
+                    style="font-size: 0.6rem;"
+                    title="The connected {{ targetSystem }} user doesn't have field-level write access to this field. Remove it from the mapping.">
+                    <i class="feather icon-lock"></i> No Write Access
+                  </span>
+                  }
                   }
                 </div>
 
@@ -1868,6 +1905,9 @@
                   @if (isTypeMismatch(mapping)) {
                   <i class="feather icon-alert-triangle text-danger"
                     title="Migration Warning: Incompatible data types may cause the API insert/update to fail."></i>
+                  } @else if (!isFieldWritable(getFieldMeta(mapping.targetField, 'target'))) {
+                  <i class="feather icon-lock text-danger"
+                    title="No field-level write access: this field will be rejected by {{ targetSystem }}."></i>
                   } @else if (mapping.targetField) {
                   <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}"
                     style="font-size: 0.6rem;">
@@ -1903,7 +1943,7 @@
               }
             </div>
           </td>
-          <td class="px-2 text-center">
+          <td class="px-2 text-center" style="width: 14%;">
             <div class="d-flex align-items-center justify-content-center gap-1">
               <button
                 class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"

@@ -17,6 +17,7 @@ from app.services.migrators.hubspot_migrator import HubspotMigrator
 from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
 from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
+from app.services.field_access_utils import find_non_writable_mapped_fields
 
 import uuid
 import sqlite3
@@ -162,6 +163,22 @@ async def websocket_migration(websocket: WebSocket):
                     )
                 
                 if not mappings: continue
+
+                sf_rules = job.get("sfRules", {})
+                fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+                if fls_violations:
+                    await websocket.send_json({
+                        "log": f"[{target_object}] FATAL: {len(fls_violations)} mapped field(s) can't be "
+                               f"written by the connected {target_crm.capitalize()} user "
+                               f"({', '.join(v['label'] for v in fls_violations)}). Remove them from the "
+                               f"mapping (or connect a user with field-level write access) and re-validate "
+                               f"before running.",
+                        "status": "Failed",
+                        "fieldAccessErrors": fls_violations
+                    })
+                    await websocket.close()
+                    return
+
                 source_records = []
 
                 session_id = job.get("sessionId")
@@ -413,6 +430,18 @@ async def websocket_validate_stream(websocket: WebSocket):
             sf_rules = payload.get("sfRules", {})
             target_crm = payload.get("targetCrmId", "salesforce").lower()
             time_filter = payload.get("migrationTimeFilter")
+            op_mode = payload.get("operationMode", "insert")
+
+            fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+            if fls_violations:
+                await websocket.send_json({
+                    "log": f"Field-Level Access Denied: {len(fls_violations)} mapped field(s) can't be "
+                           f"written by the connected {target_crm.capitalize()} user.",
+                    "status": "Validation Failed",
+                    "fieldAccessErrors": fls_violations
+                })
+                await websocket.close()
+                return
 
             await websocket.send_json({"log": "System: Re-validating UI fixes...", "status": "Validating"})
 
@@ -464,6 +493,18 @@ async def websocket_validate_stream(websocket: WebSocket):
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
         time_filter = payload.get("migrationTimeFilter")
+        op_mode = payload.get("operationMode", "insert")
+
+        fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+        if fls_violations:
+            await websocket.send_json({
+                "log": f"Field-Level Access Denied: {len(fls_violations)} mapped field(s) can't be "
+                       f"written by the connected {target_crm.capitalize()} user.",
+                "status": "Validation Failed",
+                "fieldAccessErrors": fls_violations
+            })
+            await websocket.close()
+            return
 
         source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
         source_migrator = MIGRATORS.get(source_crm)

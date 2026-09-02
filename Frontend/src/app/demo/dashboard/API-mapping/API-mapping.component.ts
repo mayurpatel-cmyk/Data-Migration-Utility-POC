@@ -23,6 +23,13 @@ interface FieldMeta {
   externalId?: boolean;
   unique?: boolean;
   idLookup?: boolean;
+  createable?: boolean;
+  updateable?: boolean;
+}
+
+interface FieldAccessViolation {
+  targetField: string;
+  label: string;
 }
 
 interface MappingRow {
@@ -1132,6 +1139,36 @@ onReviewPanelDragEnd(): void {
     return requiredFields.filter((reqField) => !mappedFields.includes(reqField));
   }
 
+  isFieldWritable(field: FieldMeta | undefined | null, mode: string = this.operationMode): boolean {
+    if (!field) return true;
+    if (mode === 'delete') return true;
+    const flag = mode === 'insert' ? field.createable : field.updateable;
+    return flag !== false;
+  }
+
+  getFieldAccessViolations(): FieldAccessViolation[] {
+    if (this.operationMode === 'delete') return [];
+    if (!this.targetFields || this.targetFields.length === 0) return [];
+
+    const seen = new Set<string>();
+    const violations: FieldAccessViolation[] = [];
+
+    this.mappings.forEach((m) => {
+      if (!m.targetField || seen.has(m.targetField)) return;
+      const fieldMeta = this.targetFields.find((f) => f.name === m.targetField);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        seen.add(m.targetField);
+        violations.push({ targetField: m.targetField, label: fieldMeta.label });
+      }
+    });
+
+    return violations;
+  }
+
+  getFieldAccessViolationsLabel(): string {
+    return this.getFieldAccessViolations().map((v) => v.label).join(', ');
+  }
+
   getIncompleteReferenceMappings(): string[] {
     const incomplete: string[] = [];
     this.mappings.forEach((m) => {
@@ -2162,6 +2199,20 @@ onReviewPanelDragEnd(): void {
       return;
     }
 
+    const accessViolations = this.getFieldAccessViolations();
+    if (accessViolations.length > 0) {
+      this.jobStatus = 'Validation Failed';
+      const fieldList = accessViolations.map((v) => v.label).join(', ');
+      this.toastr.error(
+        `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. ` +
+        `Remove ${accessViolations.length > 1 ? 'these fields' : 'this field'} from the mapping, or connect ` +
+        `with a user that has field-level ${this.operationMode === 'insert' ? 'create' : 'edit'} rights, before validating.`,
+        'No Field-Level Write Access'
+      );
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     if (!isRevalidation && this.customQuery && !this.validateQuery()) {
       this.jobStatus = 'Validation Failed';
       this.toastr.error('Please fix your query criteria before validating.', 'Query Error');
@@ -2287,6 +2338,7 @@ onReviewPanelDragEnd(): void {
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
       sfRules: sfRules,
+      operationMode: this.operationMode,
       authToken: localStorage.getItem('supabase_token') || '',
       migrationTimeFilter: this.migrationTimeFilter
     };
@@ -2312,6 +2364,15 @@ onReviewPanelDragEnd(): void {
 
         if (data.status) {
           this.jobStatus = data.status;
+        }
+
+        if (data.fieldAccessErrors && data.fieldAccessErrors.length > 0) {
+          const fieldList = data.fieldAccessErrors.map((v: any) => v.label || v.field).join(', ');
+          this.toastr.error(
+            `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove them from the mapping and try again.`,
+            'No Field-Level Write Access'
+          );
+          this.isValidating = false;
         }
 
         if (data.stats) {
@@ -2544,6 +2605,18 @@ onReviewPanelDragEnd(): void {
       incompleteRefs: this.getIncompleteReferenceMappings()
     };
 
+    // Hard error, not a skippable warning: an unwritable field isn't a data-quality issue the
+    // migration can absorb -- every record touching it will be rejected (or silently dropped,
+    // depending on the CRM) by the target's API. There's no "Run Anyway" that makes sense here.
+    const accessViolations = this.getFieldAccessViolations();
+    if (accessViolations.length > 0) {
+      const fieldList = accessViolations.map((v) => v.label).join(', ');
+      errors.push(
+        `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove ` +
+        `${accessViolations.length > 1 ? 'these fields' : 'this field'} from the mapping before running.`
+      );
+    }
+
     if (this.customQuery && !this.validateQuery()) {
       errors.push('Please fix your query criteria before running.');
     }
@@ -2718,6 +2791,15 @@ onReviewPanelDragEnd(): void {
     const fixedRecords =
       this.validationResults?.invalidRecords?.filter((rec: any) => rec._editedFields)?.map((rec: any) => rec.originalRow) || [];
 
+    // Same field-metadata dict shape sent to /ws/validate-stream -- lets the backend re-run the
+    // field-level-access gate at actual execution time too, not just during preview validation.
+    // Someone can reach "Run Job" without ever calling Validate (see runMigration() -> the
+    // "Run Anyway" warnings-modal path), so this can't be assumed already-checked server-side.
+    const sfRules: any = {};
+    this.targetFields.forEach((field) => {
+      sfRules[field.name] = field;
+    });
+
     const job = {
       sessionId: this.currentSessionId,
       fixedRecords: fixedRecords,
@@ -2727,6 +2809,7 @@ onReviewPanelDragEnd(): void {
       targetCrmId: this.targetCrmId,
       extractionQuery: safeQuery,
       mappings: enhancedMappings,
+      sfRules: sfRules,
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
