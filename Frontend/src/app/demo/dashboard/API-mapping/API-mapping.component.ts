@@ -43,6 +43,8 @@ interface MappingRow {
   massUpdateValue?: string;
   _isAiProcessing?: boolean;
   _mappedBy?: 'rule' | 'ai';
+  _blockedTargetField?: string;
+  _blockedTargetLabel?: string;
 }
 
 interface CrmEntity {
@@ -969,6 +971,7 @@ toggleProfileDropdown(event: Event): void {
     if (this.operationMode === 'delete') {
       this.externalIdField = '';
     }
+    this.updateMappedCount();
   }
 
   closeAllDropdowns() {
@@ -1180,9 +1183,27 @@ onReviewPanelDragEnd(): void {
   }
 
   selectField(mapping: any, fieldName: string) {
+    if (fieldName) {
+      const fieldMeta = this.targetFields.find((f) => f.name === fieldName);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        this.toastr.error(
+          `"${fieldMeta.label}" can't be mapped -- the connected ${this.targetSystem} user doesn't have field-level ` +
+          `${this.operationMode === 'insert' ? 'create' : 'edit'} access to it. Choose a different field, or connect ` +
+          `with a user that has write access to it.`,
+          'No Write Access'
+        );
+        mapping._blockedTargetField = fieldMeta.name;
+        mapping._blockedTargetLabel = fieldMeta.label;
+        mapping.isDropdownOpen = false;
+        return;
+      }
+    }
+
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
     delete mapping._mappedBy;
+    delete mapping._blockedTargetField;
+    delete mapping._blockedTargetLabel;
 
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
@@ -1195,6 +1216,55 @@ onReviewPanelDragEnd(): void {
 
   hasActiveTypeMismatches(): boolean {
     return this.mappings.some((mapping) => mapping.targetField && this.isTypeMismatch(mapping));
+  }
+
+  get validateBlockReason(): string | null {
+    if (this.getMissingRequiredFields().length > 0) {
+      return `Missing required field(s): ${this.getMissingRequiredFields().join(', ')}. Map them before validating.`;
+    }
+    if (this.getFieldAccessViolations().length > 0) {
+      const fieldList = this.getFieldAccessViolationsLabel();
+      return `Remove field(s) with no write access before validating: ${fieldList}.`;
+    }
+    if (this.hasActiveTypeMismatches()) {
+      return 'Fix the highlighted data-type mismatches before validating.';
+    }
+    return null;
+  }
+
+  onValidateClick(): void {
+    const reason = this.validateBlockReason;
+    if (reason) {
+      this.toastr.warning(reason, 'Validate Unavailable');
+      return;
+    }
+    this.validateData();
+  }
+
+  get runJobBlockReason(): string | null {
+    if (this.hasPendingEdits) {
+      return 'You have un-validated fixes in the grid. Click "Re-Validate Fixes" before running the migration.';
+    }
+    if (this.getMissingRequiredFields().length > 0) {
+      return `Missing required field(s): ${this.getMissingRequiredFields().join(', ')}. Map them before running.`;
+    }
+    if (this.getFieldAccessViolations().length > 0) {
+      const fieldList = this.getFieldAccessViolationsLabel();
+      return `Remove field(s) with no write access before running: ${fieldList}.`;
+    }
+    if (this.hasActiveTypeMismatches()) {
+      return 'Fix the highlighted data-type mismatches before running.';
+    }
+    return null;
+  }
+
+  onRunJobClick(): void {
+    const reason = this.runJobBlockReason;
+    if (reason) {
+      this.toastr.warning(reason, 'Run Job Unavailable');
+      return;
+    }
+    this.runMigration();
   }
 
   getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
@@ -1909,6 +1979,8 @@ onReviewPanelDragEnd(): void {
     mapping.targetField = '';
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
+    delete mapping._blockedTargetField;
+    delete mapping._blockedTargetLabel;
     this.updateMappedCount();
   }
 
@@ -1922,6 +1994,8 @@ onReviewPanelDragEnd(): void {
       m.targetField = '';
       m.relationalExtIdField = '';
       delete m._mappedBy;
+      delete m._blockedTargetField;
+      delete m._blockedTargetLabel;
     });
 
     this.updateMappedCount();
@@ -1984,11 +2058,14 @@ onReviewPanelDragEnd(): void {
 
       let bestMatch: any = null;
       let highestScore = 0;
+      let bestBlockedMatch: any = null;
+      let highestBlockedScore = 0;
 
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
         if (restrictedTargetFields.includes(tgtApiExact)) return;
         if (claimedTargetFields.has(t.name)) return;
+        const fieldIsWritable = this.isFieldWritable(t);
 
         let score = 0;
         const tgtLabelExact = t.label.toLowerCase();
@@ -2026,9 +2103,12 @@ onReviewPanelDragEnd(): void {
           else if (isForgivingTypeMatch) score += 10;
         }
 
-        if (score > highestScore && score >= 50) {
+        if (score > highestScore && score >= 50 && fieldIsWritable) {
           highestScore = score;
           bestMatch = t;
+        } else if (score > highestBlockedScore && score >= 50 && !fieldIsWritable) {
+          highestBlockedScore = score;
+          bestBlockedMatch = t;
         }
       });
 
@@ -2039,7 +2119,12 @@ onReviewPanelDragEnd(): void {
           m.relationalExtIdField = 'Id';
         }
         m._mappedBy = 'rule';
+        delete m._blockedTargetField;
+        delete m._blockedTargetLabel;
         heuristicMatchCount++;
+      } else if (bestBlockedMatch) {
+        m._blockedTargetField = bestBlockedMatch['name'];
+        m._blockedTargetLabel = bestBlockedMatch['label'];
       }
     });
 
@@ -2129,15 +2214,27 @@ onReviewPanelDragEnd(): void {
                 );
  
                 const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
+                const suggestedFieldMeta = backendMap.targetField
+                  ? this.targetFields.find((f) => f.name === backendMap.targetField)
+                  : undefined;
+                const isWritable = this.isFieldWritable(suggestedFieldMeta);
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
                     localRow.relationalExtIdField = 'Id';
                   }
                   localRow._mappedBy = 'ai';
+                  delete localRow._blockedTargetField;
+                  delete localRow._blockedTargetLabel;
                   aiMatchCount++;
+                } else if (
+                  localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed &&
+                  !isWritable && suggestedFieldMeta
+                ) {
+                  localRow._blockedTargetField = suggestedFieldMeta.name;
+                  localRow._blockedTargetLabel = suggestedFieldMeta.label;
                 }
               });
             }
@@ -2181,16 +2278,48 @@ onReviewPanelDragEnd(): void {
 
   updateMappedCount() {
     const validTargetFieldNames = new Set(this.targetFields.map((f) => f.name));
+    const autoUnmappedLabels: string[] = [];
+
     this.mappings.forEach((m) => {
-      if (m.targetField && !validTargetFieldNames.has(m.targetField)) {
+      if (!m.targetField) return;
+
+      if (!validTargetFieldNames.has(m.targetField)) {
         m.targetField = '';
         m.relationalExtIdField = '';
         delete m._mappedBy;
+        return;
+      }
+
+      const fieldMeta = this.targetFields.find((f) => f.name === m.targetField);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        autoUnmappedLabels.push(fieldMeta.label);
+        m.targetField = '';
+        m.relationalExtIdField = '';
+        delete m._mappedBy;
+        m._blockedTargetField = fieldMeta.name;
+        m._blockedTargetLabel = fieldMeta.label;
       }
     });
 
+    if (autoUnmappedLabels.length > 0) {
+      this.toastr.warning(
+        `Automatically unmapped ${autoUnmappedLabels.length} field(s) with no field-level write access for the ` +
+        `connected ${this.targetSystem} user (${this.operationMode.toUpperCase()} mode): ${autoUnmappedLabels.join(', ')}.`,
+        'Mapping Adjusted'
+      );
+    }
+
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
     this.cdr.detectChanges();
+  }
+
+  // Whether an unmapped row has a recorded target field that's still unwritable right now --
+  // re-checked live (rather than trusting the stored flag) so the tag disappears on its own if
+  // operationMode switches and the field becomes writable again.
+  isMappingBlockedByWriteAccess(mapping: MappingRow): boolean {
+    if (!mapping._blockedTargetField) return false;
+    const fieldMeta = this.targetFields.find((f) => f.name === mapping._blockedTargetField);
+    return !!fieldMeta && !this.isFieldWritable(fieldMeta);
   }
 
   async validateData(isRevalidation: boolean = false, fixedRecords: any[] = []) {
@@ -2460,6 +2589,19 @@ onReviewPanelDragEnd(): void {
     return this.validationResults.invalidRecords.some((record: any) => record.errors.includes(searchStr));
   }
 
+  get sortedErrorTableFields(): MappingRow[] {
+    const mapped = this.mappings.filter((m) => m.targetField);
+    return [...mapped].sort((a, b) => {
+      const aHasError = this.hasErrorsInColumn(a.sourceField) ? 0 : 1;
+      const bHasError = this.hasErrorsInColumn(b.sourceField) ? 0 : 1;
+      return aHasError - bHasError;
+    });
+  }
+
+  get errorColumnCount(): number {
+    return this.sortedErrorTableFields.filter((m) => this.hasErrorsInColumn(m.sourceField)).length;
+  }
+
   hasCellError(record: any, sourceField: string): boolean {
     if (!record || !record.errors) return false;
     const searchStr = `[${sourceField}:`;
@@ -2605,9 +2747,6 @@ onReviewPanelDragEnd(): void {
       incompleteRefs: this.getIncompleteReferenceMappings()
     };
 
-    // Hard error, not a skippable warning: an unwritable field isn't a data-quality issue the
-    // migration can absorb -- every record touching it will be rejected (or silently dropped,
-    // depending on the CRM) by the target's API. There's no "Run Anyway" that makes sense here.
     const accessViolations = this.getFieldAccessViolations();
     if (accessViolations.length > 0) {
       const fieldList = accessViolations.map((v) => v.label).join(', ');
@@ -2791,10 +2930,6 @@ onReviewPanelDragEnd(): void {
     const fixedRecords =
       this.validationResults?.invalidRecords?.filter((rec: any) => rec._editedFields)?.map((rec: any) => rec.originalRow) || [];
 
-    // Same field-metadata dict shape sent to /ws/validate-stream -- lets the backend re-run the
-    // field-level-access gate at actual execution time too, not just during preview validation.
-    // Someone can reach "Run Job" without ever calling Validate (see runMigration() -> the
-    // "Run Anyway" warnings-modal path), so this can't be assumed already-checked server-side.
     const sfRules: any = {};
     this.targetFields.forEach((field) => {
       sfRules[field.name] = field;

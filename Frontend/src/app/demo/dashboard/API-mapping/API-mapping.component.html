@@ -1367,7 +1367,10 @@
                       <div
                         class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start"
                         (click)="selectField(mapping, field.name)"
-                        [class.bg-light]="mapping.targetField === field.name">
+                        [class.bg-light]="mapping.targetField === field.name"
+                        [class.opacity-50]="!isFieldWritable(field)"
+                        [style.cursor]="!isFieldWritable(field) ? 'not-allowed' : 'pointer'"
+                        [title]="!isFieldWritable(field) ? ('No field-level write access for the connected ' + targetSystem + ' user.') : ''">
                         <div>
                           <span class="fw-bold text-dark">{{ field.label }}
                             @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
@@ -1531,6 +1534,16 @@
             </div>
           </div>
 
+          @if (errorColumnCount > 0) {
+          <div class="small text-muted mb-2 d-flex align-items-center gap-1">
+            <i class="feather icon-arrow-left" style="font-size: 0.75rem;"></i>
+            <span><strong class="text-danger">{{ errorColumnCount }}</strong> of {{ sortedErrorTableFields.length }}
+              mapped column{{ sortedErrorTableFields.length === 1 ? '' : 's' }} {{ errorColumnCount === 1 ? 'has' :
+              'have' }} errors — shown first, on the left, so you don't have to scroll to find
+              {{ errorColumnCount === 1 ? 'it' : 'them' }}.</span>
+          </div>
+          }
+
           <div class="table-responsive border border-danger-subtle rounded-top"
             style="max-height: 450px; overflow-y: auto;">
             <table class="table table-sm table-bordered align-middle mb-0 text-nowrap" style="table-layout: auto;">
@@ -1541,11 +1554,14 @@
                     style="min-width: 280px; max-width: 350px; z-index: 11;">
                     <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
                   </th>
-                  @for (mapping of mappings; track mapping.sourceField) {
-                  @if (mapping.targetField) {
+                  @for (mapping of sortedErrorTableFields; track mapping.sourceField; let i = $index) {
                   <th class="py-2 px-3 align-middle transition-all" style="min-width: 180px;"
                     [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)"
-                    [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)">
+                    [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)"
+                    [class.border-end]="i === errorColumnCount - 1"
+                    [class.border-3]="i === errorColumnCount - 1"
+                    [class.border-warning]="i === errorColumnCount - 1"
+                    [title]="i === errorColumnCount - 1 ? 'Error columns end here — everything to the right is already clean.' : ''">
 
                     <div class="d-flex justify-content-between align-items-start gap-2">
                       <div class="d-flex flex-column align-items-start gap-1 w-100">
@@ -1578,7 +1594,6 @@
                     }
                   </th>
                   }
-                  }
                 </tr>
               </thead>
               <tbody class="small">
@@ -1589,9 +1604,10 @@
                     style="min-width: 280px; max-width: 350px; font-size: 0.8rem; z-index: 5;">
                     {{ record.errors }}
                   </td>
-                  @for (mapping of mappings; track mapping.sourceField) {
-                  @if (mapping.targetField) {
-                  <td class="p-2 align-middle" style="min-width: 180px;">
+                  @for (mapping of sortedErrorTableFields; track mapping.sourceField; let i = $index) {
+                  <td class="p-2 align-middle" style="min-width: 180px;"
+                    [class.border-end]="i === errorColumnCount - 1" [class.border-3]="i === errorColumnCount - 1"
+                    [class.border-warning]="i === errorColumnCount - 1">
                     <div class="position-relative">
                       <input type="text"
                         class="form-control form-control-sm border-secondary-subtle transition-all w-100 shadow-none"
@@ -1607,7 +1623,6 @@
                       }
                     </div>
                   </td>
-                  }
                   }
                 </tr>
                 }
@@ -1668,8 +1683,8 @@
           <button
             class="btn action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
             style="background: var(--surface); border: 1.5px solid var(--line); box-shadow: 0 1px 2px rgba(16,19,26,0.04);"
-            (click)="validateData()" [disabled]="getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()"
-            [title]="getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (getFieldAccessViolations().length > 0 ? 'Remove fields with no write access' : (hasActiveTypeMismatches() ? 'Fix Invalid Casts First' : 'Validate Mapping'))">
+            [class.opacity-50]="validateBlockReason !== null" [style.cursor]="validateBlockReason !== null ? 'not-allowed' : 'pointer'"
+            (click)="onValidateClick()" [title]="validateBlockReason || 'Validate Mapping'">
             <div class="rounded-circle d-flex align-items-center justify-content-center mb-1"
               style="width: 38px; height: 38px; background: var(--paper); border: 1px solid var(--line);">
               <i class="feather icon-check-square fs-5" style="color: var(--muted);"></i>
@@ -1680,9 +1695,9 @@
             class="btn shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded position-relative"
             style="background: linear-gradient(90deg, var(--source), var(--target)); color: #fff; border: none; box-shadow: 0 6px 16px -6px rgba(47,93,158,0.5);"
             [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0 && !hasPendingEdits}"
-            [disabled]="hasPendingEdits || getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()"
-            [title]="hasPendingEdits ? 'You must click Re-Validate before running' : (getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (getFieldAccessViolations().length > 0 ? 'Remove fields with no write access' : 'Execute Migration'))"
-            (click)="runMigration()">
+            [class.opacity-50]="runJobBlockReason !== null" [style.cursor]="runJobBlockReason !== null ? 'not-allowed' : 'pointer'"
+            [title]="runJobBlockReason || 'Execute Migration'"
+            (click)="onRunJobClick()">
             @if (hasPendingEdits) {
             <span
               class="position-absolute top-0 start-100 translate-middle p-1 bg-warning border border-light rounded-circle"
@@ -1692,8 +1707,7 @@
             }
             <div class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center mb-1"
               style="width: 38px; height: 38px;">
-              <i class="feather"
-                [ngClass]="(hasPendingEdits || getMissingRequiredFields().length > 0 || getFieldAccessViolations().length > 0 || hasActiveTypeMismatches()) ? 'icon-lock' : 'icon-play'"
+              <i class="feather" [ngClass]="runJobBlockReason !== null ? 'icon-lock' : 'icon-play'"
                 class="fs-5 text-white"></i>
             </div>
             <span class="fw-bold text-white" style="font-size: 0.8rem;">Run Job</span>
@@ -1877,6 +1891,15 @@
                     {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
                   </span>
 
+                  @if (!mapping.targetField && isMappingBlockedByWriteAccess(mapping)) {
+                  <span
+                    class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle rounded-pill py-1 flex-shrink-0"
+                    style="font-size: 0.6rem;"
+                    title="Matched to &quot;{{ mapping._blockedTargetLabel }}&quot;, but the connected {{ targetSystem }} user doesn't have field-level write access to it. Connect with a user that has write access, or leave this field unmapped.">
+                    <i class="feather icon-lock"></i> No Write Access
+                  </span>
+                  }
+
                   @if (mapping.targetField) {
                   @if (mapping._mappedBy === 'rule') {
                   <span
@@ -1933,8 +1956,14 @@
                 @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
                 <div
                   class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
-                  (click)="selectField(mapping, field.name)">
-                  <span class="fw-bold text-dark small">{{ field.label }}</span>
+                  (click)="selectField(mapping, field.name)" [class.opacity-50]="!isFieldWritable(field)"
+                  [style.cursor]="!isFieldWritable(field) ? 'not-allowed' : 'pointer'"
+                  [title]="!isFieldWritable(field) ? ('No field-level write access for the connected ' + targetSystem + ' user.') : ''">
+                  <span class="fw-bold text-dark small">{{ field.label }}
+                    @if (!isFieldWritable(field)) {
+                    <i class="feather icon-lock text-danger ms-1" style="font-size: 0.65rem;"></i>
+                    }
+                  </span>
                   <span class="badge {{ getFieldTypeBadge(field.type) }}" style="font-size: 0.6rem;">{{
                     field.type || 'string' }}</span>
                 </div>
