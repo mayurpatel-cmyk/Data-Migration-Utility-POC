@@ -1022,8 +1022,6 @@ startReviewPanelDrag(event: MouseEvent): void {
 onReviewPanelDrag(event: MouseEvent): void {
   if (!this.reviewPanelDragging) return;
 
-  // Keep at least a corner of the header reachable so a panel dragged to
-  // the edge can always be dragged back, instead of getting stuck off-screen.
   const margin = 60;
   const maxLeft = window.innerWidth - margin;
   const maxTop = window.innerHeight - margin;
@@ -2259,11 +2257,18 @@ onReviewPanelDragEnd(): void {
 
             this.mappings.forEach((m) => (m._isAiProcessing = false));
             this.mappings = [...this.mappings];
+
+            if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
             this.cdr.detectChanges();
 
             if (this.toastr) {
               if (error.status === 404) {
                 this.toastr.error('Backend endpoint not found (404).', 'Connection Error');
+              } else if (heuristicMatchCount > 0) {
+                this.toastr.warning(
+                  `The SureShift Agent connection was interrupted, but ${heuristicMatchCount} field(s) matched by rules were kept.`,
+                  'Incomplete'
+                );
               } else {
                 this.toastr.warning('The SureShift Agent connection was interrupted. Partial mappings saved.', 'Incomplete');
               }
@@ -2313,9 +2318,6 @@ onReviewPanelDragEnd(): void {
     this.cdr.detectChanges();
   }
 
-  // Whether an unmapped row has a recorded target field that's still unwritable right now --
-  // re-checked live (rather than trusting the stored flag) so the tag disappears on its own if
-  // operationMode switches and the field becomes writable again.
   isMappingBlockedByWriteAccess(mapping: MappingRow): boolean {
     if (!mapping._blockedTargetField) return false;
     const fieldMeta = this.targetFields.find((f) => f.name === mapping._blockedTargetField);
