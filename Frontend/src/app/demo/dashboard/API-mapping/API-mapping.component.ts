@@ -2260,6 +2260,8 @@ onReviewPanelDragEnd(): void {
 
             if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
             this.cdr.detectChanges();
+            this.reviewFilter = heuristicMatchCount > 0 ? 'mapped' : 'unmapped';
+            this.openReviewPanel();
 
             if (this.toastr) {
               if (error.status === 404) {
