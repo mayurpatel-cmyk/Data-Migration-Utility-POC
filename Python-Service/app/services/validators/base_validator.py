@@ -11,7 +11,6 @@ class BaseValidator:
         df['_errors'] = ""
         valid_mask = pd.Series(True, index=df.index)
 
-        # Standard Duplicate Check
         is_duplicate = df.duplicated(keep='first') 
         duplicates_removed = int(is_duplicate.sum())
         if duplicates_removed > 0:
@@ -28,12 +27,10 @@ class BaseValidator:
             str_col = df[csv_col].astype(str).str.strip().str.lower()
             is_empty = df[csv_col].isna() | (str_col == '') | (str_col == '<na>') | (str_col == 'nat')
 
-            # Generic Required Check
             if field_rules.get('required', mapping.get('isRequired', False)):
                 df.loc[is_empty, '_errors'] += f"[{csv_col}: Field is required but empty.] "
                 valid_mask &= ~is_empty
 
-        # Return standard format
         valid_df = df[valid_mask].drop(columns=['_errors']).replace({np.nan: None})
         invalid_df = df[~valid_mask].replace({np.nan: None})
         

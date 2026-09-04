@@ -4,15 +4,12 @@ import re
 
 class ZendeskValidator:
     def __init__(self):
-        # Zendesk strict system enums
         self.ZD_TICKET_STATUSES = ['new', 'open', 'pending', 'hold', 'solved', 'closed']
         self.ZD_TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent']
         self.ZD_TICKET_TYPES = ['question', 'incident', 'problem', 'task']
 
     def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "", strict_mode: bool = True) -> dict:
-        # ... (skip to dropdown section) ...
 
-            # --- DROPDOWNS (TAGGER) ---
         zd_rules = target_rules
         if not records:
             return {"stats": {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}, "validRecords": [], "invalidRecords": []}
@@ -23,14 +20,12 @@ class ZendeskValidator:
         df['_errors'] = ""
         valid_mask = pd.Series(True, index=df.index)
 
-        # Retain original row indices for error reporting
         if '_originalRowNumber' in df.columns:
             row_numbers = df['_originalRowNumber'].tolist()
             df = df.drop(columns=['_originalRowNumber'])
         else:
             row_numbers = [(i + 2) for i in df.index]
 
-        # 1. Global Duplicate Check
         is_duplicate = df.duplicated(keep='first') 
         duplicates_removed = int(is_duplicate.sum())
         
@@ -53,13 +48,11 @@ class ZendeskValidator:
             str_col = df[csv_col].astype(str).str.strip().str.lower()
             is_empty = df[csv_col].isna() | (str_col == '') | (str_col == '<na>') | (str_col == 'nat') | (str_col == 'none')
 
-            # --- REQUIRED CHECK ---
             is_required = field_rules.get('required', mapping.get('isRequired', False))
             if is_required:
                 df.loc[is_empty, '_errors'] += f"[{csv_col}: Field is required in Zendesk but is empty.] "
                 valid_mask &= ~is_empty
 
-            # --- UNIQUE / EXTERNAL ID CHECK ---
             is_unique = field_rules.get('unique', False)
             if is_unique or target_field == dedupe_key:
                 is_col_duplicate = str_col.duplicated(keep=False)
@@ -68,7 +61,6 @@ class ZendeskValidator:
                     df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Duplicate value found. This Zendesk field must be Unique.] "
                     valid_mask &= ~invalid_duplicates
 
-            # --- ZENDESK SYSTEM ENUMS ---
             if target_field == 'status':
                 is_invalid_status = ~str_col.isin(self.ZD_TICKET_STATUSES) & ~is_empty
                 if is_invalid_status.any():
@@ -87,18 +79,14 @@ class ZendeskValidator:
                     df.loc[is_invalid_type, '_errors'] += f"[{csv_col}: Invalid ticket type. Allowed: {', '.join(self.ZD_TICKET_TYPES)}.] "
                     valid_mask &= ~is_invalid_type
 
-            # --- ZENDESK TAGS ---
             elif target_field == 'tags':
-                # Convert commas/semicolons to spaces, lowercase it all
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.lower().str.replace(r'[,;]', ' ', regex=True)
-                # Check for strictly disallowed characters in Zendesk tags (Zendesk allows alphanumeric, -, _, /)
                 has_invalid_chars = df[csv_col].astype(str).str.contains(r'[^a-z0-9_\-\s/]') & ~is_empty
                 if has_invalid_chars.any():
                     df.loc[has_invalid_chars, '_errors'] += f"[{csv_col}: Zendesk tags cannot contain special characters (like !, @, #). Use underscores or hyphens.] "
                     valid_mask &= ~has_invalid_chars
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
 
-            # --- STRINGS & REGEXP ---
             elif zd_type in ['text', 'textarea', 'string']:
                 max_len = int(field_rules.get('length', mapping.get('maxLength', 65536))) # Zendesk standard max
                 str_lengths = df[csv_col].astype(str).str.len()
@@ -115,9 +103,7 @@ class ZendeskValidator:
                         df.loc[is_invalid_regex, '_errors'] += f"[{csv_col}: Fails custom Zendesk Regex validation pattern.] "
                         valid_mask &= ~is_invalid_regex
 
-            # --- DROPDOWNS (TAGGER) ---
             elif zd_type in ['tagger', 'dropdown', 'picklist']:
-                # Zendesk stores custom field dropdown options as 'custom_field_options' -> 'value' (the tag)
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
                 
                 if valid_values:
@@ -126,7 +112,6 @@ class ZendeskValidator:
                         df.loc[is_invalid_dropdown, '_errors'] += f"[{csv_col}: Invalid Dropdown value. Must match a Zendesk field Tag.] "
                         valid_mask &= ~is_invalid_dropdown
 
-            # --- MULTI-SELECT ---
             elif zd_type in ['multiselect', 'multipicklist']:
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
@@ -142,10 +127,8 @@ class ZendeskValidator:
                         df.loc[is_invalid_multi, '_errors'] += f"[{csv_col}: Invalid Multi-Select value. Items must exactly match Zendesk Tags.] "
                         valid_mask &= ~is_invalid_multi
                 
-                # Cleanup formatting for the API payload
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s*;\s*', ';', regex=True)
 
-            # --- NUMERICS (Integer & Decimal) ---
             elif zd_type in ['integer', 'decimal', 'numeric']:
                 cleaned_nums = df[csv_col].astype(str).str.replace(r'[^\d\.-]', '', regex=True)
                 numeric_col = pd.to_numeric(cleaned_nums, errors='coerce')
@@ -154,7 +137,6 @@ class ZendeskValidator:
                 df[csv_col] = df[csv_col].astype(object)
                 
                 if zd_type == 'integer':
-                    # Strict integer check
                     is_float = (numeric_col % 1 != 0) & ~is_invalid & ~is_empty
                     if is_float.any():
                         df.loc[is_float, '_errors'] += f"[{csv_col}: Must be a whole number (Integer).] "
@@ -167,7 +149,6 @@ class ZendeskValidator:
                     df.loc[is_invalid, '_errors'] += f"[{csv_col}: Invalid Number format.] "
                     valid_mask &= ~is_invalid
 
-            # --- BOOLEANS ---
             elif zd_type in ['checkbox', 'boolean']:
                 is_true = str_col.isin(['true', '1', 'yes', 'y'])
                 is_false = str_col.isin(['false', '0', 'no', 'n'])
@@ -181,11 +162,9 @@ class ZendeskValidator:
                 df.loc[~valid_bools, '_errors'] += f"[{csv_col}: Must be TRUE/FALSE/Yes/No.] "
                 valid_mask &= valid_bools
 
-            # --- DATES (Zendesk strictly requires ISO 8601 or YYYY-MM-DD) ---
             elif zd_type in ['date', 'datetime']:
                 parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
                 
-                # Try handling Excel serial dates if present
                 numeric_str = pd.to_numeric(df[csv_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True), errors='coerce')
                 is_serial_date = numeric_str.notna() & (numeric_str > 0) & (numeric_str < 3000000) & ~is_empty
                 if is_serial_date.any():
@@ -194,16 +173,13 @@ class ZendeskValidator:
                 is_invalid = parsed_dates.isna() & ~is_empty
 
                 if zd_type == 'date':
-                    # Custom Date fields in Zendesk just take YYYY-MM-DD
                     df.loc[~is_invalid & ~is_empty, csv_col] = parsed_dates[~is_invalid & ~is_empty].dt.strftime('%Y-%m-%d')
                 else:
-                    # Standard system datetimes require ISO 8601 with Zulu time
                     df.loc[~is_invalid & ~is_empty, csv_col] = parsed_dates[~is_invalid & ~is_empty].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
                 df.loc[is_invalid, '_errors'] += f"[{csv_col}: Invalid Date Format. Could not parse to Zendesk standard.] "
                 valid_mask &= ~is_invalid
 
-            # --- EMAILS ---
             elif zd_type == 'email':
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s+', '', regex=True)
                 email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
@@ -213,9 +189,7 @@ class ZendeskValidator:
                     df.loc[is_invalid_email, '_errors'] += f"[{csv_col}: Invalid Email format.] "
                     valid_mask &= ~is_invalid_email
 
-            # --- IDS & LOOKUPS ---
             elif zd_type in ['lookup', 'id']:
-                # Zendesk IDs are usually pure numeric strings
                 cleaned_ids = df[csv_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 df.loc[~is_empty, csv_col] = cleaned_ids[~is_empty]
                 is_not_numeric = ~cleaned_ids.str.isnumeric() & ~is_empty
@@ -224,7 +198,6 @@ class ZendeskValidator:
                     df.loc[is_not_numeric, '_errors'] += f"[{csv_col}: Zendesk lookup IDs must be purely numeric.] "
                     valid_mask &= ~is_not_numeric
 
-        # Ensure NaNs are safely converted back to None for JSON serialization to the frontend
         df = df.astype(object).where(pd.notna(df), None)
         valid_df = df[valid_mask].drop(columns=['_errors'])
         invalid_df = df[~valid_mask]

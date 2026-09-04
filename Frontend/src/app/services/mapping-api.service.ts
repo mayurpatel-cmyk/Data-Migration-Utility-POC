@@ -9,13 +9,8 @@ import { environment } from 'src/environments/environment';
 })
 export class MappingApiService {
   private http = inject(HttpClient);
-  // Uses environment URL if available, otherwise falls back to localhost
   private baseUrl = environment.apiUrl ? `${environment.apiUrl}/api` : 'http://localhost:8000/api';
 
-  /**
-   * SECURITY UPGRADE: We ONLY send the Supabase token now. 
-   * The backend will safely look up the CRM tokens in the database.
-   */
   private getAuthHeaders(): HttpHeaders {
     const token = localStorage.getItem('supabase_token') || '';
     return new HttpHeaders({
@@ -23,10 +18,6 @@ export class MappingApiService {
     });
   }
 
-  /**
-   * Fetch all supported objects/entities for a specific platform
-   * Added 'role' parameter so the backend knows which slot to look up in the DB
-   */
   getObjects(crmId: string, role: 'source' | 'target'): Observable<any[]> {
     const params = new HttpParams().set('role', role);
     
@@ -36,10 +27,7 @@ export class MappingApiService {
     }).pipe(timeout(30000));
   }
 
-  /**
-   * Fetch all schema fields for a specific object/entity
-   * Added 'role' parameter so the backend knows which slot to look up in the DB
-   */
+
   getFields(crmId: string, objectName: string, role: 'source' | 'target'): Observable<any> {
     const params = new HttpParams().set('role', role);
     
@@ -59,6 +47,6 @@ export class MappingApiService {
     {
       headers: this.getAuthHeaders()
     }
-  ); // <-- NO .pipe(timeout(...)) HERE! Let the browser manage the connection natively.
+  );
 }
 }

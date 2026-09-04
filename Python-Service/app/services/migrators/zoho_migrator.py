@@ -1,50 +1,66 @@
 import re
 import asyncio
 from app.services.crm_service import CrmService
-
-#  Restored 'yield' to make it a proper batch generator ---
-def chunk_dataset(data: list, chunk_size: int = 100):
-    for i in range(0, len(data), chunk_size):
-        yield data[i:i + chunk_size]
+from app.services.time_filter_service import (
+    merge_time_clause,
+    build_zoho_time_clause,
+    TimeFilterError,
+)
+from app.services.query_field_utils import ensure_fields_selected
 
 class ZohoMigrator:
 
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
-        import re
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         zoho_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"):
             domain = f"https://{domain}"
             
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        
-        # Determine fields to extract based on UI mappings
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
+        # APPLY DYNAMIC TIME FILTER LOGIC (date-range only; see time_filter_service.py)
         try:
-            if query and query.strip():
-                coql_query = query.strip()
+            time_clause = build_zoho_time_clause(time_filter)
+        except TimeFilterError as e:
+            await send_log(f"[{obj_name}] Invalid migration filter: {e}")
+            raise
+
+        try:
+            coql_query = query.strip() if query else ""
+
+            if coql_query or time_clause:
                 if coql_query.lower().startswith("select "):
+                    # COQL has no real "*" wildcard -- unlike SOQL, sending
+                    # it literally is a syntax error. "*" is purely this
+                    # app's own placeholder convention (the default query
+                    # the UI generates), so it's swapped for a real field
+                    # list here before ever reaching Zoho's API.
                     if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
-                        fields_str = ",".join(safe_fields)
-                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f'select {fields_str} from', coql_query)
-                        
-                    if " where " not in coql_query.lower():
-                        if " order by " in coql_query.lower():
-                            coql_query = re.sub(r'(?i)(\border\s+by\b)', r'where id is not null \1', coql_query, count=1)
-                        else:
-                            coql_query += " where id is not null"
+                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
+                    else:
+                        # Floor-not-ceiling guarantee -- every mapped field
+                        # must actually be queried, or it comes back
+                        # silently empty even though it shows as "mapped".
+                        # See query_field_utils.py.
+                        coql_query = ensure_fields_selected(coql_query, safe_fields)
+                    if time_clause:
+                        coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
                 else:
-                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {coql_query}"
+                    where_parts = []
+                    if coql_query:
+                        where_parts.append(f"({coql_query})")
+                    if time_clause:
+                        where_parts.append(time_clause)
+                    combined_where = " and ".join(where_parts)
+                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {combined_where}"
 
                 if " limit " not in coql_query.lower():
-                    # Zoho limits COQL to 2000 records per request max
                     coql_query += " limit 200"
 
                 await send_log(f"Extracting data from Zoho using COQL...")
                 
-                # CRITICAL FIX: This must be client.post() for the /coql endpoint
                 res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
                 
                 if res.status_code != 200:
@@ -72,7 +88,6 @@ class ZohoMigrator:
                         break
                     page += 1
 
-            # Flatten Zoho Lookups for the frontend UI
             processed_data = []
             for r in data:
                 flat_rec = {}
@@ -90,7 +105,7 @@ class ZohoMigrator:
 
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
 
         target_object = options["targetObject"]
         token = options["token"]
@@ -100,8 +115,9 @@ class ZohoMigrator:
 
         if not domain.startswith("http"): domain = f"https://{domain}"
         
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
+        ids_to_revert = []  # records Zoho inserted that "update" mode must not keep
 
         normalized_obj = target_object.strip()
         if not normalized_obj.endswith('s') and normalized_obj.lower() != 'data':
@@ -112,13 +128,17 @@ class ZohoMigrator:
         headers = {"Authorization": f"Zoho-oauthtoken {token}", "Content-Type": "application/json"}
         
         chunks = list(chunk_dataset(payload, 100))
-        
-        if op_mode == "upsert":
+
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+
+        if not options.get("targetExtIdField") and op_mode in ("update", "upsert"):
+            await send_log(f"[{normalized_obj}] {pass_name}: No External ID field configured -- cannot match existing records for {op_mode.upper()}.")
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        if wire_op_mode == "upsert":
             api_path = f"{domain}/crm/v6/{normalized_obj}/upsert"
             http_method = "POST"
-        elif op_mode == "update":
-            api_path = f"{domain}/crm/v6/{normalized_obj}"
-            http_method = "PUT"
         else: # insert
             api_path = f"{domain}/crm/v6/{normalized_obj}"
             http_method = "POST"
@@ -128,10 +148,9 @@ class ZohoMigrator:
             
             try:
                 req_payload = {"data": zoho_data_rows}
-                if op_mode == "upsert" and options.get("targetExtIdField"):
+                if wire_op_mode == "upsert" and options.get("targetExtIdField"):
                    req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
-                # --- Silent Retry Loop for Uploads (Token Refresh & Rate Limits) ---
                 while True:
                     if http_method == "PUT":
                         res = await client.put(api_path, json=req_payload, headers=headers)
@@ -156,24 +175,33 @@ class ZohoMigrator:
                         orig_record = source_records[item["originalIndex"]]
                         
                         if z_res.get("status") == "success":
-                            #  Force the ID into a string to protect it from JS precision limits
                             raw_id = z_res.get("details", {}).get("id")
+
+
+                            if is_update_only and z_res.get("action") == "insert":
+                                orig_record["Target_SkipReason"] = (
+                                    f"[{options.get('targetExtIdField')}] No matching record found in Zoho. "
+                                    f"Skipped because Update mode does not create new records."
+                                )
+                                all_skipped_data.append(orig_record)
+                                total_skipped += 1
+                                if raw_id:
+                                    ids_to_revert.append(str(raw_id))
+                                continue
+
                             orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
                             
                             all_success_data.append(orig_record)
                             total_success += 1
                         else:
-                            #  Deeply parse Zoho's error structure ---
                             err_msg = z_res.get("message") or z_res.get("code", "Unknown Error")
                             details = z_res.get("details", {})
                             
-                            # Intelligently extract the field name if Zoho provides it
                             if isinstance(details, dict):
                                 api_name = details.get("api_name")
                                 if api_name:
                                     err_msg = f"[{api_name}] {err_msg}"
                                 elif details:
-                                    # Fallback for other nested details
                                     err_msg = f"{err_msg} | Details: {str(details)}"
                                     
                             orig_record["Target_Error"] = f"Zoho Error: {err_msg}"
@@ -198,4 +226,29 @@ class ZohoMigrator:
                     all_error_data.append(orig_record)
                     total_error += 1
 
-        return total_success, total_error, all_success_data, all_error_data
+        if ids_to_revert:
+            await send_log(
+                f"[{normalized_obj}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Zoho auto-created for them..."
+            )
+            await self._delete_records(client, domain, headers, normalized_obj, ids_to_revert, user_id, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, domain, headers, normalized_obj, record_ids, user_id, send_log):
+        """Deletes records Zoho auto-created that 'update' mode should never
+        have created in the first place (Zoho's bulk delete takes <=100 ids/call)."""
+        for chunk in chunk_dataset(record_ids, 100):
+            try:
+                ids_param = ",".join(chunk)
+                res = await client.delete(f"{domain}/crm/v6/{normalized_obj}?ids={ids_param}", headers=headers)
+
+                if res.status_code == 401:
+                    token = await CrmService.refresh_crm_token(user_id, "zoho", "target")
+                    headers["Authorization"] = f"Zoho-oauthtoken {token}"
+                    res = await client.delete(f"{domain}/crm/v6/{normalized_obj}?ids={ids_param}", headers=headers)
+
+                if res.status_code not in [200, 202]:
+                    await send_log(f"[{normalized_obj}] Revert batch failed: {res.text}")
+            except Exception as e:
+                await send_log(f"[{normalized_obj}] Revert Failed: {str(e)}")

@@ -34,6 +34,6 @@ export class NavLogoComponent {
   }
 
   returnToHome() {
-    this.router.navigate(['/default']);
+    this.router.navigate(['/connection']);
   }
 }

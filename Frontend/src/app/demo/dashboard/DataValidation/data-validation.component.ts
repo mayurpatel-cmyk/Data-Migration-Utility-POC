@@ -12,6 +12,7 @@ import { ValidationApiService } from 'src/app/services/validation-api.service';
 import { MigrationService } from 'src/app/services/migration.service';
 import { DataTransferService } from 'src/app/services/data-transfer.service';
 import { AuthService } from '../../Services/auth.service';
+import { MappingApiService } from 'src/app/services/mapping-api.service';
 
 interface ValidationJob {
   sheetName: string;
@@ -20,6 +21,7 @@ interface ValidationJob {
   csvHeaders: string[];
   mappings: any[];
   dedupeKey: string;
+  operationMode: string;
   results?: any;
   status?: 'pending' | 'validating' | 'done' | 'error';
 }
@@ -38,6 +40,7 @@ export class DataValidationComponent implements OnInit {
   private dataTransfer = inject(DataTransferService);
   private authService = inject(AuthService);
   private cdr = inject(ChangeDetectorRef);
+  private mappingApi = inject(MappingApiService);
 
   currentStep = 1;
   selectedFile: File | null = null;
@@ -53,6 +56,7 @@ export class DataValidationComponent implements OnInit {
   selectedObject = '';
   sfFields: any[] = [];
   dedupeKey = '';
+  operationMode: string = 'insert';
   selectedDateFormat = '';
   targetCrmId: string = 'salesforce';
 
@@ -63,8 +67,18 @@ export class DataValidationComponent implements OnInit {
     isLoadingParentFields?: boolean,
     isParentDropdownOpen?: boolean,
     parentSearchQuery?: string,
-    maxLength?: number
+    maxLength?: number,
+    _isAiProcessing?: boolean,
+    _mappedBy?: 'rule' | 'ai'
    }[] = [];
+
+  // AI Auto-Map / Review Panel State
+  isAutoMapping = false;
+  autoMapProgress = { current: 0, total: 0 };
+  showReviewPanel = false;
+  reviewPanelMinimized = false;
+  reviewPanelExpanded = false;
+  reviewFilter: 'mapped' | 'unmapped' = 'mapped';
 
    // Dropdown UI Trackers
   isObjectDropdownOpen = false;
@@ -91,11 +105,9 @@ export class DataValidationComponent implements OnInit {
   }
 
   ngOnInit() {
-    // Safely grab the Target CRM chosen on the connection page
     const navState = history.state;
     this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot') || 'salesforce';
     
-    // Lock Contexts into Storage
     localStorage.setItem('target_crm_slot', this.targetCrmId);
     localStorage.setItem('source_crm_slot', 'csv');
 
@@ -196,6 +208,28 @@ export class DataValidationComponent implements OnInit {
     return this.sfFields.find((f) => f.name === fieldName);
   }
 
+  onOperationModeChange() {
+    if (this.operationMode === 'insert') {
+      this.dedupeKey = '';
+    }
+  }
+
+  private isExternalIdEligible(field: any): boolean {
+    const crm = (this.targetCrmId || '').toLowerCase();
+    if (crm === 'hubspot') {
+      return field.name === 'id' || field.name === 'hs_object_id' || !!field.unique || !!field.externalId;
+    }
+    if (crm === 'zendesk') {
+      return !!field.externalId;
+    }
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup || !!field.unique;
+  }
+
+  getExternalIdEligibleFields(): any[] {
+    if (!this.sfFields) return [];
+    return this.sfFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
   getTotalRequiredFieldsCount(): number {
     if (!this.sfFields || this.sfFields.length === 0) return 0;
     const requiredFields = this.sfFields.filter(f => f.isRequired === true);
@@ -244,6 +278,7 @@ export class DataValidationComponent implements OnInit {
   }
 
   selectField(mapping: any, fieldName: string) {
+    mapping._mappedBy = undefined;
     mapping.sfField = fieldName;
     mapping.isDropdownOpen = false;
     this.updateFieldType(mapping, fieldName);
@@ -387,6 +422,7 @@ export class DataValidationComponent implements OnInit {
   toggleMappingActive(mapping: any) {
     if (!mapping.isActive) {
       mapping.sfField = '';
+      mapping._mappedBy = undefined;
       mapping.isDropdownOpen = false;
     }
   }
@@ -397,6 +433,7 @@ export class DataValidationComponent implements OnInit {
       mapping.isActive = isChecked;
       if (!isChecked) {
         mapping.sfField = '';
+        mapping._mappedBy = undefined;
         mapping.isDropdownOpen = false;
       }
     });
@@ -447,7 +484,10 @@ export class DataValidationComponent implements OnInit {
     if (!this.sfFields || this.sfFields.length === 0) return;
 
     setTimeout(() => {
-      let matchCount = 0;
+      // =========================================================
+      // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
+      // =========================================================
+      let ruleMatchCount = 0;
       const normalizeString = (str: string) => String(str).toLowerCase().replace(/__c$/g, '').replace(/id$/g, '').replace(/[^a-z0-9]/g, '');
 
       this.mappings.forEach(mapping => {
@@ -479,18 +519,119 @@ export class DataValidationComponent implements OnInit {
 
           if (bestMatch) {
             this.selectField(mapping, bestMatch.name);
-            matchCount++;
+            mapping._mappedBy = 'rule';
+            ruleMatchCount++;
           }
         }
       });
 
-      if (matchCount > 0) {
-        this.toastr.success(`Auto-mapped ${matchCount} fields successfully.`, 'Auto-Map Complete');
-      } else {
-        this.toastr.info(`Could not find any clear auto-map matches.`, 'No Matches');
-      }
+      this.mappings = [...this.mappings];
       this.cdr.detectChanges();
+
+      // =========================================================
+      // PHASE 2: AI SEMANTIC MATCHING FOR WHATEVER RULES MISSED
+      // =========================================================
+      const unmappedRows = this.mappings.filter(m => m.isActive && !m.sfField);
+
+      if (unmappedRows.length === 0) {
+        this.finishAutoMap(ruleMatchCount, 0);
+        return;
+      }
+
+      this.isAutoMapping = true;
+      this.autoMapProgress = { current: 0, total: unmappedRows.length };
+      unmappedRows.forEach(m => (m._isAiProcessing = true));
+      this.mappings = [...this.mappings];
+      this.cdr.detectChanges();
+
+      const sourceFieldPayload = unmappedRows.map(m => ({ name: m.csvField, label: m.csvField }));
+      const CHUNK_SIZE = 50;
+      let currentIndex = 0;
+      let aiMatchCount = 0;
+
+      const processNextChunk = () => {
+        if (currentIndex >= sourceFieldPayload.length) {
+          this.finishAutoMap(ruleMatchCount, aiMatchCount);
+          return;
+        }
+
+        const currentChunk = sourceFieldPayload.slice(currentIndex, currentIndex + CHUNK_SIZE);
+
+        this.mappingApi.getAiAutoMapping(currentChunk, this.sfFields).subscribe({
+          next: (response: any) => {
+            if (response && Array.isArray(response.mappings)) {
+              response.mappings.forEach((backendMap: any) => {
+                const localRow = this.mappings.find(m => m.csvField === backendMap.sourceField);
+                const targetAlreadyClaimed = this.mappings.some(
+                  m => m.csvField !== backendMap.sourceField && m.sfField === backendMap.targetField
+                );
+
+                if (localRow && !localRow.sfField && backendMap.targetField && !targetAlreadyClaimed) {
+                  this.selectField(localRow, backendMap.targetField);
+                  localRow._mappedBy = 'ai';
+                  aiMatchCount++;
+                }
+              });
+            }
+
+            currentChunk.forEach(field => {
+              const mappingRow = this.mappings.find(m => m.csvField === field.name);
+              if (mappingRow) mappingRow._isAiProcessing = false;
+            });
+
+            this.autoMapProgress.current += currentChunk.length;
+            this.mappings = [...this.mappings];
+            this.cdr.detectChanges();
+
+            currentIndex += CHUNK_SIZE;
+            processNextChunk();
+          },
+          error: (error: any) => {
+            console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
+            this.isAutoMapping = false;
+            this.mappings.forEach(m => (m._isAiProcessing = false));
+            this.mappings = [...this.mappings];
+            this.cdr.detectChanges();
+
+            if (error.status === 404) {
+              this.toastr.error('AI mapping endpoint not found (404).', 'Connection Error');
+            } else {
+              this.toastr.error('AI auto-mapping failed. Please map the remaining fields manually.', 'AI Error');
+            }
+          }
+        });
+      };
+
+      processNextChunk();
     });
+  }
+
+  private finishAutoMap(ruleMatchCount: number, aiMatchCount: number) {
+    this.isAutoMapping = false;
+    const totalMapped = ruleMatchCount + aiMatchCount;
+
+    if (totalMapped > 0) {
+      this.toastr.success(`Successfully mapped ${totalMapped} fields!`, 'Hybrid Auto-Map Complete');
+      this.reviewFilter = 'mapped';
+    } else {
+      this.toastr.info(`No matches found by rules or AI.`, 'Auto-Map Finished');
+      this.reviewFilter = 'unmapped';
+    }
+
+    this.showReviewPanel = true;
+    this.reviewPanelMinimized = false;
+    this.mappings = [...this.mappings];
+    this.cdr.detectChanges();
+  }
+
+  clearMapping(mapping: any) {
+    mapping.sfField = '';
+    mapping._mappedBy = undefined;
+    mapping.parentObjectName = undefined;
+    mapping.relationalExtIdField = '';
+    mapping.isDropdownOpen = false;
+    this.mappings = [...this.mappings];
+    this.cdr.detectChanges();
   }
 
   clearAllMappings() {
@@ -506,6 +647,7 @@ export class DataValidationComponent implements OnInit {
       if (result.isConfirmed) {
         this.mappings.forEach(m => {
           m.sfField = '';
+          m._mappedBy = undefined;
         });
         this.toastr.info('All mappings have been reset.', 'Cleared');
         this.cdr.detectChanges();
@@ -513,7 +655,6 @@ export class DataValidationComponent implements OnInit {
     });
   }
 
-  // --- NEW: Helper to extract Field Schema to send to Python ---
   private buildRulesDict(): any {
     const rules: any = {};
     if (this.sfFields) {
@@ -552,6 +693,14 @@ export class DataValidationComponent implements OnInit {
       return;
     }
 
+    if ((this.operationMode === 'update' || this.operationMode === 'upsert') && !this.dedupeKey) {
+      this.toastr.warning(
+        `Please select an External ID field to match existing ${this.targetCrmId.toUpperCase()} records for ${this.operationMode.toUpperCase()}.`,
+        'Missing External ID'
+      );
+      return;
+    }
+
     const cleanMappings = activeMappings.map(m => {
       const meta = this.getSfFieldMeta(m.sfField);
       const isReq = meta ? (meta.isRequired === true) : false;
@@ -571,7 +720,11 @@ export class DataValidationComponent implements OnInit {
         isRequired: isReq,
         picklistValues: picklistVals,
         skipValidation: m.type === 'reference',
-        maxLength: fieldLength
+        maxLength: fieldLength,
+        referenceTo: meta?.referenceTo,
+        relationshipName: meta?.relationshipName,
+        relationalExtIdField: m.relationalExtIdField || (m.type === 'reference' ? 'Id' : undefined),
+        parentObjectName: m.parentObjectName
       };
     });
 
@@ -582,13 +735,15 @@ export class DataValidationComponent implements OnInit {
       csvHeaders: [...this.csvHeaders],
       mappings: cleanMappings,
       dedupeKey: this.dedupeKey,
+      operationMode: this.operationMode,
       status: 'pending'
     });
 
-    this.toastr.success(`${this.selectedObject} added to validation queue!`, 'Queued');
+    this.toastr.success(`${this.selectedObject} added to validation queue (${this.operationMode.toUpperCase()})!`, 'Queued');
 
     this.selectedObject = '';
     this.dedupeKey = '';
+    this.operationMode = 'insert';
     this.mappings = this.csvHeaders.map(header => ({
       csvField: header, sfField: '', type: 'string',
       dateFormat: '', skipValidation: false, defaultValue: '', isActive: true, massUpdateValue: ''
@@ -603,6 +758,7 @@ export class DataValidationComponent implements OnInit {
     this.rawData = [...itemToEdit.rawData];
     this.csvHeaders = [...itemToEdit.csvHeaders];
     this.dedupeKey = itemToEdit.dedupeKey || '';
+    this.operationMode = itemToEdit.operationMode || 'insert';
 
     this.isLoadingObjects = true;
     this.migrationService.getObjectFields(this.targetCrmId, this.selectedObject, 'target').subscribe({
@@ -689,7 +845,7 @@ export class DataValidationComponent implements OnInit {
         mappings: job.mappings,
         dedupeKey: job.dedupeKey,
         targetCrmId: this.targetCrmId,
-        sfRules: schemaRules // <-- IMPORTANT: Pass the full schema rules to Python
+        sfRules: schemaRules
       };
 
       formData.append('config', JSON.stringify(config));
@@ -840,7 +996,7 @@ export class DataValidationComponent implements OnInit {
       mappings: job.mappings,
       dedupeKey: job.dedupeKey,
       targetCrmId: this.targetCrmId,
-      sfRules: this.buildRulesDict() // <-- IMPORTANT: Send schema rules to Python
+      sfRules: this.buildRulesDict()
     };
 
     try {
@@ -966,7 +1122,6 @@ export class DataValidationComponent implements OnInit {
 
   getParentFieldLabel(mapping: any, fieldName?: string): string {
     if (!fieldName) return '';
-    // Dynamic label for Standard IDs based on CRM
     if (fieldName === 'Id') return `Id (Standard ${this.targetCrmId.toUpperCase()} ID)`;
     
     if (!mapping.parentObjectName) return fieldName;

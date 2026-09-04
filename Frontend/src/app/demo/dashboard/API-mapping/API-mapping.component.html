@@ -1,4 +1,21 @@
 <style>
+  :host {
+    --ink: #10131a;
+    --paper: #f6f7fb;
+    --surface: #ffffff;
+    --line: #e3e6ee;
+    --muted: #6b7280;
+    --source: #2f5d9e;
+    --source-soft: #eaf0fa;
+    --target: #0f9e8e;
+    --target-soft: #e6f7f4;
+    --success: #1a9c6b;
+    --success-soft: #e7f7ef;
+    --warn: #b5650d;
+    --warn-soft: #fbf0e2;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+
   /* Premium Hover Animations */
   .btn-hover-lift {
     transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
@@ -21,6 +38,12 @@
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition: box-shadow 0.3s ease;
+  }
+
+  .api-mapping-logo {
+    height: 28px;
+    width: auto;
+    object-fit: contain;
   }
 
   .btn-hover-lift-primary:hover:not(:disabled) {
@@ -48,15 +71,15 @@
 
   @keyframes gentlePulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.4);
+      box-shadow: 0 0 0 0 rgba(47, 93, 158, 0.4);
     }
 
     70% {
-      box-shadow: 0 0 0 10px rgba(13, 110, 253, 0);
+      box-shadow: 0 0 0 10px rgba(47, 93, 158, 0);
     }
 
     100% {
-      box-shadow: 0 0 0 0 rgba(13, 110, 253, 0);
+      box-shadow: 0 0 0 0 rgba(47, 93, 158, 0);
     }
   }
 
@@ -76,6 +99,7 @@
     width: 100%;
     margin-bottom: 0;
     border-collapse: collapse;
+    table-layout: fixed;
   }
 
   .mapping-table-container tbody td {
@@ -116,6 +140,97 @@
 
   .mapping-table-container::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
+  }
+
+  /* ===================================================== */
+  /* SOURCE DATA PREVIEW -- trendy data-grid styling        */
+  /* ===================================================== */
+  .preview-table-wrapper {
+    position: relative;
+  }
+
+  .preview-table-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 28px;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .preview-table {
+    font-size: 0.8rem;
+  }
+
+  .preview-table thead th {
+    background: var(--paper) !important;
+    color: var(--muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.66rem;
+    letter-spacing: 0.05em;
+    border-bottom: 2px solid var(--line) !important;
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
+    white-space: nowrap;
+  }
+
+  .preview-table thead th.preview-col-index {
+    color: #a0aec0;
+  }
+
+  .preview-table tbody tr {
+    transition: background-color 0.15s ease;
+  }
+
+  .preview-table tbody tr:hover {
+    background-color: var(--source-soft) !important;
+  }
+
+  .preview-table tbody tr:hover td {
+    color: var(--ink);
+  }
+
+  .preview-table tbody td {
+    border-bottom: 1px solid #f1f5f9;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.78rem;
+    color: #475569;
+    padding-top: 0.55rem;
+    padding-bottom: 0.55rem;
+  }
+
+  .preview-row-index-cell {
+    background-color: #fafbfc !important;
+    color: #b0b8c1 !important;
+    font-weight: 700;
+    font-size: 0.72rem;
+    font-family: inherit;
+  }
+
+  .preview-col-count-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background-color: var(--source-soft);
+    color: var(--source);
+    border: 1px solid #c9d7ea;
+    border-radius: 999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+
+  .preview-row-count-pill {
+    background-color: var(--paper);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.7rem;
+    font-weight: 600;
   }
 
   html {
@@ -226,63 +341,59 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background-color: #198754;
+    background-color: var(--success);
     margin-left: 10px;
-    box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+    box-shadow: 0 0 0 0 rgba(26, 156, 107, 0.7);
     animation: livePulse 2s infinite;
   }
 
   @keyframes livePulse {
     0% {
       transform: scale(0.95);
-      box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+      box-shadow: 0 0 0 0 rgba(26, 156, 107, 0.7);
     }
 
     70% {
       transform: scale(1);
-      box-shadow: 0 0 0 8px rgba(25, 135, 84, 0);
+      box-shadow: 0 0 0 8px rgba(26, 156, 107, 0);
     }
 
     100% {
       transform: scale(0.95);
-      box-shadow: 0 0 0 0 rgba(25, 135, 84, 0);
+      box-shadow: 0 0 0 0 rgba(26, 156, 107, 0);
     }
   }
 
   /* Floating Review Panel */
   .floating-review-panel {
     position: fixed;
-    bottom: 25px;
-    right: 25px;
-    width: 650px;
-    height: 550px;
+    width: 1000px;
+    height: 680px;
     /* Explicit height helps native resizing */
-    max-height: 85vh;
+    max-width: 92vw;
+    max-height: 88vh;
     background-color: #ffffff;
     border-radius: 0.5rem;
     box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.3);
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition: width 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.2s ease;
     border: 1px solid #dee2e6;
 
-    /* NEW: Native Drag-to-Resize */
     resize: both;
     overflow: hidden;
     min-width: 450px;
     min-height: 350px;
   }
 
-  /* NEW: Maximize/Expanded State */
   .floating-review-panel.expanded {
+    top: 5vh !important;
+    left: 5vw !important;
     width: 90vw !important;
     height: 90vh !important;
     max-height: 90vh !important;
-    bottom: 5vh;
-    right: 5vw;
     resize: none;
-    /* Turn off drag-to-resize when fullscreen */
   }
 
   .floating-review-panel.minimized {
@@ -291,14 +402,20 @@
     min-width: 280px;
     min-height: 48px;
     cursor: pointer;
-    transform: translateY(0);
     resize: none;
-    /* Turn off resize when minimized */
+    /* Keeps wherever it was dragged to -- no bottom/right snap-back. */
   }
 
   .floating-review-panel.minimized:hover {
-    transform: translateY(-2px);
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+  }
+
+  .floating-review-panel .panel-header {
+    cursor: move;
+  }
+
+  .floating-review-panel.minimized .panel-header {
+    cursor: pointer;
   }
 
   .floating-review-panel .panel-body {
@@ -333,6 +450,94 @@
     transform: translateY(-2px);
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
   }
+
+
+  .cursor-pointer {
+    cursor: pointer !important;
+  }
+
+  .cursor-not-allowed {
+    cursor: not-allowed !important;
+  }
+
+  .btn:not(:disabled):not(.disabled),
+  .form-select:not(:disabled),
+  .form-check-input:not(:disabled),
+  .form-check-label,
+  .dropdown-item:not(.disabled),
+  .dropdown-toggle {
+    cursor: pointer;
+  }
+
+  .btn:disabled,
+  .btn.disabled,
+  .form-select:disabled,
+  .form-check-input:disabled {
+    cursor: not-allowed;
+  }
+
+  .migration-filter-clear-spacer {
+    display: block;
+    visibility: hidden;
+  }
+
+  .migration-filter-clear-row {
+    height: 31px;
+    display: flex;
+    align-items: center;
+  }
+
+  .migration-filter-clear-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 6px;
+    line-height: 1;
+    background-color: #dc3545;
+    border: 1px solid #dc3545;
+    color: #fff;
+    transition: background-color 0.15s ease, border-color 0.15s ease,
+      transform 0.1s ease;
+  }
+
+  .migration-filter-clear-btn:hover:not(:disabled) {
+    background-color: #bb2d3b;
+    border-color: #bb2d3b;
+    color: #fff;
+  }
+
+  .migration-filter-clear-btn:active:not(:disabled) {
+    transform: scale(0.92);
+    background-color: #a52834;
+    border-color: #a52834;
+  }
+
+  .migration-filter-error {
+    color: #dc3545;
+    font-weight: 600;
+  }
+
+  .profile-trigger:hover {
+    background-color: var(--paper);
+  }
+
+  .panel-close-btn {
+    background-color: #dc3545 !important;
+    color: #fff !important;
+    transition: background-color 0.15s ease, transform 0.1s ease;
+  }
+
+  .panel-close-btn:hover {
+    background-color: #bb2d3b !important;
+  }
+
+  .panel-close-btn:active {
+    transform: scale(0.92);
+    background-color: #a52834 !important;
+  }
 </style>
 
 @if (isGlobalLoading) {
@@ -347,36 +552,43 @@
 </div>
 }
 
-<div class="card border-primary-subtle shadow-sm mb-3 sticky-header-card">
-  <div class="card-body p-3 d-flex flex-wrap align-items-center gap-3">
+<div class="mb-3 sticky-header-card"
+  style="background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 2px rgba(16,19,26,0.04);">
+  <div class="p-3 d-flex flex-wrap align-items-center gap-3">
     <div class="d-flex align-items-center gap-2 me-auto">
-      <button
-        class="btn btn-sm btn-light border-secondary-subtle text-secondary me-2 btn-hover-lift d-flex align-items-center gap-1"
+      <a href="javascript:" (click)="returnToHome()" class="d-flex align-items-center me-2" title="Back to Home">
+        <img src="assets/images/gemini-svg.svg" alt="darkMode-logo" class="api-mapping-logo" />
+      </a>
+      <button class="btn btn-sm me-2 btn-hover-lift d-flex align-items-center gap-1"
+        style="background: transparent; border: 1.5px solid var(--line); color: var(--muted); border-radius: 999px; font-weight: 600;"
         (click)="goBackToConnection()" title="Back to Connections">
         <i class="feather icon-arrow-left"></i> Back
       </button>
-      <div class="bg-primary-subtle text-primary p-2 rounded">
+      <div class="p-2 rounded" style="background: var(--source-soft); color: var(--source);">
         <i class="feather icon-cpu fs-4"></i>
       </div>
       <div>
-        <h5 class="mb-0 fw-bold d-flex align-items-center">
+        <h5 class="mb-0 fw-bold d-flex align-items-center" style="color: var(--ink);">
           Live API Integration <span class="live-dot" title="Connection Active"></span>
         </h5>
-        <span class="text-muted small text-uppercase">{{ sourceSystem }} ➔ {{ targetSystem }}</span>
+        <span class="small text-uppercase" style="color: var(--muted);">{{ sourceSystem }} ➔ {{ targetSystem }}</span>
       </div>
     </div>
 
     <div class="d-flex align-items-center gap-2">
-      <label class="small fw-bold text-muted mb-0 text-nowrap">Source Entity:</label>
+      <label class="small fw-bold mb-0 text-nowrap" style="color: var(--muted);">Source Entity:</label>
       <div class="position-relative" (click)="$event.stopPropagation()" style="width: 230px;">
-        <div class="form-select form-select-sm cursor-pointer bg-white border-secondary shadow-sm"
-          (click)="toggleSourceDropdown($event)" [class.text-muted]="!selectedSourceObject">
+        <div class="cursor-pointer"
+          style="border: 1.5px solid var(--line); border-radius: 9px; padding: 6px 12px; font-size: 0.875rem; font-weight: 500; background: var(--surface); transition: border-color .15s ease;"
+          [style.color]="!selectedSourceObject ? 'var(--muted)' : 'var(--ink)'"
+          [style.border-color]="selectedSourceObject ? 'var(--source)' : 'var(--line)'"
+          (click)="toggleSourceDropdown($event)">
           {{ getSourceEntityLabel(selectedSourceObject) || '-- Select Entity --' }}
         </div>
         @if (isSourceDropdownOpen) {
-        <div class="dropdown-menu show w-100 p-2 shadow-lg border-secondary position-absolute start-0 mt-1 bg-white"
-          style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%;">
-          <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+        <div class="dropdown-menu show w-100 p-2 shadow-lg position-absolute start-0 mt-1"
+          style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+          <div class="position-sticky top-0 pb-2" style="z-index: 10; background: var(--surface);">
             <div class="input-group input-group-sm">
               <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
               <input type="text" class="form-control" placeholder="Search entities..." [(ngModel)]="sourceSearchQuery"
@@ -386,8 +598,13 @@
           @for (entity of getFilteredSourceEntities(); track entity.name) {
           <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectSourceEntity(entity.name)"
             [class.bg-light]="selectedSourceObject === entity.name">
-            <span class="fw-bold text-dark">{{ entity.label }}</span>
-            <div class="small text-muted" style="font-family: monospace;">{{ entity.name }}</div>
+            <span class="fw-bold" style="color: var(--ink);">{{ entity.label }}</span>
+            <div class="small" style="font-family: monospace; color: var(--muted);">{{ entity.name }}</div>
+          </div>
+          } @empty {
+          <div class="text-center text-muted small py-3">
+            <i class="feather icon-search" style="font-size: 1.25rem;"></i>
+            <div class="mt-1">No entities match "{{ sourceSearchQuery }}"</div>
           </div>
           }
         </div>
@@ -395,20 +612,23 @@
       </div>
     </div>
 
-    <div class="text-muted"><i class="feather icon-arrow-right"></i></div>
+    <div style="color: var(--muted);"><i class="feather icon-arrow-right"></i></div>
 
     <div class="d-flex align-items-center gap-2">
-      <label class="small fw-bold text-muted mb-0 text-nowrap">Target Object:</label>
+      <label class="small fw-bold mb-0 text-nowrap" style="color: var(--muted);">Target Object:</label>
       <div class="position-relative" (click)="$event.stopPropagation()" style="width: 230px;">
-        <div class="form-select form-select-sm cursor-pointer bg-white border-info shadow-sm"
-          (click)="toggleTargetDropdown($event)" [class.text-muted]="!selectedTargetObject"
-          [class.opacity-50]="!selectedSourceObject" [style.cursor]="!selectedSourceObject ? 'not-allowed' : 'pointer'">
+        <div class="cursor-pointer"
+          style="border: 1.5px solid var(--line); border-radius: 9px; padding: 6px 12px; font-size: 0.875rem; font-weight: 500; background: var(--surface); transition: border-color .15s ease;"
+          [style.color]="!selectedTargetObject ? 'var(--muted)' : 'var(--ink)'"
+          [style.border-color]="selectedTargetObject ? 'var(--target)' : 'var(--line)'"
+          [class.opacity-50]="!selectedSourceObject" [style.cursor]="!selectedSourceObject ? 'not-allowed' : 'pointer'"
+          (click)="toggleTargetDropdown($event)">
           {{ getTargetObjectLabel(selectedTargetObject) || '-- Select Object --' }}
         </div>
         @if (isTargetDropdownOpen) {
-        <div class="dropdown-menu show w-100 p-2 shadow-lg border-info position-absolute start-0 mt-1 bg-white"
-          style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%;">
-          <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
+        <div class="dropdown-menu show w-100 p-2 shadow-lg position-absolute start-0 mt-1"
+          style="max-height: 300px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+          <div class="position-sticky top-0 pb-2" style="z-index: 10; background: var(--surface);">
             <div class="input-group input-group-sm">
               <span class="input-group-text bg-light"><i class="feather icon-search"></i></span>
               <input type="text" class="form-control" placeholder="Search objects..." [(ngModel)]="targetSearchQuery"
@@ -418,19 +638,46 @@
           @for (obj of getFilteredTargetEntities(); track obj.name) {
           <div class="dropdown-item cursor-pointer py-2 text-wrap" (click)="selectTargetObject(obj.name)"
             [class.bg-light]="selectedTargetObject === obj.name">
-            <span class="fw-bold text-dark">{{ obj.label }}</span>
-            <div class="small text-muted" style="font-family: monospace;">{{ obj.name }}</div>
+            <span class="fw-bold" style="color: var(--ink);">{{ obj.label }}</span>
+            <div class="small" style="font-family: monospace; color: var(--muted);">{{ obj.name }}</div>
+          </div>
+          } @empty {
+          <div class="text-center text-muted small py-3">
+            <i class="feather icon-search" style="font-size: 1.25rem;"></i>
+            <div class="mt-1">No objects match "{{ targetSearchQuery }}"</div>
           </div>
           }
         </div>
         }
       </div>
     </div>
-    <div class="border-start ps-3 ms-1 d-flex align-items-center">
-      <button class="btn btn-sm btn-outline-danger btn-hover-lift d-flex align-items-center gap-1" (click)="logout()"
-        title="Secure Logout">
-        <i class="feather icon-log-out"></i> Logout
-      </button>
+
+    <div class="border-start ps-3 ms-1 d-flex align-items-center position-relative" (click)="$event.stopPropagation()">
+      <a class="d-flex align-items-center gap-2 cursor-pointer profile-trigger text-decoration-none px-2 py-1 rounded"
+        (click)="toggleProfileDropdown($event)" title="Account">
+        <img src="assets/images/user/310818.png" alt="user-image" class="rounded-circle"
+          style="width: 32px; height: 32px; object-fit: cover;" />
+        <span class="d-none d-md-inline small fw-bold text-dark text-truncate" style="max-width: 140px;">
+          {{ currentUser?.full_name || 'Guest' }}
+        </span>
+        <i class="feather icon-chevron-down text-muted small"></i>
+      </a>
+
+      @if (isProfileDropdownOpen) {
+      <div class="dropdown-menu show shadow-lg border-0 position-absolute end-0 mt-1 p-0 overflow-hidden"
+        style="top: 100%; min-width: 240px; z-index: 1060;">
+        <div class="p-3 border-bottom bg-light">
+          <h6 class="mb-0 fw-bold text-dark">
+            Hello, <span class="fw-normal text-muted">{{ currentUser?.full_name || 'Guest' }}</span>
+          </h6>
+          <p class="text-muted small mb-0 text-truncate">{{ currentUser?.email || 'User' }}</p>
+        </div>
+        <a class="dropdown-item d-flex align-items-center gap-2 py-2 text-danger cursor-pointer" (click)="logout()">
+          <i class="feather icon-log-out"></i>
+          <span>Logout</span>
+        </a>
+      </div>
+      }
     </div>
   </div>
 </div>
@@ -457,8 +704,8 @@
 
 
 @if (selectedSourceObject && selectedTargetObject) {
-<div class="row g-3 mb-3 animate__animated animate__fadeIn">
-  <div class="col-xl-7 col-lg-6 d-flex flex-column">
+<div class="row g-3 mb-3 animate__animated animate__fadeIn" style="overflow-x: hidden;">
+  <div class="col-xl-5 col-lg-6 d-flex flex-column" style="min-width: 0; height: 98vh; min-height: 750px;">
     <div class="card shadow-sm border-0 bg-light mb-3 flex-shrink-0">
       <div class="card-header bg-white py-2 border-bottom d-flex align-items-center gap-2">
         <i class="feather {{ queryContext.icon }} text-warning"></i>
@@ -500,9 +747,9 @@
         </div>
 
         <div class="border rounded shadow-sm overflow-hidden"
-          [ngClass]="queryError ? 'border-danger' : 'border-secondary-subtle'"
+          [style.border-color]="queryError ? '#dc3545' : 'var(--line)'"
           style="height: 120px; border-width: 2px !important;">
-          <ngx-monaco-editor [options]="editorOptions" [(ngModel)]="customQuery" (ngModelChange)="queryError = null"
+          <ngx-monaco-editor [options]="editorOptions" [(ngModel)]="customQuery" (ngModelChange)="onQueryEdited()"
             (onInit)="onEditorInit($event)" style="height: 100%; width: 100%;">
           </ngx-monaco-editor>
         </div>
@@ -518,8 +765,9 @@
             <i class="feather icon-info text-info mt-1"></i>
             <span style="font-size: 0.75rem;">{{ queryContext.helpText }}</span>
           </div>
-          <button class="btn btn-sm btn-primary shadow-sm btn-hover-lift-primary px-3" (click)="applyFilter()"
-            [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
+          <button class="btn btn-sm shadow-sm btn-hover-lift-primary px-3"
+            style="background: var(--source); color: #fff; border: none; border-radius: 9px; font-weight: 700;"
+            (click)="applyFilter()" [disabled]="!customQuery || !selectedSourceObject || isPreviewLoading">
             <i class="feather" [ngClass]="isPreviewLoading ? 'icon-loader fa-spin' : 'icon-filter'"></i>
             {{ isPreviewLoading ? queryContext.loadingText : queryContext.buttonText }}
           </button>
@@ -527,13 +775,40 @@
       </div>
     </div>
 
-    <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1" style="height: 400px; overflow: hidden;">
+    <div class="card shadow-sm border-0 d-flex flex-column flex-grow-1"
+      style="min-height: 0; overflow: hidden; border-radius: 0.75rem;">
       <div
         class="card-header bg-white py-3 border-bottom flex-shrink-0 d-flex justify-content-between align-items-center">
         <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
           <i class="feather icon-list text-primary"></i> Source Data Preview
+          <span class="preview-col-count-badge" title="Columns currently shown">
+            <i class="feather icon-columns" style="font-size: 0.65rem;"></i>
+            {{ visiblePreviewHeaders.length }} col{{ visiblePreviewHeaders.length === 1 ? '' : 's' }}
+          </span>
+          @if (isQueryFieldFilterActive) {
+          <span class="badge bg-info-subtle text-info-emphasis small fw-normal"
+            title="Columns narrowed to your query's SELECT list">
+            <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
+            From query
+          </span>
+          }
         </h6>
         <div class="d-flex align-items-center gap-2 animate__animated animate__fadeIn">
+          @if (selectedSourceObject) {
+          <span class="badge small fw-normal text-nowrap" style="background: var(--source-soft); color: var(--source);"
+            [title]="(customQuery || isMigrationFilterActive) ? 'Records matching your query and filter' : 'Total records in this object'">
+            @if (isSourceCountLoading) {
+            <span class="spinner-border spinner-border-sm" style="width: 0.65rem; height: 0.65rem;"></span>
+            } @else if (selectedSourceObjectCount !== null) {
+            <i class="feather icon-database" style="font-size: 0.7rem;"></i> {{ selectedSourceObjectCount | number }}
+            record{{ selectedSourceObjectCount === 1 ? '' : 's' }}
+            @if (customQuery || isMigrationFilterActive) {
+            <span class="text-muted">(filtered)</span>
+            }
+            }
+          </span>
+          }
+          <!-- <span class="preview-row-count-pill">{{ previewRecords.length }} row{{ previewRecords.length === 1 ? '' : 's' }}</span> -->
           <label class="small fw-bold text-muted mb-0">Rows:</label>
           <select class="form-select form-select-sm shadow-sm border-secondary-subtle"
             style="width: 70px; cursor: pointer; font-size: 0.8rem;" [(ngModel)]="previewLimit"
@@ -551,18 +826,17 @@
           <p class="text-muted mt-3 fw-bold">{{ isPreviewLoading ? 'Applying Filter...' : 'Fetching live data...' }}</p>
         </div>
         } @else {
-        <div class="table-responsive h-100">
-          <table class="table table-hover table-striped mb-0 align-middle" style="font-size: 0.8rem; min-width: 800px;">
-            <thead class="sticky-top shadow-sm" style="z-index: 1; background-color: #f8f9fa;">
+        <div class="table-responsive preview-table-wrapper h-100">
+          <table class="table table-hover table-striped preview-table mb-0 align-middle" style="min-width: 800px;">
+            <thead class="sticky-top shadow-sm" style="z-index: 1;">
               <tr>
-                <th class="text-center text-muted border-bottom-0 py-2" style="width: 40px; background-color: #f8f9fa;">
+                <th class="text-center preview-col-index border-bottom-0 py-2" style="width: 40px;">
                   #</th>
-                @if (previewHeaders.length === 0) {
-                <th class="border-bottom-0 text-muted px-3 py-2" style="background-color: #f8f9fa;">Data Columns</th>
+                @if (visiblePreviewHeaders.length === 0) {
+                <th class="border-bottom-0 px-3 py-2">Data Columns</th>
                 }
-                @for (header of previewHeaders; track header) {
-                <th class="border-bottom-0 text-muted text-truncate px-3 py-2"
-                  style="max-width: 180px; background-color: #f8f9fa;">{{ header }}</th>
+                @for (header of visiblePreviewHeaders; track header) {
+                <th class="border-bottom-0 text-truncate px-3 py-2" style="max-width: 180px;">{{ header }}</th>
                 }
               </tr>
             </thead>
@@ -585,12 +859,11 @@
               }
               @for (row of previewRecords; track $index; let i = $index) {
               <tr>
-                <td class="text-center text-muted fw-bold border-end align-middle"
-                  style="width: 40px; background-color: inherit;">
+                <td class="text-center preview-row-index-cell fw-bold border-end align-middle" style="width: 40px;">
                   {{ i + 1 }}
                 </td>
-                @for (header of previewHeaders; track header) {
-                <td class="text-truncate px-3 align-middle text-secondary" style="max-width: 180px;"
+                @for (header of visiblePreviewHeaders; track header) {
+                <td class="text-truncate px-3 align-middle" style="max-width: 180px;"
                   title="{{ formatCellValue(row[header]) }}">
                   {{ formatCellValue(row[header]) }}
                 </td>
@@ -605,16 +878,132 @@
     </div>
   </div>
 
-  <div class="col-xl-5 col-lg-6">
-    <div class="card shadow-sm border-0 bg-light d-flex flex-column" style="height: 95vh; min-height: 600px;">
+  <div class="col-xl-7 col-lg-6" style="min-width: 0;">
+    <div class="card shadow-sm border-0 bg-light d-flex flex-column" style="height: 98vh; min-height: 750px;">
 
-      <div class="card-header bg-white py-3 border-bottom flex-shrink-0">
-        <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="card-header bg-white py-2 border-bottom flex-shrink-0">
+        <div class="d-flex justify-content-between align-items-center mb-1">
           <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
             <i class="feather icon-git-merge text-info"></i> Field Mapping
           </h6>
-          <span class="badge bg-primary-subtle text-primary">{{ mappedCount }} / {{ mappings.length }} Mapped</span>
+          <span class="badge" style="background: var(--source-soft); color: var(--source);">{{ mappedCount }} / {{
+            mappings.length }} Mapped</span>
         </div>
+
+        @if (getQuerySelectedFields() !== null) {
+        <div class="d-flex flex-column gap-2 mt-1">
+          <div class="d-flex justify-content-between align-items-center gap-2">
+            <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
+              <input class="form-check-input" type="checkbox" role="switch" id="restrictToQueryFieldsSwitch"
+                [(ngModel)]="restrictMappingToQueryFields" (change)="onRestrictToQueryFieldsChange()"
+                style="cursor: pointer;">
+              <label class="form-check-label small text-muted" for="restrictToQueryFieldsSwitch"
+                style="cursor: pointer;">
+                Query fields only
+              </label>
+            </div>
+            @if (isQueryFieldFilterActive) {
+            <span class="badge bg-info-subtle text-info-emphasis small"
+              title="Your query builder SELECT clause is limiting the source fields shown below">
+              <i class="feather icon-filter" style="font-size: 0.7rem;"></i>
+              {{ queryFilteredFieldCount }} field{{ queryFilteredFieldCount === 1 ? '' : 's' }} from query
+            </span>
+            }
+          </div>
+
+          @if (!restrictMappingToQueryFields && isEligibleForTimeFilter) {
+          <div class="position-relative" (click)="$event.stopPropagation()" style="width: fit-content;">
+            <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
+              [class.btn-outline-primary]="!isMigrationFilterActive" [class.btn-primary]="isMigrationFilterActive"
+              style="border-radius: 8px;" (click)="toggleMigrationFilterDropdown($event)">
+              <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
+              <span class="fw-bold">Migration Filter:</span>
+              <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
+              <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen"
+                [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
+            </button>
+
+            @if (isMigrationFilterOpen) {
+            <div
+              class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
+              style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+
+              <div class="d-flex flex-column gap-2">
+
+                <div class="d-flex align-items-center gap-2">
+                  <label class="small text-muted text-nowrap mb-0">Field</label>
+                  <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
+                    [(ngModel)]="migrationTimeFilter.field" (change)="triggerLivePreview()">
+                    @for (opt of timeFilterFieldOptions; track opt.value) {
+                    <option [value]="opt.value">{{ opt.label }}</option>
+                    }
+                  </select>
+                </div>
+
+                <hr class="my-1">
+
+                <div class="d-flex flex-column gap-2">
+                  <div class="d-flex align-items-start gap-2">
+                    <div class="flex-grow-1">
+                      <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
+                      <input type="date" id="migrationFilterStartDate"
+                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                        [(ngModel)]="migrationTimeFilter.startDate" [max]="migrationTimeFilter.endDate || todayIsoDate"
+                        (change)="onDateRangeChange()">
+                    </div>
+                    <div class="flex-grow-1">
+                      <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
+                      <input type="date" id="migrationFilterEndDate"
+                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                        [(ngModel)]="migrationTimeFilter.endDate" [min]="migrationTimeFilter.startDate"
+                        [max]="todayIsoDate" placeholder="Defaults to today" title="Leave blank to filter through today"
+                        (change)="onDateRangeChange()">
+                    </div>
+                    @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
+                    <div class="flex-shrink-0 migration-filter-clear-wrap">
+                      <label class="small text-muted mb-0 migration-filter-clear-spacer"
+                        aria-hidden="true">&nbsp;</label>
+                      <div class="migration-filter-clear-row">
+                        <button type="button" class="btn btn-sm migration-filter-clear-btn" (click)="clearDateRange()"
+                          title="Clear date range">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                      </div>
+                    </div>
+                    }
+                  </div>
+
+                  @if (migrationTimeFilter.startDate && !migrationTimeFilter.endDate) {
+                  <div class="small text-muted d-flex align-items-center gap-1">
+                    <i class="feather icon-info" style="font-size: 0.75rem;"></i>
+                    Filtering from {{ migrationTimeFilter.startDate }} through today.
+                  </div>
+                  }
+
+                  <div class="d-flex align-items-center gap-1 flex-wrap">
+                    @for (preset of quickRangePresets; track preset.key) {
+                    <button type="button" class="btn btn-sm" [class.btn-primary]="activeQuickRangePreset === preset.key"
+                      [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
+                      (click)="applyQuickRange(preset.key)">
+                      {{ preset.label }}
+                    </button>
+                    }
+                  </div>
+
+                  @if (dateRangeError) {
+                  <div class="small migration-filter-error d-flex align-items-center gap-1">
+                    <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
+                    {{ dateRangeError }}
+                  </div>
+                  }
+                </div>
+              </div>
+            </div>
+            }
+          </div>
+          }
+        </div>
+        }
       </div>
 
       @if (targetFields.length > 0 && getMissingRequiredFields().length > 0 && operationMode !== 'delete') {
@@ -630,11 +1019,12 @@
 
       <div class="card-body p-3 d-flex flex-column flex-grow-1 overflow-hidden">
 
-        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle shadow-sm mb-3 flex-shrink-0"
-          style="transition: 0.3s ease;" [class.opacity-50]="!selectedTargetObject"
-          [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
+        <div class="p-3 rounded shadow-sm mb-3 flex-shrink-0"
+          style="background: var(--source-soft); border: 1px solid #c9d7ea; transition: 0.3s ease;"
+          [class.opacity-50]="!selectedTargetObject" [style.pointer-events]="!selectedTargetObject ? 'none' : 'auto'">
           <div class="d-flex justify-content-between align-items-center mb-2">
-            <h6 class="fw-bold text-primary-emphasis m-0"><i class="feather icon-sliders me-1"></i> Migration Settings
+            <h6 class="fw-bold m-0" style="color: var(--source);"><i class="feather icon-sliders me-1"></i> Migration
+              Settings
             </h6>
           </div>
           <div class="d-flex flex-wrap gap-3 mb-2">
@@ -643,21 +1033,51 @@
                 value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
               <label class="form-check-label fw-bold cursor-pointer small" for="apiOpInsert">Insert</label>
             </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpdate"
+                value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpdate">Update</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="apiOpMode" id="apiOpUpsert"
+                value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="apiOpUpsert">Upsert</label>
+            </div>
           </div>
+          @if (operationMode === 'upsert') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Matches each record against {{ targetSystem }} using the Ext ID
+            field below — updates it if found, inserts it if not.
+          </div>
+          } @else if (operationMode === 'update') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Only updates records that already exist in {{ targetSystem }},
+            matched by the Ext ID field below. New records are skipped.
+          </div>
+          }
           <div class="row g-2 mt-1">
             @if (['insert', 'update', 'upsert'].includes(operationMode)) {
             <div class="col">
-              <div class="input-group input-group-sm shadow-sm" title="External ID selection is currently disabled.">
-                <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold opacity-75">
+              <div class="input-group input-group-sm shadow-sm"
+                [title]="operationMode === 'insert' ? 'Optional: used only to flag duplicates during validation.' : 'Required: the unique field used to match existing records.'">
+                <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold">
                   <i class="feather icon-key text-secondary me-1"></i> Ext ID
+                  @if (operationMode !== 'insert') {<span class="text-danger ms-1">*</span>}
                 </span>
-                <select class="form-select border-secondary-subtle bg-light text-muted cursor-not-allowed opacity-75"
-                  [(ngModel)]="externalIdField" disabled>
+                <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
                   <option value="" selected>-- Select Field --</option>
-                  @for (field of targetFields; track field.name) {
+                  @for (field of (operationMode === 'insert' ? targetFields : getExternalIdEligibleFields()); track
+                  field.name) {
                   <option [value]="field.name">{{ field.label }}</option>
                   }
                 </select>
+                @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
+                <div class="small text-danger mt-1">
+                  No fields on {{ selectedTargetObject }} are marked as a matchable unique/external key in {{
+                  targetSystem }}.
+                  Mark one in {{ targetSystem }} Setup before running {{ operationMode.toUpperCase() }}.
+                </div>
+                }
               </div>
             </div>
             }
@@ -700,7 +1120,7 @@
           <span class="small fw-bold text-dark me-2"><i class="feather icon-help-circle"></i>Mapping Color Key:</span>
 
           <div class="d-flex align-items-center gap-1">
-            <span class="badge bg-success text-white shadow-sm" style="font-size: 0.65rem;">Rule</span>
+            <span class="badge bg-success text-white shadow-sm" style="font-size: 0.65rem;">Auto</span>
             <span class="small text-dark fw-medium" style="font-size: 0.75rem;">Auto Map</span>
           </div>
 
@@ -715,10 +1135,17 @@
           </div>
         </div>
 
-        <!-- PREMIUM UX: Live Progress Bar (FROZEN) -->
+        <!-- ACCESS DISCLAIMER -->
+        <div class="d-flex align-items-center gap-2 mb-1 px-2 py-1 flex-shrink-0">
+          <i class="feather icon-alert-triangle" style="font-size: 0.8rem; color: #dc3545 !important;"></i>
+          <span class="small fw-bold" style="font-size: 0.75rem; color: #dc3545 !important;">
+            Please make sure you have read/write access to all the mapped fields.
+          </span>
+        </div>
+
         @if (isAutoMapping) {
         <div
-          class="alert alert-info py-3 px-4 mb-3 d-flex align-items-center justify-content-between border-info-subtle shadow-sm animate__animated animate__fadeInDown flex-shrink-0"
+          class="alert alert-info py-2 px-4 mb-2 d-flex align-items-center justify-content-between border-info-subtle shadow-sm animate__animated animate__fadeInDown flex-shrink-0"
           style="border-radius: 0.5rem;">
           <div class="d-flex align-items-center gap-3">
             <div class="spinner-border text-info" style="border-width: 0.2em; width: 1.5rem; height: 1.5rem;"
@@ -754,12 +1181,23 @@
             <i class="feather icon-check-circle mb-3" style="font-size: 3.5rem;"></i>
             <h5 class="fw-bold">All Fields Mapped!</h5>
           </div>
+          } @else if (visibleMappings.length === 0 && isQueryFieldFilterActive) {
+          <div
+            class="d-flex flex-column align-items-center justify-content-center h-100 text-muted opacity-75 pt-2 animate__animated animate__fadeIn">
+            <i class="feather icon-filter mb-3" style="font-size: 3.5rem;"></i>
+            <h5 class="fw-bold">No Matching Source Fields</h5>
+            <p class="small mb-2">None of your mapped source fields match this object's schema, or your query's SELECT
+              list is empty.</p>
+            <button class="btn btn-sm btn-outline-secondary" (click)="restrictMappingToQueryFields = false">
+              Show all fields instead
+            </button>
+          </div>
           } @else {
           <table class="table table-hover table-borderless align-middle mb-0 w-100">
             <!-- STICKY Header -->
             <thead class="shadow-sm" style="position: sticky; top: 0; z-index: 10; background-color: #ffffff;">
               <tr>
-                <th style="width: 45%; padding: 0.5rem 0.5rem; background-color: #ffffff;"
+                <th style="width: 40%; padding: 0.5rem 0.5rem; background-color: #ffffff;"
                   class="align-middle border-bottom">
                   <div class="d-flex justify-content-between align-items-center gap-2">
                     <span class="text-muted small fw-bold text-nowrap">Source Field</span>
@@ -775,18 +1213,20 @@
                       <button
                         class="btn btn-light border-secondary-subtle text-muted d-flex align-items-center px-1 py-1 btn-hover-lift"
                         (click)="mappingSearchQuery = ''" title="Clear Filter">
-                        <i class="feather icon-x" style="font-size: 0.75rem;"></i>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
                       </button>
                       }
                     </div>
                   </div>
                 </th>
-                <th style="width: 10%; background-color: #ffffff;"
+                <th style="width: 8%; background-color: #ffffff;"
                   class="text-center text-muted small fw-bold align-middle border-bottom">
                   <i class="feather icon-arrow-right"></i>
                 </th>
-                <th style="width: 40%; background-color: #ffffff;"
+                <th style="width: 38%; background-color: #ffffff;"
                   class="text-muted small fw-bold align-middle border-bottom">Target Field</th>
+                <th style="width: 14%; background-color: #ffffff;"
+                  class="text-center text-muted small fw-bold align-middle border-bottom">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -919,12 +1359,19 @@
                   }
                 </td>
 
-                <td class="text-center">
-                  <button
-                    class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
-                    (click)="clearMapping(mapping)">
-                    <i class="feather icon-x"></i>
-                  </button>
+                <td class="text-center" style="width: 14%;">
+                  <div class="d-flex align-items-center justify-content-center gap-1">
+                    <button
+                      class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                      (click)="clearMapping(mapping)" title="Clear target field">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
+                    </button>
+                    <button
+                      class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                      (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                    </button>
+                  </div>
                 </td>
               </tr>
               }
@@ -934,12 +1381,11 @@
         </div>
 
         <!-- LOCKED Footer Action Bar -->
-        <div class="mt-3 pt-3 border-top d-flex align-items-center flex-shrink-0 bg-white"
-          style="position: sticky; bottom: 0; z-index: 10;">
-          <div class="d-flex align-items-center gap-3 w-100">
+        <div class="mt-3 pt-3 border-top flex-shrink-0 bg-white">
+          <div class="d-flex align-items-center gap-3 w-100 flex-wrap">
             <!-- Primary Action -->
             <button
-              class="btn btn-primary shadow-sm btn-hover-lift-primary px-4 py-2 fw-bold d-flex align-items-center gap-2"
+              class="btn btn-primary shadow-sm btn-hover-lift-primary px-3 py-2 fw-bold d-flex align-items-center gap-2 flex-shrink-0 text-nowrap"
               (click)="autoMap()" [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping"
               title="Auto Map">
               <i class="feather fs-5" [ngClass]="isAutoMapping ? 'icon-loader fa-spin' : 'icon-cpu'"></i>
@@ -948,18 +1394,19 @@
 
             <!-- Secondary Action -->
             <button
-              class="btn btn-light border-secondary-subtle text-danger shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
+              class="btn btn-light border-secondary-subtle text-danger shadow-sm btn-hover-lift px-3 py-2 fw-bold d-flex align-items-center gap-2 flex-shrink-0 text-nowrap"
               (click)="resetAllMappings()" [disabled]="!selectedTargetObject || mappings.length === 0 || isAutoMapping"
               title="Clear All">
-              <i class="feather icon-trash-2 fs-5"></i> Clear All
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
+              <span>Clear All</span>
             </button>
 
-            <div class="ms-auto d-flex align-items-center gap-3">
+            <div class="ms-auto d-flex align-items-center gap-3 flex-shrink-0">
               <!-- NEW: On-Demand Review Button -->
               <button
-                class="btn btn-light border-info text-info shadow-sm btn-hover-lift px-4 py-2 fw-bold d-flex align-items-center gap-2"
-                (click)="showReviewPanel = true; reviewPanelMinimized = false"
-                [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
+                class="btn btn-light border-info text-info shadow-sm btn-hover-lift px-3 py-2 fw-bold d-flex align-items-center gap-2 flex-shrink-0 text-nowrap"
+                (click)="openReviewPanel()" [disabled]="mappings.length === 0 || isAutoMapping"
+                title="Open Review Panel">
                 <i class="feather icon-eye fs-5"></i> Open Review
               </button>
 
@@ -1190,17 +1637,19 @@
       <div class="card-body p-0 d-flex flex-grow-1 overflow-hidden">
         <div class="bg-light p-3 border-end d-flex flex-column gap-3 justify-content-center" style="min-width: 170px;">
           <button
-            class="btn bg-white shadow-sm border border-secondary-subtle action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
+            class="btn action-card-btn validate-btn d-flex flex-column align-items-center justify-content-center p-2 rounded"
+            style="background: var(--surface); border: 1.5px solid var(--line); box-shadow: 0 1px 2px rgba(16,19,26,0.04);"
             (click)="validateData()" [disabled]="getMissingRequiredFields().length > 0 || hasActiveTypeMismatches()"
             [title]="getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : (hasActiveTypeMismatches() ? 'Fix Invalid Casts First' : 'Validate Mapping')">
-            <div class="bg-light rounded-circle d-flex align-items-center justify-content-center mb-1 border"
-              style="width: 38px; height: 38px;">
-              <i class="feather icon-check-square fs-5 text-secondary"></i>
+            <div class="rounded-circle d-flex align-items-center justify-content-center mb-1"
+              style="width: 38px; height: 38px; background: var(--paper); border: 1px solid var(--line);">
+              <i class="feather icon-check-square fs-5" style="color: var(--muted);"></i>
             </div>
-            <span class="fw-bold text-dark" style="font-size: 0.8rem;">Validate</span>
+            <span class="fw-bold" style="font-size: 0.8rem; color: var(--ink);">Validate</span>
           </button>
           <button
-            class="btn btn-primary shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded position-relative"
+            class="btn shadow-sm action-card-btn run-btn d-flex flex-column align-items-center justify-content-center p-2 rounded position-relative"
+            style="background: linear-gradient(90deg, var(--source), var(--target)); color: #fff; border: none; box-shadow: 0 6px 16px -6px rgba(47,93,158,0.5);"
             [ngClass]="{'pulse-primary': aggregateStats.valid > 0 && aggregateStats.invalid === 0 && !hasPendingEdits}"
             [disabled]="hasPendingEdits || getMissingRequiredFields().length > 0 || hasActiveTypeMismatches()"
             [title]="hasPendingEdits ? 'You must click Re-Validate before running' : (getMissingRequiredFields().length > 0 ? 'Missing Required Fields' : 'Execute Migration')"
@@ -1231,12 +1680,20 @@
             </span>
             <div class="d-flex gap-2">
 
-              <!-- FIX 1: Add Safe Navigation (?.) to prevent length errors on undefined data -->
+              <!-- 1: Add Safe Navigation (?.) to prevent length errors on undefined data -->
               @if (successData?.length > 0) {
               <button class="btn btn-xs btn-outline-success d-flex align-items-center gap-1 btn-hover-lift"
                 style="font-size: 0.7rem; padding: 2px 8px;"
                 (click)="downloadCSV(successData, 'migration_success_log.csv')">
                 <i class="feather icon-download"></i> Success ({{ successData.length }})
+              </button>
+              }
+
+              @if (skippedData?.length > 0) {
+              <button class="btn btn-xs btn-outline-warning d-flex align-items-center gap-1 btn-hover-lift"
+                style="font-size: 0.7rem; padding: 2px 8px;"
+                (click)="downloadCSV(skippedData, 'migration_skipped_log.csv')">
+                <i class="feather icon-skip-forward"></i> Skipped ({{ skippedData.length }})
               </button>
               }
 
@@ -1255,14 +1712,14 @@
           <div class="bg-light border rounded p-3 font-monospace small text-dark flex-grow-1 overflow-auto shadow-inner"
             style="font-size: 0.8rem; min-height: 200px; box-shadow: inset 0 2px 4px rgba(0,0,0,.05);">
 
-            <!-- FIX 2: Convert legacy *ngIf to the new @if syntax -->
+            <!--  2: Convert legacy *ngIf to the new @if syntax -->
             @if (!logMessages || logMessages.length === 0) {
             <div class="text-center mt-4 text-muted">
               Awaiting job execution...
             </div>
             }
 
-            <!-- FIX 3: Convert legacy *ngFor to the new @for syntax -->
+            <!-- 3: Convert legacy *ngFor to the new @for syntax -->
             @for (log of logMessages; track $index) {
             <div class="mb-1" [ngClass]="{
                    'text-danger fw-bold': log.toLowerCase().includes('error') || log.toLowerCase().includes('fail'),
@@ -1287,12 +1744,12 @@
 <!-- ========================================================= -->
 @if (showReviewPanel) {
 <div class="floating-review-panel animate__animated animate__fadeInUp" [class.minimized]="reviewPanelMinimized"
-  [class.expanded]="reviewPanelExpanded">
+  [class.expanded]="reviewPanelExpanded" [style.top.px]="reviewPanelTop" [style.left.px]="reviewPanelLeft">
 
-  <!-- Panel Header (Click to maximize if minimized) -->
-  <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0"
-    style="border-radius: 8px 8px 0 0; cursor: pointer;"
-    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null">
+  <!-- Panel Header (drag to move; click to maximize if minimized) -->
+  <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0 panel-header"
+    style="border-radius: 8px 8px 0 0;" (mousedown)="startReviewPanelDrag($event)"
+    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null" title="Drag to move">
     <div class="d-flex align-items-center gap-2">
       <i class="feather icon-check-circle text-success fs-5"></i>
       <h6 class="m-0 fw-bold">Auto-Map Review</h6>
@@ -1313,12 +1770,21 @@
         (click)="reviewPanelMinimized = true; reviewPanelExpanded = false; $event.stopPropagation()" title="Minimize">
         <i class="feather icon-minus fs-5"></i>
       </button>
-      <button class="btn btn-sm btn-link text-white-50 p-0 btn-hover-lift"
-        (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
-        <i class="feather icon-x fs-5"></i>
+      <button
+        class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
+        style="width: 22px; height: 22px;" (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
       </button>
       } @else {
-      <button class="btn btn-sm btn-link text-white-50 p-0"><i class="feather icon-maximize-2 fs-5"></i></button>
+      <button class="btn btn-sm btn-link text-white-50 p-0 btn-hover-lift"
+        (click)="reviewPanelMinimized = false; $event.stopPropagation()" title="Restore">
+        <i class="feather icon-maximize-2 fs-5"></i>
+      </button>
+      <button
+        class="btn btn-sm btn-link p-0 btn-hover-lift panel-close-btn rounded-circle d-flex align-items-center justify-content-center"
+        style="width: 22px; height: 22px;" (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
       }
     </div>
   </div>
@@ -1337,7 +1803,7 @@
     <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2 transition-all"
       [class.btn-warning]="reviewFilter === 'unmapped'" [class.btn-outline-warning]="reviewFilter !== 'unmapped'"
       (click)="reviewFilter = 'unmapped'">
-      Unmapped <span class="badge" [class.bg-white]="reviewFilter === 'unmapped'"
+      Unmapped <span class="badge" [class.bg-yellow]="reviewFilter === 'unmapped'"
         [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{
         mappings.length - mappedCount }}</span>
     </button>
@@ -1352,16 +1818,21 @@
         @if ((reviewFilter === 'mapped' && mapping.targetField) || (reviewFilter === 'unmapped' &&
         !mapping.targetField)) {
         <tr class="border-bottom">
-          <td class="px-3 py-2 w-50" title="{{ mapping.sourceLabel }}">
+          <td class="px-3 py-2" style="width: 45%;" title="{{ mapping.sourceLabel }}">
             <div
               class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
               <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+              <span
+                class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1 flex-shrink-0"
+                style="font-size: 0.6rem;">
+                {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
+              </span>
             </div>
           </td>
           <td class="text-center text-muted px-0" style="width: 20px;">
             <i class="feather icon-arrow-right small"></i>
           </td>
-          <td class="px-3 py-2 w-50">
+          <td class="px-3 py-2" style="width: 55%;">
             <div class="position-relative" (click)="$event.stopPropagation()">
               <div
                 class="form-select form-select-sm cursor-pointer shadow-sm border-info d-flex justify-content-between align-items-center"
@@ -1392,6 +1863,18 @@
                   }
                   }
                 </div>
+
+                <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                  @if (isTypeMismatch(mapping)) {
+                  <i class="feather icon-alert-triangle text-danger"
+                    title="Migration Warning: Incompatible data types may cause the API insert/update to fail."></i>
+                  } @else if (mapping.targetField) {
+                  <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.targetField, 'target')?.type) }}"
+                    style="font-size: 0.6rem;">
+                    {{ getFieldMeta(mapping.targetField, 'target')?.type }}
+                  </span>
+                  }
+                </div>
               </div>
 
               <!-- Search Dropdown Logic -->
@@ -1412,6 +1895,8 @@
                   class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
                   (click)="selectField(mapping, field.name)">
                   <span class="fw-bold text-dark small">{{ field.label }}</span>
+                  <span class="badge {{ getFieldTypeBadge(field.type) }}" style="font-size: 0.6rem;">{{
+                    field.type || 'string' }}</span>
                 </div>
                 }
               </div>
@@ -1419,12 +1904,18 @@
             </div>
           </td>
           <td class="px-2 text-center">
-
-            <button
-              class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center mx-auto"
-              (click)="clearMapping(mapping)">
-              <i class="feather icon-x"></i>
-            </button>
+            <div class="d-flex align-items-center justify-content-center gap-1">
+              <button
+                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                (click)="clearMapping(mapping)" title="Clear target field">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
+              </button>
+              <button
+                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+              </button>
+            </div>
           </td>
         </tr>
         }

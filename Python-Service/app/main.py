@@ -15,8 +15,6 @@ if sys.platform == 'win32':
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# Import your NEW modular routes
 from app.api.validation_routes import router as validation_router
 from app.api.migration_routes import router as migration_router
 from app.api.auth_routes import router as auth_router
@@ -44,3 +42,18 @@ app.include_router(migration_history)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
 app.include_router(validation_router)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        ws_max_size=64 * 1024 * 1024,  # 64MB, up from the 16MB default -- large CSV migrate payloads over /ws/migrate need this
+    )

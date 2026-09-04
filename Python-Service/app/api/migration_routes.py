@@ -1,22 +1,22 @@
 import asyncio
 import httpx
 import traceback
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from app.api.dependencies.auth import get_current_user
 from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
 from app.services.crm_service import CrmService
+from app.services.crm_query_service import CrmQueryService
 import math
 import csv
 from fpdf import FPDF
-
-# Import our Migrators!
 from app.services.migrators.salesforce_migrator import SalesforceMigrator
 from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
 from app.services.migrators.hubspot_migrator import HubspotMigrator
 from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
-from app.services.payload_builder import PayloadBuilderService  
-from app.services.audit_service import AuditService 
+from app.services.payload_builder import PayloadBuilderService
+from app.services.audit_service import AuditService
 
 import uuid
 import sqlite3
@@ -28,6 +28,8 @@ import csv
 from datetime import datetime
 from fastapi.responses import StreamingResponse
 
+import re
+
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
 
@@ -38,10 +40,18 @@ MIGRATORS = {
     "hubspot": HubspotMigrator()
 }
 
-# Files/Attachments migration is Salesforce -> Salesforce only for now
+# Files/Attachments migration is Salesforce -> Salesforce only
 FILE_MIGRATOR = SalesforceFileMigrator()
 
+_SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+def _require_valid_session_id(session_id: str) -> str:
+    if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    return session_id
+
 def get_db_path(session_id: str):
+    session_id = _require_valid_session_id(session_id)
     parts = session_id.split('_')
     crm_folder = parts[0] if len(parts) > 0 else "uncategorized"
     obj_folder = parts[1] if len(parts) > 1 else "unknown_object"
@@ -130,8 +140,8 @@ async def websocket_migration(websocket: WebSocket):
 
         execution_queue = sort_jobs_by_dependency(raw_queue)
 
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
-            all_success_data, all_error_data = [], []
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            all_success_data, all_error_data, all_skipped_data = [], [], []
 
             for job in execution_queue:
                 target_object = job.get("targetObject")
@@ -141,6 +151,7 @@ async def websocket_migration(websocket: WebSocket):
                 op_mode = job.get("operationMode", "insert")
                 batch_size = int(job.get("batchSize", 5000))
                 ext_id_field = job.get("externalIdField") or job.get("targetExtIdField", "")
+                time_filter = job.get("migrationTimeFilter")
                 migrate_attachments = job.get("migrateAttachments", False)
                 migrate_files = job.get("migrateFiles", False)
                 if migrate_attachments or migrate_files:
@@ -169,7 +180,7 @@ async def websocket_migration(websocket: WebSocket):
                     
                 else:
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
-                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log)
+                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,
                     "token": target_creds.get("access_token"), "instance_url": target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain"),
@@ -178,32 +189,59 @@ async def websocket_migration(websocket: WebSocket):
 
                 async def execute_upload(payload_data, current_op, pass_name):
                     options_pass = dict(options_base)
-                    _, _, succ, err = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
+                    result = await target_migrator.upload(client, payload_data, current_op, pass_name, options_pass, send_log)
+
+                    if len(result) == 6:
+                        _, _, _, succ, err, skipped = result
+                    else:
+                        _, _, succ, err = result
+                        skipped = []
+
                     all_success_data.extend(succ)
                     all_error_data.extend(err)
+                    all_skipped_data.extend(skipped)
+
+                async def dedupe_and_execute(payload_data, current_op, pass_name):
+                    """CRM-agnostic guard applied before any UPDATE/UPSERT hits the wire.
+                    Keeps the last row for any unique-key value that appears more than
+                    once in the same batch, and reports the earlier duplicates as
+                    skipped instead of letting the CRM API silently drop/overwrite one
+                    of them."""
+                    if current_op in ("update", "upsert") and ext_id_field:
+                        dedupe_key_field = "external_id" if target_crm == "zendesk" else ext_id_field
+                        clean_payload, dup_skips = PayloadBuilderService.dedupe_by_unique_key(
+                            payload_data, source_records, dedupe_key_field
+                        )
+                        if dup_skips:
+                            await send_log(
+                                f"[{target_object}] {pass_name}: {len(dup_skips)} record(s) shared the same "
+                                f"'{ext_id_field}' value within this batch -- keeping the last one, skipping the rest."
+                            )
+                            all_skipped_data.extend(dup_skips)
+                        await execute_upload(clean_payload, current_op, pass_name)
+                    else:
+                        await execute_upload(payload_data, current_op, pass_name)
 
                 job_success_start_idx = len(all_success_data)
-                has_self_ref = any(m.get("type") == "reference" and target_object in m.get("referenceTo", []) for m in mappings)
+                has_self_ref = any(m.get("type") == "reference" and target_object in (m.get("referenceTo") or []) for m in mappings)
                 
                 if job.get("isPass3Patch", False):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "onlyReferencesTo": job.get("onlyReferencesTo", []), "operationMode": "upsert"}, target_crm)
-                    await execute_upload(p_load, "upsert", "Pass 3 (Patch)")
+                    await dedupe_and_execute(p_load, "upsert", "Pass 3 (Patch)")
                 elif op_mode == "delete":
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "operationMode": "delete"}, target_crm)
                     await execute_upload(p_load, "delete", "Deletion")
                 elif has_self_ref:
                     p1_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "skipSelfReferencing": True, "operationMode": op_mode}, target_crm)
-                    await execute_upload(p1_load, op_mode, "Pass 1")
+                    await dedupe_and_execute(p1_load, op_mode, "Pass 1")
                     p2_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "onlySelfReferencing": True, "operationMode": "upsert"}, target_crm)
-                    await execute_upload(p2_load, "upsert", "Pass 2")
+                    await dedupe_and_execute(p2_load, "upsert", "Pass 2")
                 else:
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
-                    await execute_upload(p_load, op_mode, "Standard Sync")
+                    await dedupe_and_execute(p_load, op_mode, "Standard Sync")
 
                 # ==========================================
                 # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
-                # Runs once per job, right after that job's own records have
-                # synced, using only the old_id -> new_id pairs THIS job produced.
                 # ==========================================
                 if migrate_attachments or migrate_files:
                     if job.get("isPass3Patch", False):
@@ -213,13 +251,13 @@ async def websocket_migration(websocket: WebSocket):
                     else:
                         job_success_records = all_success_data[job_success_start_idx:]
                         await send_log(f"[{target_object}] {len(job_success_records)} record(s) synced this pass, checking for Id/Target_Id to build the file map...")
-
+                        
                         id_map = {
-                            rec["Id"]: rec["Target_Id"]
+                            (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
                             for rec in job_success_records
-                            if rec.get("Id") and rec.get("Target_Id")
+                            if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
                         }
-
+                        
                         if not id_map:
                             await send_log(
                                 f"[{target_object}] File migration skipped: no source Id was found on synced records. "
@@ -236,17 +274,14 @@ async def websocket_migration(websocket: WebSocket):
                                 f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
                                 f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
                             )
-
             await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
             
             safe_success_data = []
             for record in all_success_data:
                 safe_record = {}
                 for key, value in record.items():
-                    # Convert NaN (Not a Number) to None/null
                     if isinstance(value, float) and math.isnan(value):
                         safe_record[key] = None
-                    # Convert datetime or other objects to strings
                     elif hasattr(value, "isoformat"):
                         safe_record[key] = value.isoformat()
                     else:
@@ -255,20 +290,16 @@ async def websocket_migration(websocket: WebSocket):
             
             formatted_errors = []
             for err in all_error_data:
-                # 1. Guarantee err is a dictionary to prevent JS crashes
                 if not isinstance(err, dict):
                     err = {"Raw_Data": str(err), "Target_Error": "Unknown error format."}
                 
-                # 2. Extract the exact error message
                 error_msg = err.get("Target_Error", "API rejected this record.")
                 
-                # 3. Clean and Sanitize the record object
                 safe_record = {}
                 for k, v in err.items():
                     if k == "Target_Error":
                         continue
                     
-                    # Prevent JSON crashes from NaN or datetime objects
                     if isinstance(v, float) and math.isnan(v):
                         safe_record[k] = None
                     elif hasattr(v, "isoformat"):
@@ -276,13 +307,36 @@ async def websocket_migration(websocket: WebSocket):
                     else:
                         safe_record[k] = str(v) if v is not None else ""
                 
-                # 4. Append in the exact format Angular needs
                 formatted_errors.append({
                     "record": safe_record,
                     "error": error_msg
                 })
-                #  Generate PDF, CSVs, and Save History ---
-        # Generate PDF, CSVs, and Save History ---
+
+
+            formatted_skipped = []
+            for rec in all_skipped_data:
+                if not isinstance(rec, dict):
+                    rec = {"Raw_Data": str(rec), "Target_SkipReason": "Unknown skip reason."}
+
+                skip_reason = rec.get("Target_SkipReason", "Skipped: no matching record found.")
+
+                safe_record = {}
+                for k, v in rec.items():
+                    if k == "Target_SkipReason":
+                        continue
+
+                    if isinstance(v, float) and math.isnan(v):
+                        safe_record[k] = None
+                    elif hasattr(v, "isoformat"):
+                        safe_record[k] = v.isoformat()
+                    else:
+                        safe_record[k] = str(v) if v is not None else ""
+
+                formatted_skipped.append({
+                    "record": safe_record,
+                    "reason": skip_reason
+                })
+
         report_urls = {}
         try:
             await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
@@ -298,15 +352,18 @@ async def websocket_migration(websocket: WebSocket):
             )
         except Exception as e:
             print(f"Failed to generate reports: {e}")
-            report_urls = {} # Fallback to empty if it fails
+            report_urls = {}
 
         
         await websocket.send_json({
             "status": "Finished",
-            "log": f"Migration completed! {len(safe_success_data)} records successful, {len(formatted_errors)} failed.",
+            "log": f"Migration completed! {len(safe_success_data)} records successful, "
+                   f"{len(formatted_skipped)} skipped (no match), {len(formatted_errors)} failed.",
             "successData": safe_success_data,
             "errorData": formatted_errors,
-            "reportUrls": report_urls  # Send the PDF URLs back to the frontend
+            "skippedData": formatted_skipped,
+            "reportUrls": report_urls
+
         })
         
         await websocket.close()
@@ -330,6 +387,14 @@ async def websocket_validate_stream(websocket: WebSocket):
     
     try:
         payload = await websocket.receive_json()
+        auth_token = payload.get("authToken")
+        user_res = supabase.auth.get_user(auth_token)
+        if not user_res or not user_res.user:
+            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
+            await websocket.close()
+            return
+        user_id = user_res.user.id
+
         is_revalidation = payload.get("isRevalidation", False)
         session_id = payload.get("sessionId", "")
 
@@ -342,10 +407,12 @@ async def websocket_validate_stream(websocket: WebSocket):
                 return
 
             fixed_records = payload.get("fixedRecords", [])
+            query = payload.get("query", "").strip()
             mappings = payload.get("mappings", [])
             dedupe_key = payload.get("dedupeKey", "")
             sf_rules = payload.get("sfRules", {})
             target_crm = payload.get("targetCrmId", "salesforce").lower()
+            time_filter = payload.get("migrationTimeFilter")
 
             await websocket.send_json({"log": "System: Re-validating UI fixes...", "status": "Validating"})
 
@@ -389,14 +456,6 @@ async def websocket_validate_stream(websocket: WebSocket):
             return
 
         # --- INITIAL VALIDATION ROUTE (DYNAMIC) ---
-        auth_token = payload.get("authToken")
-        user_res = supabase.auth.get_user(auth_token)
-        if not user_res or not user_res.user:
-            await websocket.send_json({"log": "FATAL: Invalid or expired session.", "status": "Validation Failed"})
-            await websocket.close()
-            return
-        
-        user_id = user_res.user.id
         source_crm = payload.get("crmId", "").lower()
         target_crm = payload.get("targetCrmId", "salesforce").lower()
         obj_name = payload.get("objectName", "")
@@ -404,6 +463,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         mappings = payload.get("mappings", [])
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
+        time_filter = payload.get("migrationTimeFilter")
 
         source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
         source_migrator = MIGRATORS.get(source_crm)
@@ -421,10 +481,12 @@ async def websocket_validate_stream(websocket: WebSocket):
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
         await send_log(f"System: Initializing Streaming Validation...", "Connecting")
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
-                raw_records = await source_migrator.extract(client, source_creds, obj_name, query, mappings, send_log)
+                raw_records = await source_migrator.extract(
+                    client, source_creds, obj_name, query, mappings, send_log, time_filter
+                )
                 
                 if not raw_records:
                     await send_log("No records found matching criteria.", "Validation Passed")
@@ -455,7 +517,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                 await websocket.close()
                 return
 
-        # 3. GRAB INITIAL UI ERRORS
+        # 3. INITIAL UI ERRORS
         cursor = conn.cursor()
         cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
         all_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]
@@ -485,7 +547,7 @@ async def websocket_validate_stream(websocket: WebSocket):
 # ROUTE: DOWNLOAD FULL AUDIT REPORT (CSV)
 # ==========================================
 @router.get("/api/audit/download/{session_id}")
-async def download_validation_audit(session_id: str, type: str = 'valid'):
+async def download_validation_audit(session_id: str, type: str = 'valid', current_user = Depends(get_current_user)):
     db_path = get_db_path(session_id)
     
     if not os.path.exists(db_path):
@@ -528,3 +590,40 @@ async def download_validation_audit(session_id: str, type: str = 'valid'):
         'Content-Disposition': f'attachment; filename="Validation_Audit_{type.capitalize()}_{session_id}.csv"'
     }
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+# =========================================================
+# FETCH OBJECT RECORD COUNT (With Silent Token Refresh)
+# =========================================================
+@router.get("/api/metadata/{crm_id}/count/{object_name}")
+async def get_crm_object_count(
+    crm_id: str,
+    object_name: str,
+    role: str = "source",
+    query: str = "",
+    timeFilter: str = "",
+    current_user = Depends(get_current_user)
+):
+    crm_lower = crm_id.lower()
+    creds = CrmService.get_active_crm_credentials(current_user.id, crm_lower, role)
+
+    time_filter = None
+    if timeFilter:
+        try:
+            time_filter = json.loads(timeFilter)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=400, detail="timeFilter must be valid JSON.")
+
+    async def _fetch(token):
+        creds["access_token"] = token
+        return await CrmQueryService.get_object_count(creds, object_name, crm_lower, query, time_filter)
+
+    try:
+        count = await _fetch(creds["access_token"])
+        return {"count": count}
+    except HTTPException as e:
+        if e.status_code == 401:
+            new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
+            count = await _fetch(new_token)
+            return {"count": count}
+        raise e

@@ -2,7 +2,7 @@ import httpx
 import urllib.parse 
 from fastapi import HTTPException
 
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+client = httpx.AsyncClient(timeout=30.0)
 
 class CrmMetadataService:
     
@@ -18,13 +18,12 @@ class CrmMetadataService:
         url = f"{instance_url.rstrip('/')}/services/data/v60.0/sobjects"
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 
                 data = response.json()
                 
-                # Node.js Logic Applied: Map all objects directly, add keyPrefix, and identify custom/metadata types
                 objects = [
                     {
                         "name": obj["name"], 
@@ -52,7 +51,7 @@ class CrmMetadataService:
         base_url = instance_url.rstrip('/')
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Schema
                 describe_url = f"{base_url}/services/data/v60.0/sobjects/{object_name}/describe"
                 desc_res = await client.get(describe_url, headers=headers)
@@ -64,15 +63,12 @@ class CrmMetadataService:
                 select_fields_list = []
                 
                 for f in fields_raw:
-                    # Skip compound fields that break SOQL queries
                     if f["type"] in ["address", "location"]:
                         continue
 
-                    # Grab fields for sample records
                     if f.get("createable") or f.get("updateable") or f.get("name") == "Id":
                         select_fields_list.append(f["name"])
                         
-                    #  Extract length, custom flag, exact isRequired logic, and referenceTo
                     is_required = (not f.get("nillable", True)) and f.get("createable", False) and (not f.get("defaultedOnCreate", False))
                     
                     parsed_fields.append({
@@ -84,11 +80,10 @@ class CrmMetadataService:
                         "isRequired": is_required,
                         "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None,
                         "externalId": f.get("externalId", False),
-        "unique": f.get("unique", False),
-        "idLookup": f.get("idLookup", False)
+                        "unique": f.get("unique", False),
+                        "idLookup": f.get("idLookup", False)
                     })
 
-                # 2. Fetch Sample Data
                 sample_fields = select_fields_list[:15]
                 sample_records = []
                 
@@ -138,11 +133,10 @@ class CrmMetadataService:
         
         headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
         
-        # 2. Modern Native Custom Objects (Admin Center)
         url = f"https://{subdomain}.zendesk.com/api/v2/custom_objects"
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200:
                     for custom_obj in res.json().get("custom_objects", []):
@@ -165,11 +159,10 @@ class CrmMetadataService:
         safe_object_name = object_name.lower()
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 schema_fields_map = {}
                 sample_records = []
                 
-                # Check if it's a standard Zendesk object or a Native Custom Object
                 standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
                 is_standard = safe_object_name in standard_objects
                 
@@ -196,7 +189,8 @@ class CrmMetadataService:
                                     "type": f.get("type", "string"),
                                     "isRequired": f.get("required", False) or f.get("required_in_portal", False),
                                     "custom": is_custom,
-                                    "referenceTo": None
+                                    "referenceTo": None,
+                                    "externalId": api_name in ("id", "external_id") or (api_name == "email" and singular_name == "user")
                                 }
                                 
                     # 2. Fetch Sample Data
@@ -218,7 +212,9 @@ class CrmMetadataService:
                                     field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
                                     schema_fields_map[k] = {
                                         "name": k, "label": k.replace("_", " ").title(), "type": field_type,
-                                        "isRequired": k == "id", "custom": False, "referenceTo": None
+                                        "isRequired": False,
+                                        "custom": False, "referenceTo": None,
+                                        "externalId": k in ("id", "external_id")
                                     }
                         sample_records.append(flat_rec)
 
@@ -239,7 +235,9 @@ class CrmMetadataService:
                                 "type": f.get("type", "string"),
                                 "isRequired": False,
                                 "custom": True,
-                                "referenceTo": None
+                                "referenceTo": None,
+                                "externalId": api_name in ("id", "external_id"),
+                                "unique": False
                             }
                             
                     # 2. Fetch Sample Data using the modern records endpoint
@@ -268,7 +266,8 @@ class CrmMetadataService:
                                 field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
                                 schema_fields_map[k] = {
                                     "name": k, "label": k.replace("_", " ").title(), "type": field_type,
-                                    "isRequired": k == "id", "custom": False, "referenceTo": None
+                                    "isRequired": k == "id", "custom": False, "referenceTo": None,
+                                    "externalId": k in ("id", "external_id")
                                 }
                         sample_records.append(flat_rec)
 
@@ -304,7 +303,7 @@ class CrmMetadataService:
         url = f"{api_domain.rstrip('/')}/crm/v6/settings/modules"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
 
@@ -312,11 +311,9 @@ class CrmMetadataService:
                 objects = []
                 
                 for mod in data.get("modules", []):
-                    # Ensure we catch Custom Modules even if Zoho flags them weirdly
                     if mod.get("api_supported", False) or mod.get("generated_type") == "custom":
                         objects.append({
                             "name": mod.get("api_name"),
-                            # Use plural_label for a cleaner UI display
                             "label": mod.get("plural_label") or mod.get("module_name") or mod.get("api_name")
                         })
                         
@@ -338,7 +335,7 @@ class CrmMetadataService:
         base_url = f"{api_domain.rstrip('/')}/crm/v6"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Field Metadata Schema
                 fields_url = f"{base_url}/settings/fields?module={module_name}"
                 fields_res = await client.get(fields_url, headers=headers)
@@ -376,7 +373,9 @@ class CrmMetadataService:
                         "name": api_name,
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
-                        "isRequired": f.get("system_mandatory", False) or f.get("required", False)
+                        "isRequired": f.get("system_mandatory", False) or f.get("required", False),
+                        "unique": f.get("unique") is not None,
+                        "externalId": api_name == "id"
                     })
 
                 # 2. Fetch Sample Data
@@ -389,7 +388,6 @@ class CrmMetadataService:
                     for r in raw_records:
                         flat_rec = {}
                         for k, v in r.items():
-                            # Flatten Zoho's nested dictionary structures for Lookups/Owners
                             if isinstance(v, dict) and "id" in v:
                                 flat_rec[k] = v.get("name", v["id"]) 
                             else:
@@ -424,8 +422,7 @@ class CrmMetadataService:
         objects = []
         
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-                # 1. Fetch Standard Objects (HubSpot doesn't have a single /schemas endpoint for everything)
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 standard_objects = [
                     {"name": "contacts", "label": "Contacts"},
                     {"name": "companies", "label": "Companies"},
@@ -442,14 +439,12 @@ class CrmMetadataService:
                 ]
                 objects.extend(standard_objects)
 
-                # 2. Fetch Custom Objects
                 custom_url = f"{api_domain.rstrip('/')}/crm/v3/schemas"
-                # We catch errors here silently in case the user's tier doesn't support custom objects
                 res = await client.get(custom_url, headers=headers)
                 if res.status_code == 200:
                     for schema in res.json().get("results", []):
                         objects.append({
-                            "name": schema.get("objectTypeId"), # Internal ID needed for querying
+                            "name": schema.get("objectTypeId"),
                             "label": schema.get("labels", {}).get("plural", schema.get("name")),
                             "isCustomObject": True
                         })
@@ -473,7 +468,7 @@ class CrmMetadataService:
         base_url = f"{api_domain.rstrip('/')}/crm/v3/properties/{object_name}"
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 # 1. Fetch Schema Properties
                 props_res = await client.get(base_url, headers=headers)
                 props_res.raise_for_status()
@@ -494,7 +489,6 @@ class CrmMetadataService:
                 select_fields_list = []
 
                 for f in fields_raw:
-                    # Skip internal/hidden fields that shouldn't be mapped
                     if f.get("hidden"):
                         continue
                         
@@ -505,14 +499,15 @@ class CrmMetadataService:
                         "name": api_name,
                         "label": f.get("label"),
                         "type": type_mapping.get(f.get("type"), "string"),
-                        "isRequired": False, # HubSpot doesn't strictly enforce schema-level required fields like SF
+                        "isRequired": False, 
                         "custom": not f.get("hubspotDefined", True),
-                        "referenceTo": f.get("referencedObjectType")
+                        "referenceTo": f.get("referencedObjectType"),
+                        "unique": f.get("hasUniqueValue", False),
+                        "externalId": api_name in ("hs_object_id", "id")
                     })
 
-                # 2. Fetch Sample Data
-                # HubSpot requires us to specify which properties we want returned
-                sample_fields = select_fields_list[:50] # Limit to avoid URI too long errors
+
+                sample_fields = select_fields_list[:50] 
                 properties_query = "&".join([f"properties={urllib.parse.quote(p)}" for p in sample_fields])
                 
                 records_url = f"{api_domain.rstrip('/')}/crm/v3/objects/{object_name}?limit=5&{properties_query}"
@@ -524,7 +519,6 @@ class CrmMetadataService:
                     for r in raw_records:
                         flat_rec = {"id": r.get("id")}
                         
-                        # Merge properties into the flat record
                         props = r.get("properties", {})
                         if props:
                             for k, v in props.items():

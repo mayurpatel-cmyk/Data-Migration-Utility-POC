@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.utils.config import supabase
 import os
 import httpx
-client = httpx.AsyncClient(verify=False, timeout=30.0)
+client = httpx.AsyncClient(timeout=30.0)
 
 class CrmService:
     @staticmethod
@@ -21,7 +21,6 @@ class CrmService:
     @staticmethod
     def delete_connection(user_id: str, side: str):
         try:
-            # Delete the specific connection slot (source or target) for this user
             response = supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
             return response.data
         except Exception as e:
@@ -56,7 +55,7 @@ class CrmService:
         crm = crm_type.lower()
         new_access_token = None
         
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             if crm == "salesforce":
                 domain = "test.salesforce.com" if creds.get("environment") == "sandbox" else "login.salesforce.com"
                 res = await client.post(f"https://{domain}/services/oauth2/token", data={
@@ -79,6 +78,18 @@ class CrmService:
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")
 
+            elif crm == "zendesk":
+                subdomain = creds.get("subdomain")
+                res = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
+                    "grant_type": "refresh_token",
+                    "client_id": os.getenv("ZD_CLIENT_ID"),
+                    "client_secret": os.getenv("ZD_CLIENT_SECRET"),
+                    "refresh_token": refresh_token,
+                    "scope": "read write"
+                })
+                if res.status_code == 200:
+                    new_access_token = res.json().get("access_token")
+
             elif crm == "hubspot":
                 res = await client.post("https://api.hubapi.com/oauth/v1/token", data={
                     "grant_type": "refresh_token",
@@ -88,7 +99,6 @@ class CrmService:
                 })
                 if res.status_code == 200:
                     new_access_token = res.json().get("access_token")
-                    # HubSpot also rotates the refresh_token, so update both!
                     new_refresh_token = res.json().get("refresh_token")
                     supabase.table("crm_connections").update({
                         "access_token": new_access_token,
@@ -97,7 +107,6 @@ class CrmService:
                     return new_access_token
                     
         if new_access_token:
-            # Save new token back to database
             supabase.table("crm_connections").update({"access_token": new_access_token}).eq("id", creds["id"]).execute()
             return new_access_token
             

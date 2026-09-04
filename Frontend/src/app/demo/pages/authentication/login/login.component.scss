@@ -4,36 +4,65 @@
 ========================================= */
 
 .auth-main {
-  background-color: #f4f7f6; /* Soft fallback background */
+  background-color: #f4f7f6;
   position: relative;
   min-height: 100vh;
 }
 
 /* Logo Styling */
 .auth-logo {
-  height: 65px; /* Adjust this value up or down to find the perfect size */
-  width: auto;  /* Ensures the logo doesn't stretch or distort */
+  height: 65px;
+  width: auto;
   max-width: 100%;
   object-fit: contain;
-  filter: drop-shadow(0px 4px 8px rgba(0,0,0,0.08)); /* Adds a subtle, premium 3D pop */
+  filter: drop-shadow(0px 4px 8px rgba(0,0,0,0.08));
   transition: transform 0.3s ease;
   
   &:hover {
-    transform: scale(1.02); /* Slight zoom when hovered */
+    transform: scale(1.02);
   }
 }
 
-/* Background Animated Blobs */
+/* =========================================
+   Animated Migration Background
+========================================= */
+.auth-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bg-gradient-mesh {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(13, 110, 253, 0.12) 0%, transparent 45%),
+    radial-gradient(circle at 85% 15%, rgba(111, 66, 193, 0.10) 0%, transparent 45%),
+    radial-gradient(circle at 50% 85%, rgba(13, 202, 240, 0.10) 0%, transparent 50%),
+    linear-gradient(135deg, #f4f7f6 0%, #eef2f7 100%);
+  background-size: 200% 200%;
+  animation: meshShift 18s ease-in-out infinite alternate;
+}
+
+@keyframes meshShift {
+  0%   { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+
+/* Background Blobs */
 .bg-shape {
   position: absolute;
   filter: blur(80px);
   z-index: 0;
-  opacity: 0.6;
+  opacity: 0.55;
   border-radius: 50%;
-  animation: float 10s infinite ease-in-out alternate;
+  animation: float 12s infinite ease-in-out alternate;
 }
 
 .bg-primary.blob-1 {
+  background-color: #0d6efd;
   width: 400px;
   height: 400px;
   top: -10%;
@@ -42,6 +71,7 @@
 }
 
 .bg-info.blob-2 {
+  background-color: #0dcaf0;
   width: 350px;
   height: 350px;
   bottom: -5%;
@@ -59,27 +89,119 @@
 }
 
 @keyframes float {
-  0% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(30px, 40px) scale(1.1); }
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(30px, 40px) scale(1.1); }
   100% { transform: translate(-20px, -20px) scale(0.9); }
 }
+
+/* Migration Flow Paths + Traveling Dots */
+.migration-flow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.flow-path {
+  fill: none;
+  stroke: url(#lineGrad);
+  stroke: rgba(13, 110, 253, 0.18);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 8;
+}
+
+.flow-dot {
+  filter: drop-shadow(0 0 4px rgba(13, 110, 253, 0.7));
+}
+
+.dot-a {
+  fill: #0d6efd;
+}
+
+.dot-b {
+  fill: #6f42c1;
+}
+
+/* Source / Destination Nodes */
+.data-node {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0d6efd;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 8px 24px rgba(13, 110, 253, 0.15);
+  animation: nodePulse 4s ease-in-out infinite;
+}
+
+.node-left {
+  top: 22%;
+  left: 6%;
+  animation-delay: 0s;
+}
+
+.node-right {
+  bottom: 18%;
+  right: 8%;
+  color: #6f42c1;
+  box-shadow: 0 8px 24px rgba(111, 66, 193, 0.15);
+  animation-delay: -2s;
+}
+
+@keyframes nodePulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 8px 24px rgba(13, 110, 253, 0.15); }
+  50%      { transform: scale(1.06); box-shadow: 0 12px 32px rgba(13, 110, 253, 0.28); }
+}
+
+/* Drifting Particles */
+.particles {
+  position: absolute;
+  inset: 0;
+}
+
+.particle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(13, 110, 253, 0.35);
+  animation: drift linear infinite;
+}
+
+@keyframes drift {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  10%  { opacity: 0.7; }
+  90%  { opacity: 0.7; }
+  100% { transform: translateY(-120vh) translateX(30px); opacity: 0; }
+}
+
+.p1  { left: 8%;  bottom: -5%; width: 5px;  height: 5px;  background: rgba(13, 110, 253, 0.4); animation-duration: 14s; animation-delay: 0s; }
+.p2  { left: 18%; bottom: -5%; width: 8px;  height: 8px;  background: rgba(111, 66, 193, 0.3); animation-duration: 18s; animation-delay: 2s; }
+.p3  { left: 30%; bottom: -5%; width: 4px;  height: 4px;  background: rgba(13, 202, 240, 0.4); animation-duration: 12s; animation-delay: 4s; }
+.p4  { left: 42%; bottom: -5%; width: 6px;  height: 6px;  background: rgba(13, 110, 253, 0.3); animation-duration: 20s; animation-delay: 1s; }
+.p5  { left: 55%; bottom: -5%; width: 5px;  height: 5px;  background: rgba(111, 66, 193, 0.35); animation-duration: 15s; animation-delay: 3s; }
+.p6  { left: 65%; bottom: -5%; width: 7px;  height: 7px;  background: rgba(13, 202, 240, 0.3); animation-duration: 22s; animation-delay: 5s; }
+.p7  { left: 74%; bottom: -5%; width: 4px;  height: 4px;  background: rgba(13, 110, 253, 0.4); animation-duration: 13s; animation-delay: 2.5s; }
+.p8  { left: 84%; bottom: -5%; width: 6px;  height: 6px;  background: rgba(111, 66, 193, 0.3); animation-duration: 19s; animation-delay: 6s; }
+.p9  { left: 92%; bottom: -5%; width: 5px;  height: 5px;  background: rgba(13, 202, 240, 0.35); animation-duration: 16s; animation-delay: 1.5s; }
+.p10 { left: 50%; bottom: -5%; width: 4px;  height: 4px;  background: rgba(13, 110, 253, 0.35); animation-duration: 24s; animation-delay: 4.5s; }
 
 /* Glassmorphism Card */
 .auth-card {
   width: 100%;
   max-width: 450px;
-  background: rgba(255, 255, 255, 0.85); /* Semi-transparent white */
-  backdrop-filter: blur(16px); /* Frosted glass effect */
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.5) !important;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08) !important;
   transition: all 0.3s ease-in-out;
-}
-
-/* Logo Wrapper */
-.logo-wrapper {
-  box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-  border: 1px solid #f0f0f0;
 }
 
 /* Floating Input Styling */
@@ -100,6 +222,34 @@
   label {
     padding-left: 1.2rem;
     color: #6c757d;
+  }
+}
+
+/* Password Visibility Toggle */
+.password-field {
+  .form-control.pe-5 {
+    padding-right: 3rem !important;
+  }
+}
+
+.password-toggle-btn {
+  z-index: 5;
+  color: #6c757d;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  transition: color 0.2s ease;
+
+  &:hover {
+    color: #0d6efd;
+  }
+
+  &:focus {
+    outline: none;
+    box-shadow: none;
   }
 }
 
@@ -146,3 +296,10 @@
   20%, 40%, 60%, 80% { transform: translate3d(5px, 0, 0); }
 }
 .animate__shakeX { animation-name: shakeX; }
+
+/* Reduced motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .bg-shape, .bg-gradient-mesh, .particle, .data-node, .flow-dot animateMotion {
+    animation: none !important;
+  }
+}

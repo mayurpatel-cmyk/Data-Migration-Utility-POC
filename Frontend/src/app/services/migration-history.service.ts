@@ -22,11 +22,10 @@ export interface MigrationHistoryRecord {
   providedIn: 'root'
 })
 export class MigrationApiService {
-  private baseUrl = 'http://localhost:8000/api'; // Update to match your environment
+  private baseUrl = 'http://localhost:8000/api'; 
 
   constructor(private http: HttpClient) {}
 
-  // Helper method to retrieve the token (Adjust the key based on where you store it in localStorage)
  private getAuthHeaders(): HttpHeaders {
     const token = localStorage.getItem('supabase_token') || '';
     return new HttpHeaders({
@@ -37,7 +36,7 @@ export class MigrationApiService {
   getMigrationHistory(): Observable<{ success: boolean; history: MigrationHistoryRecord[] }> {
     return this.http.get<{ success: boolean; history: MigrationHistoryRecord[] }>(
       `${this.baseUrl}/migration-history`, 
-      { headers: this.getAuthHeaders() } // <-- Attach the headers here!
+      { headers: this.getAuthHeaders() } 
     );
   }
 }

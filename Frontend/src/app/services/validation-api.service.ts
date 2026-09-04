@@ -9,7 +9,6 @@ import { environment } from 'src/environments/environment';
 export class ValidationApiService {
   private http = inject(HttpClient);
   
-  // Point to FastAPI
   private baseUrl = environment.apiUrl ? `${environment.apiUrl}/api/python` : 'http://localhost:8000/api/python';
 
   private getAuthHeaders(): HttpHeaders {

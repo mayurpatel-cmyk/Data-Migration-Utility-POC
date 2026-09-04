@@ -2,6 +2,12 @@ import urllib.parse
 import asyncio
 import re
 from app.services.crm_service import CrmService
+from app.services.time_filter_service import (
+    merge_time_clause,
+    build_salesforce_time_clause,
+    TimeFilterError,
+)
+from app.services.query_field_utils import ensure_fields_selected
 
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
@@ -12,40 +18,58 @@ class SalesforceMigrator:
     # ==========================================
     # EXTRACT (Pull from Salesforce)
     # ==========================================
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         sf_token = creds.get("access_token")
         sf_instance = creds.get("instance_url", "").rstrip('/')
         
         headers_list = [m["sourceField"] if "sourceField" in m else m["csvField"] for m in mappings if m.get("sourceField") or m.get("csvField")]
         if "Id" not in headers_list:
-            # Always pull Id -- needed downstream to map old records to their
-            # newly-created target Ids (e.g. for the file/attachment migration pass)
             headers_list.append("Id")
         fields_str = ", ".join(headers_list) if headers_list else "Id"
         
         clean_query = (query or "").strip()
 
-        # --- NEW SMART QUERY BUILDER ---
+        # APPLY DYNAMIC TIME FILTER LOGIC (date-range only; see time_filter_service.py)
+        try:
+            time_clause = build_salesforce_time_clause(time_filter)
+        except TimeFilterError as e:
+            await send_log(f"[{obj_name}] Invalid migration filter: {e}")
+            raise
+
         if clean_query.lower().startswith("select "):
             soql = clean_query
-            # Intelligently swap out the '*' for the actual mapped fields so the migration doesn't miss data
+            
+            if time_clause:
+                soql = merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
+                    
             if " * " in soql.lower() or soql.lower().startswith("select *"):
                 soql = re.sub(r'(?i)select\s+\*\s+from', f'SELECT {fields_str} FROM', soql)
+            else:
+                # A hand-written/auto-generated SELECT list is a floor, not
+                # a ceiling -- every field mapped in the UI must actually be
+                # queried, or it comes back silently empty in the extracted
+                # records even though the mapping table says it's mapped.
+                # headers_list already guarantees "Id" is included, so this
+                # single union replaces the old id-only injection below it.
+                soql = ensure_fields_selected(soql, headers_list)
         else:
-            # Fallback for when the user only types a standard condition (e.g., "Industry = 'Tech'")
-            where_clause = f" WHERE {clean_query}" if clean_query else ""
-            soql = f"SELECT {fields_str} FROM {obj_name}{where_clause}"
-        # --------------------------------
+            where_parts = []
+            if clean_query: where_parts.append(f"({clean_query})")
+            if time_clause: where_parts.append(time_clause)
+            
+            where_combined = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+            soql = f"SELECT {fields_str} FROM {obj_name}{where_combined}"
         
         headers = {"Authorization": f"Bearer {sf_token}", "Content-Type": "application/json"}
         safe_soql = urllib.parse.quote(soql)
         url = f"{sf_instance}/services/data/v60.0/query?q={safe_soql}"
         
+        await send_log(f"[{obj_name}] Executing SOQL: {soql}")
+        
         source_records = []
         while url:
             res = await client.get(url, headers=headers)
             
-            # Catch 400 Bad Request errors gracefully and send them to the UI logs
             if res.status_code != 200:
                 await send_log(f"Salesforce Extraction Failed: {res.text}")
                 res.raise_for_status()
@@ -57,7 +81,6 @@ class SalesforceMigrator:
                 flat_rec = {}
                 for k, v in r.items():
                     if isinstance(v, dict):
-                        # Extract the most useful identifier from the relationship dictionary
                         flat_rec[k] = v.get("Name", v.get("Id", str(v)))
                     elif isinstance(v, list):
                         flat_rec[k] = str(v)
@@ -77,7 +100,7 @@ class SalesforceMigrator:
     # UPLOAD (Push to Salesforce)
     # ==========================================
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, [], []
+        if not payload: return 0, 0, 0, [], [], []
         
         target_object = options["targetObject"]
         target_ext_id_field = options["targetExtIdField"]
@@ -87,19 +110,27 @@ class SalesforceMigrator:
         source_records = options["sourceRecords"]
         user_id = options["userId"]
 
-        total_success, total_error = 0, 0
-        all_success_data, all_error_data = [], []
+        total_success, total_error, total_skipped = 0, 0, 0
+        all_success_data, all_error_data, all_skipped_data = [], [], []
 
         await send_log(f"[{target_object}] {pass_name}: Initializing {op_mode.upper()} to Salesforce...")
         sf_headers = {"X-SFDC-Session": sf_token, "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json"}
         bulk_base_url = f"{sf_instance.rstrip('/')}/services/async/60.0"
 
-        job_config = {"operation": op_mode, "object": target_object, "contentType": "JSON"}
-        if op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
+        is_update_only = (op_mode == "update")
+        wire_op_mode = "upsert" if is_update_only else op_mode
+        if wire_op_mode == "upsert" and not target_ext_id_field:
+            await send_log(
+                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
+                f"cannot match existing records for {op_mode.upper()}."
+            )
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+
+        job_config = {"operation": wire_op_mode, "object": target_object, "contentType": "JSON"}
+        if wire_op_mode == "upsert": job_config["externalIdFieldName"] = target_ext_id_field
 
         job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
         
-        # Silent Refresh
         if job_res.status_code == 401:
             await send_log(f"[{target_object}] Session Expired. Silently refreshing SF Token...")
             sf_token = await CrmService.refresh_crm_token(user_id, "salesforce", "target")
@@ -107,8 +138,16 @@ class SalesforceMigrator:
             job_res = await client.post(f"{bulk_base_url}/job", json=job_config, headers=sf_headers)
 
         if job_res.status_code != 201:
-            await send_log(f"[{target_object}] Salesforce Job Failed: {job_res.text}")
-            return 0, len(payload), [], [r for r in source_records]
+            error_text = job_res.text
+            if wire_op_mode == "upsert" and "does not match an External ID" in error_text:
+                await send_log(
+                    f"[{target_object}] Salesforce Job Failed: '{target_ext_id_field}' is not marked as an "
+                    f"External ID, Salesforce Id, or indexed/lookup field on {target_object} in Salesforce. "
+                    f"Mark it as an External ID field in Salesforce Setup, or choose a different field for matching."
+                )
+            else:
+                await send_log(f"[{target_object}] Salesforce Job Failed: {error_text}")
+            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
             
         job_id = job_res.json().get("id")
         chunks = list(chunk_dataset(payload, batch_size))
@@ -136,6 +175,8 @@ class SalesforceMigrator:
                 break
             poll_delay = min(poll_delay * 1.5, 4.0)
 
+        ids_to_revert = []  
+
         for i, b_id in enumerate(batch_ids):
             res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
             results = res.json()
@@ -145,21 +186,62 @@ class SalesforceMigrator:
                 orig_record = source_records[row_data["originalIndex"]]
                 
                 if sf_result.get("success"):
+     
+                    if is_update_only and sf_result.get("created"):
+                        orig_record["Target_SkipReason"] = (
+                            f"[{target_ext_id_field}] No matching record found in Salesforce. "
+                            f"Skipped because Update mode does not create new records."
+                        )
+                        all_skipped_data.append(orig_record)
+                        total_skipped += 1
+                        ids_to_revert.append(sf_result.get("id"))
+                        continue
+
                     orig_record["Target_Id"] = sf_result.get("id")
                     all_success_data.append(orig_record)
                     total_success += 1
                 else:
-                    # --- FIX: Extract Exact Salesforce Field ---
                     err_obj = sf_result.get("errors", [{}])[0]
                     err_msg = err_obj.get("message", "Unknown Error")
                     fields = err_obj.get("fields", [])
                     
-                    # Inject the field name into the error log so it reads: "[Field_Name__c] Error Message"
                     if fields and isinstance(fields, list) and len(fields) > 0:
                         err_msg = f"[{', '.join(fields)}] {err_msg}"
                         
                     orig_record["Target_Error"] = err_msg
                     all_error_data.append(orig_record)
                     total_error += 1
-                    
-        return total_success, total_error, all_success_data, all_error_data
+
+        if ids_to_revert:
+            await send_log(
+                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
+                f"match — reverting the records Salesforce auto-created for them..."
+            )
+            await self._delete_records(client, sf_instance, sf_headers, bulk_base_url, target_object, ids_to_revert, send_log)
+
+        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+
+    async def _delete_records(self, client, sf_instance, sf_headers, bulk_base_url, target_object, record_ids, send_log):
+        """Runs a small Bulk API delete job to undo records that 'update' mode
+        should never have created in the first place."""
+        try:
+            job_res = await client.post(
+                f"{bulk_base_url}/job",
+                json={"operation": "delete", "object": target_object, "contentType": "JSON"},
+                headers=sf_headers
+            )
+            if job_res.status_code != 201:
+                await send_log(f"[{target_object}] Revert Failed: could not open delete job: {job_res.text}")
+                return
+
+            job_id = job_res.json().get("id")
+            delete_rows = [{"Id": rid} for rid in record_ids if rid]
+
+            for chunk in chunk_dataset(delete_rows, 5000):
+                b_res = await client.post(f"{bulk_base_url}/job/{job_id}/batch", json=chunk, headers=sf_headers)
+                if b_res.status_code != 201:
+                    await send_log(f"[{target_object}] Revert batch failed: {b_res.text}")
+
+            await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
+        except Exception as e:
+            await send_log(f"[{target_object}] Revert Failed: {str(e)}")

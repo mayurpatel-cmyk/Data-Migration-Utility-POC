@@ -24,10 +24,6 @@ class SalesforceFileMigrator:
     """
 
     API_VERSION = "v60.0"
-    # ~35MB base64-encoded wire size ceiling for single-shot REST inline upload.
-    # Salesforce's real limit is ~37.5MB base64 (~25MB raw) for the REST /sobjects
-    # endpoint. Anything bigger needs Bulk API 2.0 binary ingest -- not implemented
-    # here yet, we just skip + report so nothing silently corrupts.
     MAX_INLINE_BYTES = 25 * 1024 * 1024
 
     # ==========================================
@@ -120,7 +116,6 @@ class SalesforceFileMigrator:
                 versions.extend(data.get("records", []))
                 url = f"{instance}{data.get('nextRecordsUrl')}" if not data.get("done") else None
 
-        # Flatten: one row per (parent, file) -- a doc can be linked to multiple parents
         files = []
         for v in versions:
             for parent_id in doc_to_parents.get(v["ContentDocumentId"], []):
@@ -197,9 +192,6 @@ class SalesforceFileMigrator:
             return True, res.json().get("id")
         return False, res.text
 
-    # ==========================================
-    # ORCHESTRATION: one full pass for an already-migrated batch of records
-    # ==========================================
     async def migrate_files_for_batch(
         self, client, source_creds, target_creds, user_id: str, id_map: dict,
         migrate_attachments: bool, migrate_files: bool, send_log, concurrency: int = 4

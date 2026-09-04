@@ -2,8 +2,8 @@ import os
 import tempfile
 import csv
 from fpdf import FPDF
-from app.utils.config import supabase
-
+from supabase import create_client
+from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY  
 class AuditService:
     @staticmethod
     def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str):
@@ -45,7 +45,6 @@ class AuditService:
         if success_count > 0:
             temp_success = os.path.join(tempfile.gettempdir(), f"{session_id}_success.csv")
             with open(temp_success, 'w', newline='', encoding='utf-8') as f:
-                # Extract headers dynamically from the first record
                 fieldnames = list(success_data[0].keys())
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
@@ -64,7 +63,6 @@ class AuditService:
         # 3. GENERATE & UPLOAD ERROR CSV
         # ==========================================
         if error_count > 0:
-            # Flatten the error records (Angular uses {record: {}, error: "msg"})
             flat_errors = []
             for err in error_data:
                 flat_rec = err.get("record", {})
@@ -91,10 +89,10 @@ class AuditService:
         # ==========================================
         # 4. SAVE TO DATABASE
         # ==========================================
-        supabase.auth.set_session(access_token=auth_token, refresh_token="")
+        scoped_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        scoped_client.auth.set_session(access_token=auth_token, refresh_token="")
 
-        
-        supabase.table("migration_history").insert({
+        scoped_client.table("migration_history").insert({
             "user_id": user_id,
             "session_id": session_id,
             "source_crm": source_crm,

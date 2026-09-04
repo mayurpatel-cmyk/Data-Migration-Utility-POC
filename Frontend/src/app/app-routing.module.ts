@@ -5,14 +5,12 @@ import { GuestComponent } from './theme/layout/guest/guest.component';
 import { authGuard } from 'src/app/demo/AuthGuard/auth.guard';
 
 export const routes: Routes = [
-  // 1. Explicitly redirect the base URL (localhost:4200/) to login
   {
     path: '',
     redirectTo: 'login',
     pathMatch: 'full'
   },
-  
-  // 2. Guest routes (Unauthenticated)
+
   {
     path: '',
     component: GuestComponent,
@@ -24,7 +22,6 @@ export const routes: Routes = [
     ]
   },
 
-  // 3. Admin routes (Authenticated)
   {
     path: '',
     component: AdminComponent,
@@ -53,10 +50,15 @@ export const routes: Routes = [
     ]
   },
 
-  // 4. Standalone routes
   {
     path: 'api-mapping',
+    canActivate: [authGuard],
     loadComponent: () => import('./demo/dashboard/API-mapping/API-mapping.component').then((c) => c.ApiMappingComponent)
+  },
+
+  {
+    path: '**',
+    redirectTo: 'login'
   }
 ];
 

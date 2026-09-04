@@ -1,8 +1,13 @@
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PayloadBuilderService:
     @staticmethod
     def build_payload(raw_records, mappings, options, target_crm="salesforce"):
+        mappings = PayloadBuilderService._dedupe_target_fields(mappings)
+
         skip_self_ref = options.get("skipSelfReferencing", False)
         only_self_ref = options.get("onlySelfReferencing", False)
         exclude_refs = options.get("excludeReferencesTo", [])
@@ -19,7 +24,7 @@ class PayloadBuilderService:
             has_patch_data = False
 
             for mapping in mappings:
-                # --- FIX: Support BOTH API Mapping and CSV Mapping formats ---
+                # ---  Support BOTH API Mapping and CSV Mapping formats ---
                 target_field = mapping.get("targetField") or mapping.get("sfField")
                 if not target_field: continue
 
@@ -94,8 +99,8 @@ class PayloadBuilderService:
                 if csv_val is None and target_field != target_ext_id_field: 
                     continue
 
-                is_self_ref = mapping.get("type") == "reference" and target_object in mapping.get("referenceTo", [])
-                refs_other = mapping.get("referenceTo", []) if mapping.get("type") == "reference" else []
+                is_self_ref = mapping.get("type") == "reference" and target_object in (mapping.get("referenceTo") or [])
+                refs_other = (mapping.get("referenceTo") or []) if mapping.get("type") == "reference" else []
 
                 is_excluded_cross = any(obj in refs_other for obj in exclude_refs)
                 is_only_target_cross = len(only_refs) > 0 and any(obj in refs_other for obj in only_refs)
@@ -129,7 +134,7 @@ class PayloadBuilderService:
                 elif target_crm == "zoho":
                     rel_ext_id = mapping.get("relationalExtIdField")
                     
-                    # BULLETPROOF FIX: If rel_ext_id exists, always treat it as a lookup dictionary
+                    #  If rel_ext_id exists, always treat it as a lookup dictionary
                     if rel_ext_id:
                         if rel_ext_id.lower() == "id":
                             target_record[target_field] = csv_val
@@ -144,12 +149,23 @@ class PayloadBuilderService:
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
                 
                 elif target_crm == "zendesk":
-                    if target_field.startswith("custom_field_"):
+                    zd_standard_objects = {"tickets", "users", "organizations", "groups", "macros", "triggers", "views"}
+                    zd_obj_lower = (target_object or "").strip().lower()
+                    zd_is_standard = zd_obj_lower in zd_standard_objects or f"{zd_obj_lower}s" in zd_standard_objects
+
+                    if target_ext_id_field and target_field == target_ext_id_field:
+                        target_record["external_id"] = csv_val
+                        if is_patch_mode: has_patch_data = True
+                    elif target_field.startswith("custom_field_"):
                         if "custom_fields" not in target_record:
                             target_record["custom_fields"] = []
                         
                         cf_id = int(target_field.replace("custom_field_", ""))
                         target_record["custom_fields"].append({"id": cf_id, "value": csv_val})
+                    elif not zd_is_standard and target_field not in ("name", "external_id", "id"):
+                        if "custom_object_fields" not in target_record:
+                            target_record["custom_object_fields"] = {}
+                        target_record["custom_object_fields"][target_field] = csv_val
                     else:
                         target_record[target_field] = csv_val
                         
@@ -179,3 +195,82 @@ class PayloadBuilderService:
                     payload.append({"originalIndex": idx, "targetRecord": target_record})
 
         return payload
+
+    @staticmethod
+    def _dedupe_target_fields(mappings):
+        """
+        Two mapping rows pointed at the same target field silently overwrite each
+        other inside the per-record loop below -- only the LAST one in list order
+        ever actually reaches the target CRM, and the earlier source column's data
+        is dropped with no error anywhere. The mapping UI now blocks this at
+        selection time, but this is a backstop for mapping arrays assembled
+        outside that flow (recovered sessions, direct API calls, older saved
+        mappings). Keeps the LAST occurrence per target field, mirroring the
+        "last row wins" convention used by dedupe_by_unique_key below.
+        """
+        seen: dict = {}
+        no_target: list = []
+
+        for m in mappings:
+            target_field = m.get("targetField") or m.get("sfField")
+            if not target_field:
+                no_target.append(m)
+                continue
+            seen[target_field] = m
+
+        dropped = len([m for m in mappings if (m.get("targetField") or m.get("sfField"))]) - len(seen)
+        if dropped > 0:
+            logger.warning(
+                "[PAYLOAD BUILDER] %d duplicate target-field mapping(s) collapsed to their last occurrence.",
+                dropped
+            )
+
+        return list(seen.values()) + no_target
+
+    @staticmethod
+    def dedupe_by_unique_key(payload, source_records, key_field):
+        """
+        Guards UPDATE/UPSERT batches against sending two rows with the same
+        unique-key value in a single request. Bulk/batch upsert APIs (Salesforce
+        Bulk API, HubSpot batch upsert, Zoho bulk upsert, Zendesk
+        create_or_update_many / custom object jobs) don't guarantee deterministic
+        behavior when two rows in the *same* call match the same key -- results
+        range from a hard API rejection to one row silently overwriting the
+        other with no error.
+
+        Keeps the LAST occurrence of each key value (mirrors "last row in the
+        source file wins") and reports every earlier occurrence as skipped so
+        it shows up in the audit trail instead of disappearing.
+
+        Returns (deduped_payload, skipped_records). skipped_records are ready to
+        append directly to all_skipped_data.
+        """
+        if not key_field:
+            return payload, []
+
+        last_index_for_key = {}
+        for item in payload:
+            key_val = item["targetRecord"].get(key_field)
+            if key_val in (None, ""):
+                continue
+            last_index_for_key[key_val] = item["originalIndex"]
+
+        winning_indices = set(last_index_for_key.values())
+
+        deduped_payload = []
+        skipped_records = []
+
+        for item in payload:
+            key_val = item["targetRecord"].get(key_field)
+            if key_val in (None, "") or item["originalIndex"] in winning_indices:
+                deduped_payload.append(item)
+            else:
+                orig_record = dict(source_records[item["originalIndex"]])
+                orig_record["Target_SkipReason"] = (
+                    f"[{key_field}] Duplicate value '{key_val}' appeared more than once in this "
+                    f"batch. Only the last occurrence was sent; this row was skipped to avoid an "
+                    f"ambiguous match."
+                )
+                skipped_records.append(orig_record)
+
+        return deduped_payload, skipped_records
