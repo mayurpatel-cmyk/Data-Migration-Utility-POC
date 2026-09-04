@@ -1279,6 +1279,9 @@ onReviewPanelDragEnd(): void {
   }
 
   get runJobBlockReason(): string | null {
+    if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning') {
+      return 'Validate your mapping before running the migration.';
+    }
     if (this.hasPendingEdits) {
       return 'You have un-validated fixes in the grid. Click "Re-Validate Fixes" before running the migration.';
     }
@@ -2306,7 +2309,25 @@ onReviewPanelDragEnd(): void {
     });
   }
 
+  private readonly VALIDATION_TERMINAL_STATUSES = new Set(['Validation Passed', 'Validation Warning', 'Validation Failed']);
+
+  private invalidateValidationOnMappingChange(): void {
+    if (!this.VALIDATION_TERMINAL_STATUSES.has(this.jobStatus)) return;
+
+    this.jobStatus = 'Idle';
+    this.validationResults = null;
+    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+    this.currentSessionId = '';
+
+    this.toastr.info(
+      'Your mapping changed since the last validation run -- validate again before running the migration.',
+      'Re-Validation Required'
+    );
+  }
+
   updateMappedCount() {
+    this.invalidateValidationOnMappingChange();
+
     const validTargetFieldNames = new Set(this.targetFields.map((f) => f.name));
     const autoUnmappedLabels: string[] = [];
 
