@@ -1367,17 +1367,10 @@
                       <div
                         class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start"
                         (click)="selectField(mapping, field.name)"
-                        [class.bg-light]="mapping.targetField === field.name"
-                        [class.opacity-50]="!isFieldWritable(field)"
-                        [style.cursor]="!isFieldWritable(field) ? 'not-allowed' : 'pointer'"
-                        [title]="!isFieldWritable(field) ? ('No field-level write access for the connected ' + targetSystem + ' user.') : ''">
+                        [class.bg-light]="mapping.targetField === field.name">
                         <div>
                           <span class="fw-bold text-dark">{{ field.label }}
                             @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
-                            @if (!isFieldWritable(field)) {
-                            <i class="feather icon-lock text-danger ms-1" style="font-size: 0.7rem;"
-                              title="No field-level write access for the connected {{ targetSystem }} user."></i>
-                            }
                           </span>
                           <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
                         </div>
@@ -1956,14 +1949,8 @@
                 @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
                 <div
                   class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
-                  (click)="selectField(mapping, field.name)" [class.opacity-50]="!isFieldWritable(field)"
-                  [style.cursor]="!isFieldWritable(field) ? 'not-allowed' : 'pointer'"
-                  [title]="!isFieldWritable(field) ? ('No field-level write access for the connected ' + targetSystem + ' user.') : ''">
-                  <span class="fw-bold text-dark small">{{ field.label }}
-                    @if (!isFieldWritable(field)) {
-                    <i class="feather icon-lock text-danger ms-1" style="font-size: 0.65rem;"></i>
-                    }
-                  </span>
+                  (click)="selectField(mapping, field.name)">
+                  <span class="fw-bold text-dark small">{{ field.label }}</span>
                   <span class="badge {{ getFieldTypeBadge(field.type) }}" style="font-size: 0.6rem;">{{
                     field.type || 'string' }}</span>
                 </div>

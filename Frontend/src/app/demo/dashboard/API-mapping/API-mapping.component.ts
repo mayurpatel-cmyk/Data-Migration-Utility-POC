@@ -72,6 +72,39 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   private mappingCancel$ = new Subject<void>();
   private lastLoadedTargetObject: string | null = null;
+
+  private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
+    'hs_object_id',
+    'url',
+    'createddate',
+    'lastmodifieddate',
+    'createdbyid',
+    'lastmodifiedbyid',
+    'systemmodstamp',
+    'isdeleted',
+    'hs_createdate',
+    'hs_lastmodifieddate',
+    'createdate',
+    'archived',
+    'created_at',
+    'updated_at',
+    'submitter_id',
+    'created_time',
+    'modified_time',
+    'created_by',
+    'modified_by',
+    '$state',
+    '$process_flow',
+    'createdat',
+    'updatedat',
+    'updateddate',
+    'deleted'
+  ]);
+
+  private isSystemManagedField(fieldName: string): boolean {
+    return this.SYSTEM_MANAGED_FIELDS.has((fieldName || '').toLowerCase());
+  }
+
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -1269,7 +1302,12 @@ onReviewPanelDragEnd(): void {
     const claimedByOtherRows = new Set(
       this.mappings.filter((m) => m.sourceField !== sourceFieldName && m.targetField).map((m) => m.targetField)
     );
-    let filtered = this.targetFields.filter((t) => !claimedByOtherRows.has(t.name));
+    let filtered = this.targetFields.filter(
+      (t) =>
+        !claimedByOtherRows.has(t.name) &&
+        !this.isSystemManagedField(t.name) &&
+        this.isFieldWritable(t)
+    );
 
     if (this.isStrictMapping) {
       const sourceMeta = this.sourceFields.find((f) => f.name === sourceFieldName);
@@ -1931,11 +1969,13 @@ onReviewPanelDragEnd(): void {
             this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
           }
 
-          this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
-            sourceField: field.name,
-            sourceLabel: `${field.label} (${field.name})`,
-            targetField: ''
-          }));
+          this.mappings = (sourceData.fields || [])
+            .filter((field: FieldMeta) => !this.isSystemManagedField(field.name))
+            .map((field: FieldMeta) => ({
+              sourceField: field.name,
+              sourceLabel: `${field.label} (${field.name})`,
+              targetField: ''
+            }));
 
           this.showReviewPanel = false;
           this.reviewPanelMinimized = false;
@@ -2005,31 +2045,6 @@ onReviewPanelDragEnd(): void {
     this.isAutoMapping = true;
 
     let heuristicMatchCount = 0;
-    const restrictedTargetFields = [
-      'id',
-      'hs_object_id',
-      'createddate',
-      'lastmodifieddate',
-      'createdbyid',
-      'lastmodifiedbyid',
-      'systemmodstamp',
-      'hs_createdate',
-      'hs_lastmodifieddate',
-      'createdate',
-      'archived',
-      'created_at',
-      'updated_at',
-      'submitter_id',
-      'created_time',
-      'modified_time',
-      'created_by',
-      'modified_by',
-      '$state',
-      '$process_flow',
-      'createdat',
-      'updatedat',
-      'updateddate'
-    ];
 
     // =========================================================
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
@@ -2061,7 +2076,7 @@ onReviewPanelDragEnd(): void {
 
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
-        if (restrictedTargetFields.includes(tgtApiExact)) return;
+        if (this.isSystemManagedField(tgtApiExact)) return;
         if (claimedTargetFields.has(t.name)) return;
         const fieldIsWritable = this.isFieldWritable(t);
 
