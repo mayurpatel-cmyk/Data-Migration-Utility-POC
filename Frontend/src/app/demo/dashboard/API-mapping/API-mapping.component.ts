@@ -1180,6 +1180,12 @@ onReviewPanelDragEnd(): void {
     return flag !== false;
   }
 
+  private isSourceFieldWritable(field: FieldMeta | undefined | null): boolean {
+    if (!field) return true;
+    if (field.name?.toLowerCase() === 'id' || field.externalId || field.idLookup) return true;
+    return field.createable !== false || field.updateable !== false;
+  }
+
   getFieldAccessViolations(): FieldAccessViolation[] {
     if (this.operationMode === 'delete') return [];
     if (!this.targetFields || this.targetFields.length === 0) return [];
@@ -1958,7 +1964,9 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = sourceData.fields || [];
+          this.sourceFields = (sourceData.fields || []).filter((field: FieldMeta) =>
+            this.isSourceFieldWritable(field)
+          );
 
           this.previewHeaders = sourceData.headers || [];
           this.previewRecords = sourceData.sampleRecords || [];
@@ -1969,7 +1977,7 @@ onReviewPanelDragEnd(): void {
             this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
           }
 
-          this.mappings = (sourceData.fields || [])
+          this.mappings = this.sourceFields
             .filter((field: FieldMeta) => !this.isSystemManagedField(field.name))
             .map((field: FieldMeta) => ({
               sourceField: field.name,
