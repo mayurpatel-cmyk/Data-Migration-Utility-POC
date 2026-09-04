@@ -98,7 +98,9 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     'createdat',
     'updatedat',
     'updateddate',
-    'deleted'
+    'deleted',
+    'ispartner',           // "Partner Account"
+    'iscustomerportal'     // "Customer Portal Account"
   ]);
 
   private isSystemManagedField(fieldName: string): boolean {
@@ -1967,8 +1969,8 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = (sourceData.fields || []).filter((field: FieldMeta) =>
-            this.isSourceFieldWritable(field)
+          this.sourceFields = (sourceData.fields || []).filter(
+            (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
 
           this.previewHeaders = sourceData.headers || [];
@@ -1980,13 +1982,11 @@ onReviewPanelDragEnd(): void {
             this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
           }
 
-          this.mappings = this.sourceFields
-            .filter((field: FieldMeta) => !this.isSystemManagedField(field.name))
-            .map((field: FieldMeta) => ({
-              sourceField: field.name,
-              sourceLabel: `${field.label} (${field.name})`,
-              targetField: ''
-            }));
+          this.mappings = this.sourceFields.map((field: FieldMeta) => ({
+            sourceField: field.name,
+            sourceLabel: `${field.label} (${field.name})`,
+            targetField: ''
+          }));
 
           this.showReviewPanel = false;
           this.reviewPanelMinimized = false;
