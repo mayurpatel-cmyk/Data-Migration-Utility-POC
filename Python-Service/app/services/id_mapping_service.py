@@ -28,7 +28,7 @@ run is still there next month when Account gets migrated.
 """
 import os
 import sqlite3
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 BASE_ID_MAP_DIR = os.path.join(os.getcwd(), "SureShift_id_maps")
 
@@ -150,6 +150,20 @@ class IdMappingService:
         whole batch over one unresolved row.
 
         Call this AFTER extraction, BEFORE PayloadBuilderService.build_payload().
+
+        Fully dynamic: this makes no assumption about which two objects are
+        involved or how many hops apart they are. Every reference-type
+        mapping is resolved independently against whatever parent object
+        its own `referenceTo` metadata names, so Opportunity->Account,
+        Opportunity->Contact, Contact->Account, or a five-object chain all
+        go through the exact same per-mapping loop below. If ONE relation
+        in that chain resolves and another doesn't, the difference is data
+        (was that parent actually migrated? under the same CRM pair? does
+        this specific field's metadata actually carry a referenceTo?), not
+        the mechanism -- which is exactly what the per-mapping diagnostics
+        below are for: they log each field independently so a "works for
+        Account, not for Contact" report tells you WHICH of those questions
+        to check, instead of just a single opaque total count.
         """
         reference_mappings = [
             m for m in mappings
@@ -158,30 +172,84 @@ class IdMappingService:
         if not reference_mappings:
             return
 
+        # Cache one get_mapping() call per distinct parent object referenced
+        # in this job, however many reference fields point at it.
         maps_by_parent: Dict[str, Dict[str, str]] = {}
+
+        def _resolve_parent(m: dict) -> Any:
+            return m.get("parentObjectName") or next(iter(m.get("referenceTo") or []), None)
+
         for m in reference_mappings:
-            parent = m.get("parentObjectName") or next(iter(m.get("referenceTo") or []), None)
+            parent = _resolve_parent(m)
             if not parent or parent in maps_by_parent:
                 continue
             maps_by_parent[parent] = IdMappingService.get_mapping(user_id, source_crm, target_crm, parent)
 
         remapped_count = 0
         for m in reference_mappings:
-            parent = m.get("parentObjectName") or next(iter(m.get("referenceTo") or []), None)
+            field_label = m.get("targetField") or m.get("sfField") or "(unnamed field)"
+            source_field = m.get("sourceField") or m.get("csvField")
+            parent = _resolve_parent(m)
+
+            # --- Diagnostics: report exactly why THIS field is/isn't resolving,
+            # instead of only a batch-wide total. Each branch below is a
+            # distinct, checkable root cause. ---
+            if not parent:
+                if send_log:
+                    await send_log(
+                        f"[Reference Remap] SKIPPED '{field_label}': no parent object name found "
+                        f"(mapping has no referenceTo/parentObjectName metadata). This field's target "
+                        f"describe() likely isn't returning a referenceTo for it -- check "
+                        f"crm_metadata_service.py's field parsing for the target object, or that the "
+                        f"target field is genuinely a lookup type."
+                    )
+                continue
+
+            if not source_field:
+                if send_log:
+                    await send_log(f"[Reference Remap] SKIPPED '{field_label}' (parent: {parent}): mapping has no sourceField set.")
+                continue
+
             id_map = maps_by_parent.get(parent) or {}
             if not id_map:
+                if send_log:
+                    await send_log(
+                        f"[Reference Remap] SKIPPED '{field_label}': no saved Id map found for parent "
+                        f"'{parent}' under {source_crm}->{target_crm}. Either '{parent}' hasn't been "
+                        f"migrated through this tool yet for this CRM pair, or it was migrated under a "
+                        f"different source/target connection than this run is using."
+                    )
                 continue
-            source_field = m.get("sourceField") or m.get("csvField")
-            if not source_field:
-                continue
+
+            field_remapped = 0
+            field_seen = 0
+            sample_unmatched = None
             for row in source_records:
                 old_val = row.get(source_field)
-                if old_val is not None and str(old_val) in id_map:
-                    row[source_field] = id_map[str(old_val)]
-                    remapped_count += 1
+                if old_val is None:
+                    continue
+                field_seen += 1
+                key = str(old_val)
+                if key in id_map:
+                    row[source_field] = id_map[key]
+                    field_remapped += 1
+                elif sample_unmatched is None:
+                    sample_unmatched = key
 
-        if send_log and remapped_count:
+            remapped_count += field_remapped
+            if send_log:
+                if field_remapped == field_seen and field_seen > 0:
+                    await send_log(f"[Reference Remap] '{field_label}' (parent: {parent}): {field_remapped}/{field_seen} resolved.")
+                elif field_seen > 0:
+                    await send_log(
+                        f"[Reference Remap] '{field_label}' (parent: {parent}): only {field_remapped}/{field_seen} resolved -- "
+                        f"{field_seen - field_remapped} source value(s) had no match in the saved '{parent}' map "
+                        f"(e.g. '{sample_unmatched}'). Those records point at '{parent}' rows that either "
+                        f"weren't part of that object's migration batch, or weren't migrated through this tool at all."
+                    )
+
+        if send_log and remapped_count == 0 and reference_mappings:
             await send_log(
-                f"[Reference Remap] Translated {remapped_count} reference value(s) to their "
-                f"previously-migrated target Ids using the saved Id map."
+                "[Reference Remap] 0 total values resolved across all reference fields this pass -- "
+                "see the per-field lines above for why."
             )

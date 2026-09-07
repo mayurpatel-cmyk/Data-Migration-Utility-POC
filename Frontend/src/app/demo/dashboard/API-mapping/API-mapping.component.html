@@ -13,7 +13,41 @@
     --success-soft: #e7f7ef;
     --warn: #b5650d;
     --warn-soft: #fbf0e2;
+    --lookup: #7c3aed;
+    --lookup-soft: #f3effe;
     font-family: 'Inter', -apple-system, sans-serif;
+  }
+
+  /* Lookup / Relationship Field Highlighting (source + target + review panel) */
+  .lookup-field-box {
+    border-color: var(--lookup) !important;
+    background-color: var(--lookup-soft) !important;
+  }
+
+  .lookup-field-label {
+    color: var(--lookup) !important;
+  }
+
+  .lookup-select-box {
+    box-shadow: inset 3px 0 0 var(--lookup) !important;
+  }
+
+  .lookup-icon {
+    color: var(--lookup);
+    flex-shrink: 0;
+  }
+
+  .lookup-pill {
+    font-size: 0.6rem;
+    background-color: var(--lookup-soft);
+    color: var(--lookup);
+    border: 1px solid var(--lookup);
+    white-space: nowrap;
+  }
+
+  .lookup-dropdown-item {
+    border-left: 3px solid var(--lookup) !important;
+    background-color: var(--lookup-soft);
   }
 
   /* Premium Hover Animations */
@@ -1078,7 +1112,8 @@
                   <i class="feather icon-key text-secondary me-1"></i> Ext ID
                   @if (operationMode !== 'insert') {<span class="text-danger ms-1">*</span>}
                 </span>
-                <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField">
+                <select class="form-select border-secondary-subtle" [(ngModel)]="externalIdField"
+                  (ngModelChange)="onExternalIdFieldChange()">
                   <option value="" selected>-- Select Field --</option>
                   @for (field of (operationMode === 'insert' ? targetFields : getExternalIdEligibleFields()); track
                   field.name) {
@@ -1246,10 +1281,18 @@
             <tbody>
               @for (mapping of visibleMappings; track mapping.sourceField; let i = $index) {
               <tr class="animate__animated animate__fadeIn">
-                <td title="{{ mapping.sourceLabel }}">
+                <td title="{{ mapping.sourceLabel }}{{ isLookupField(mapping.sourceField, 'source') ? ' (Lookup / Relationship field)' : '' }}">
                   <div
-                    class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
-                    <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+                    class="form-control form-control-sm bg-light text-truncate cursor-not-allowed d-flex justify-content-between align-items-center"
+                    [class.border-secondary]="!isLookupField(mapping.sourceField, 'source')"
+                    [class.lookup-field-box]="isLookupField(mapping.sourceField, 'source')">
+                    <small class="fw-bold text-dark text-truncate d-flex align-items-center gap-1"
+                      [class.lookup-field-label]="isLookupField(mapping.sourceField, 'source')">
+                      @if (isLookupField(mapping.sourceField, 'source')) {
+                      <i class="feather icon-link lookup-icon" style="font-size: 0.7rem;"></i>
+                      }
+                      {{ mapping.sourceLabel }}
+                    </small>
                     <span class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1"
                       style="font-size: 0.6rem;">
                       {{ getFieldMeta(mapping.sourceField, 'source')?.type || 'string' }}
@@ -1278,9 +1321,13 @@
        'bg-success-subtle border-success text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'rule',
        'bg-info-subtle border-info text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'ai',
        'bg-white border-info': !isTypeMismatch(mapping) && !mapping._mappedBy
-     }" (click)="toggleDropdown(mapping, $event)">
+     }" [class.lookup-select-box]="isLookupField(mapping.targetField, 'target')" (click)="toggleDropdown(mapping, $event)">
 
                       <div class="d-flex align-items-center gap-2 text-truncate">
+                        @if (isLookupField(mapping.targetField, 'target')) {
+                        <i class="feather icon-link lookup-icon" style="font-size: 0.75rem;"
+                          title="Lookup / Relationship field"></i>
+                        }
                         <span class="text-truncate" [class.text-muted]="!mapping.targetField">
                           {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
                         </span>
@@ -1298,6 +1345,11 @@
                         <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1"
                           style="font-size: 0.6rem; background-color: #e0f2fe;" title="Matched by AI semantic math">
                           <i class="feather icon-cpu"></i> AI
+                        </span>
+                        }
+                        @if (isLookupField(mapping.targetField, 'target')) {
+                        <span class="badge lookup-pill rounded-pill py-1" title="Lookup / Relationship field">
+                          <i class="feather icon-link"></i> Lookup
                         </span>
                         }
                         @if (isTypeMismatch(mapping)) {
@@ -1342,7 +1394,8 @@
                         <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis"
                           style="font-size: 0.7rem;">Parent Ext ID</span>
                         <input type="text" class="form-control form-control-sm border-warning-subtle"
-                          [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id">
+                          [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id"
+                          (ngModelChange)="onRelationalExtIdFieldChange(mapping)">
                       </div>
                     </div>
                     }
@@ -1367,9 +1420,15 @@
                       <div
                         class="dropdown-item cursor-pointer py-2 text-wrap d-flex justify-content-between align-items-start"
                         (click)="selectField(mapping, field.name)"
-                        [class.bg-light]="mapping.targetField === field.name">
+                        [class.bg-light]="mapping.targetField === field.name"
+                        [class.lookup-dropdown-item]="isLookupFieldMeta(field)">
                         <div>
-                          <span class="fw-bold text-dark">{{ field.label }}
+                          <span class="fw-bold text-dark d-flex align-items-center gap-1">
+                            @if (isLookupFieldMeta(field)) {
+                            <i class="feather icon-link lookup-icon" style="font-size: 0.7rem;"
+                              title="Lookup / Relationship field"></i>
+                            }
+                            {{ field.label }}
                             @if(field.isRequired || field.required) { <span class="text-danger">*</span> }
                           </span>
                           <div class="small text-muted" style="font-family: monospace;">{{ field.name }}</div>
@@ -1854,10 +1913,19 @@
         @if ((reviewFilter === 'mapped' && mapping.targetField) || (reviewFilter === 'unmapped' &&
         !mapping.targetField)) {
         <tr class="border-bottom">
-          <td class="px-3 py-2" style="width: 40%;" title="{{ mapping.sourceLabel }}">
+          <td class="px-3 py-2" style="width: 40%;"
+            title="{{ mapping.sourceLabel }}{{ isLookupField(mapping.sourceField, 'source') ? ' (Lookup / Relationship field)' : '' }}">
             <div
-              class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
-              <small class="fw-bold text-dark text-truncate">{{ mapping.sourceLabel }}</small>
+              class="form-control form-control-sm bg-light text-truncate cursor-not-allowed d-flex justify-content-between align-items-center"
+              [class.border-secondary]="!isLookupField(mapping.sourceField, 'source')"
+              [class.lookup-field-box]="isLookupField(mapping.sourceField, 'source')">
+              <small class="fw-bold text-dark text-truncate d-flex align-items-center gap-1"
+                [class.lookup-field-label]="isLookupField(mapping.sourceField, 'source')">
+                @if (isLookupField(mapping.sourceField, 'source')) {
+                <i class="feather icon-link lookup-icon" style="font-size: 0.7rem;"></i>
+                }
+                {{ mapping.sourceLabel }}
+              </small>
               <span
                 class="badge {{ getFieldTypeBadge(getFieldMeta(mapping.sourceField, 'source')?.type) }} ms-1 flex-shrink-0"
                 style="font-size: 0.6rem;">
@@ -1877,9 +1945,13 @@
        'bg-success-subtle border-success text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'rule',
        'bg-info-subtle border-info text-dark': !isTypeMismatch(mapping) && mapping._mappedBy === 'ai',
        'bg-white border-info': !isTypeMismatch(mapping) && !mapping._mappedBy
-     }" (click)="toggleDropdown(mapping, $event)">
+     }" [class.lookup-select-box]="isLookupField(mapping.targetField, 'target')" (click)="toggleDropdown(mapping, $event)">
 
                 <div class="d-flex align-items-center gap-2 text-truncate">
+                  @if (isLookupField(mapping.targetField, 'target')) {
+                  <i class="feather icon-link lookup-icon" style="font-size: 0.75rem;"
+                    title="Lookup / Relationship field"></i>
+                  }
                   <span class="text-truncate" [class.text-muted]="!mapping.targetField">
                     {{ getTargetFieldLabel(mapping.targetField) || '-- Select Target --' }}
                   </span>
@@ -1904,6 +1976,11 @@
                   <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1"
                     style="font-size: 0.6rem; background-color: #e0f2fe;">
                     <i class="feather icon-cpu"></i> AI
+                  </span>
+                  }
+                  @if (isLookupField(mapping.targetField, 'target')) {
+                  <span class="badge lookup-pill rounded-pill py-1" title="Lookup / Relationship field">
+                    <i class="feather icon-link"></i> Lookup
                   </span>
                   }
                   @if (!isFieldWritable(getFieldMeta(mapping.targetField, 'target'))) {
@@ -1949,8 +2026,14 @@
                 @for (field of getFilteredTargetFields(mapping.searchQuery, mapping.sourceField); track field.name) {
                 <div
                   class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
-                  (click)="selectField(mapping, field.name)">
-                  <span class="fw-bold text-dark small">{{ field.label }}</span>
+                  (click)="selectField(mapping, field.name)"
+                  [class.lookup-dropdown-item]="isLookupFieldMeta(field)">
+                  <span class="fw-bold text-dark small d-flex align-items-center gap-1">
+                    @if (isLookupFieldMeta(field)) {
+                    <i class="feather icon-link lookup-icon" style="font-size: 0.65rem;"></i>
+                    }
+                    {{ field.label }}
+                  </span>
                   <span class="badge {{ getFieldTypeBadge(field.type) }}" style="font-size: 0.6rem;">{{
                     field.type || 'string' }}</span>
                 </div>
