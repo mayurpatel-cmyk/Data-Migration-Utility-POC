@@ -607,24 +607,25 @@ get isEligibleForTimeFilter(): boolean {
 
   get visibleMappings() {
     let filtered = this.mappings;
-
     const queryFieldSet = this.getQueryFieldFilterSet();
     if (queryFieldSet) {
       filtered = filtered.filter(
         (m) =>
+          m.isDropdownOpen ||
           queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
           !!m.targetField 
       );
     }
 
     if (this.hideMappedFields) {
-      filtered = filtered.filter((m) => !m.targetField);
+      filtered = filtered.filter((m) => m.isDropdownOpen || !m.targetField);
     }
 
     if (this.mappingSearchQuery) {
       const query = this.mappingSearchQuery.toLowerCase().trim();
       filtered = filtered.filter(
         (m) =>
+          m.isDropdownOpen ||
           (m.sourceLabel && m.sourceLabel.toLowerCase().includes(query)) || (m.sourceField && m.sourceField.toLowerCase().includes(query))
       );
     }
@@ -1014,11 +1015,10 @@ toggleProfileDropdown(event: Event): void {
     const newMode = this.operationMode;
     const previousMode = this.lastOperationMode;
 
-    if (newMode === 'delete') {
-      this.externalIdField = '';
-    }
-
     if (newMode === previousMode) {
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
       this.updateMappedCount();
       return;
     }
@@ -1028,6 +1028,9 @@ toggleProfileDropdown(event: Event): void {
     // Nothing mapped yet -- no decision to make, just switch.
     if (mappedFieldCount === 0) {
       this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
       this.updateMappedCount();
       return;
     }
@@ -1057,12 +1060,30 @@ toggleProfileDropdown(event: Event): void {
       confirmButtonText: `Yes, Keep My ${mappedFieldCount} Mapped ${fieldWord.charAt(0).toUpperCase() + fieldWord.slice(1)}`,
       cancelButtonText: 'No, Clear Mapped Fields',
       reverseButtons: true,
+      allowOutsideClick: true,
+      allowEscapeKey: true,
       customClass: { popup: 'rounded-4 shadow-lg border-0' }
     });
 
-    this.lastOperationMode = newMode;
+    if (confirmResult.isConfirmed) {
+      // Explicit "Yes, Keep My Mapped Fields" click -- switch mode, keep mappings.
+      this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
 
-    if (!confirmResult.isConfirmed) {
+      this.toastr.info(
+        `Keeping your mapped ${fieldWord} for ${newLabel} mode. Any without ${newMode === 'insert' ? 'create' : 'edit'} ` +
+        `access in ${this.targetSystem} will be auto-unmapped.`,
+        'Mappings Retained'
+      );
+    } else if (confirmResult.dismiss === Swal.DismissReason.cancel) {
+      // Explicit "No, Clear Mapped Fields" click -- switch mode, wipe mappings.
+      this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
+
       this.mappings.forEach((m) => {
         m.targetField = '';
         m.relationalExtIdField = '';
@@ -1077,10 +1098,13 @@ toggleProfileDropdown(event: Event): void {
         'Mappings Cleared'
       );
     } else {
+      // Dismissed by clicking outside the popup, Esc, or the close button --
+      // the user never made a choice, so treat it as "never mind": revert the
+      // mode picker back to where it was and leave every mapping untouched.
+      this.operationMode = previousMode;
       this.toastr.info(
-        `Keeping your mapped ${fieldWord} for ${newLabel} mode. Any without ${newMode === 'insert' ? 'create' : 'edit'} ` +
-        `access in ${this.targetSystem} will be auto-unmapped.`,
-        'Mappings Retained'
+        `Mode change cancelled -- staying on ${previousLabel} mode. Your mappings are unchanged.`,
+        'Cancelled'
       );
     }
 
