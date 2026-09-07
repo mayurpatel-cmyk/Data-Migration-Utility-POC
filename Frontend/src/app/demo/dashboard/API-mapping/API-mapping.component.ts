@@ -208,6 +208,7 @@ isProfileDropdownOpen = false;
   isMigrationFilterOpen = false;
 
   operationMode: string = 'insert';
+  private lastOperationMode: string = 'insert';
   batchSize: number = 5000;
   migrationQueue: any[] = [];
 
@@ -1002,11 +1003,99 @@ toggleProfileDropdown(event: Event): void {
     this.closeAllDropdowns();
   }
 
-  onOperationModeChange() {
-    if (this.operationMode === 'delete') {
+  private readonly OPERATION_MODE_LABELS: Record<string, string> = {
+    insert: 'Insert',
+    update: 'Update',
+    upsert: 'Upsert',
+    delete: 'Delete'
+  };
+
+  async onOperationModeChange(): Promise<void> {
+    const newMode = this.operationMode;
+    const previousMode = this.lastOperationMode;
+
+    if (newMode === 'delete') {
       this.externalIdField = '';
     }
+
+    if (newMode === previousMode) {
+      this.updateMappedCount();
+      return;
+    }
+
+    const mappedFieldCount = this.mappings.filter((m) => m.targetField !== '').length;
+
+    // Nothing mapped yet -- no decision to make, just switch.
+    if (mappedFieldCount === 0) {
+      this.lastOperationMode = newMode;
+      this.updateMappedCount();
+      return;
+    }
+
+    const previousLabel = this.OPERATION_MODE_LABELS[previousMode] || previousMode;
+    const newLabel = this.OPERATION_MODE_LABELS[newMode] || newMode;
+    const fieldWord = mappedFieldCount > 1 ? 'fields' : 'field';
+
+    const confirmResult = await Swal.fire({
+      title: `Switching to ${newLabel} Mode`,
+      html: `
+        <div class="text-start px-2">
+          <p class="mb-2">
+            You have <strong>${mappedFieldCount}</strong> mapped ${fieldWord} carried over from
+            <strong>${previousLabel}</strong> mode.
+          </p>
+          <p class="mb-0">
+            Keep using ${mappedFieldCount > 1 ? 'these mappings' : 'this mapping'} for
+            <strong>${newLabel}</strong>, or clear everything and remap them from scratch?
+          </p>
+        </div>
+      `,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#198754',
+      cancelButtonColor: '#dc3545',
+      confirmButtonText: `Yes, Keep My ${mappedFieldCount} Mapped ${fieldWord.charAt(0).toUpperCase() + fieldWord.slice(1)}`,
+      cancelButtonText: 'No, Clear Mapped Fields',
+      reverseButtons: true,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    });
+
+    this.lastOperationMode = newMode;
+
+    if (!confirmResult.isConfirmed) {
+      this.mappings.forEach((m) => {
+        m.targetField = '';
+        m.relationalExtIdField = '';
+        delete m._mappedBy;
+        delete m._blockedTargetField;
+        delete m._blockedTargetLabel;
+      });
+      this.externalIdField = '';
+
+      this.toastr.info(
+        `Cleared ${mappedFieldCount} mapped ${fieldWord}. Map your fields for ${newLabel} mode and validate again.`,
+        'Mappings Cleared'
+      );
+    } else {
+      this.toastr.info(
+        `Keeping your mapped ${fieldWord} for ${newLabel} mode. Any without ${newMode === 'insert' ? 'create' : 'edit'} ` +
+        `access in ${this.targetSystem} will be auto-unmapped.`,
+        'Mappings Retained'
+      );
+    }
+
     this.updateMappedCount();
+    this.cdr.detectChanges();
+  }
+
+  onExternalIdFieldChange(): void {
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
+  }
+
+  onRelationalExtIdFieldChange(mapping: MappingRow): void {
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
   }
 
   closeAllDropdowns() {
@@ -1162,6 +1251,34 @@ onReviewPanelDragEnd(): void {
     }
 
     return false;
+  }
+
+  /**
+   * Generalized lookup/relationship-field detector that works for BOTH
+   * the source side and the target side (unlike isReferenceField, which
+   * only ever looks at targetFields). Used purely for UI highlighting so
+   * users can spot lookup fields at a glance in the mapping grid and the
+   * review panel.
+   */
+  isLookupFieldMeta(field: FieldMeta | undefined | null): boolean {
+    if (!field) return false;
+
+    if (field.type === 'reference' || (field.referenceTo && field.referenceTo.length > 0)) {
+      return true;
+    }
+
+    if (field.idLookup) return true;
+
+    if (field.name && field.name.toLowerCase() !== 'id' && field.name.endsWith('Id')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  isLookupField(fieldName: string | undefined | null, side: 'source' | 'target'): boolean {
+    if (!fieldName) return false;
+    return this.isLookupFieldMeta(this.getFieldMeta(fieldName, side));
   }
 
   getMissingRequiredFields(): string[] {
