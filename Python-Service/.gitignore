@@ -8,3 +8,4 @@ __pycache__/
 *.pyo
 *.pyd
 SureShift_staging_databases/
+SureShift_id_maps/

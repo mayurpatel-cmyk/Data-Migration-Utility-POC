@@ -18,6 +18,7 @@ from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrat
 from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
 from app.services.field_access_utils import find_non_writable_mapped_fields
+from app.services.id_mapping_service import IdMappingService
 
 import uuid
 import sqlite3
@@ -198,6 +199,12 @@ async def websocket_migration(websocket: WebSocket):
                 else:
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
                     source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+
+
+                await IdMappingService.remap_reference_fields(
+                    source_records, mappings, user_id, source_crm, target_crm, send_log
+                )
+
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,
                     "token": target_creds.get("access_token"), "instance_url": target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain"),
@@ -257,6 +264,18 @@ async def websocket_migration(websocket: WebSocket):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
                     await dedupe_and_execute(p_load, op_mode, "Standard Sync")
 
+                job_success_records = all_success_data[job_success_start_idx:]
+                job_id_map = {
+                    (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
+                    for rec in job_success_records
+                    if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
+                }
+                if job_id_map:
+                    saved_count = IdMappingService.save_mappings(
+                        user_id, source_crm, target_crm, target_object, list(job_id_map.items())
+                    )
+                    await send_log(f"[{target_object}] Saved {saved_count} source->target Id mapping(s) for future reference lookups.")
+
                 # ==========================================
                 # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
                 # ==========================================
@@ -265,32 +284,22 @@ async def websocket_migration(websocket: WebSocket):
                         await send_log(f"[{target_object}] File migration skipped for this pass (reference patch pass, not the primary sync).")
                     elif source_crm != "salesforce" or target_crm != "salesforce":
                         await send_log(f"[{target_object}] File migration skipped: only Salesforce -> Salesforce is supported right now (got {source_crm} -> {target_crm}).")
+                    elif not job_id_map:
+                        await send_log(
+                            f"[{target_object}] File migration skipped: no source Id was found on synced records. "
+                            f"Sample record keys: {list(job_success_records[0].keys()) if job_success_records else 'N/A'}"
+                        )
                     else:
-                        job_success_records = all_success_data[job_success_start_idx:]
-                        await send_log(f"[{target_object}] {len(job_success_records)} record(s) synced this pass, checking for Id/Target_Id to build the file map...")
-                        
-                        id_map = {
-                            (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
-                            for rec in job_success_records
-                            if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
-                        }
-                        
-                        if not id_map:
-                            await send_log(
-                                f"[{target_object}] File migration skipped: no source Id was found on synced records. "
-                                f"Sample record keys: {list(job_success_records[0].keys()) if job_success_records else 'N/A'}"
-                            )
-                        else:
-                            await send_log(f"[{target_object}] Starting file/attachment migration for {len(id_map)} synced record(s)...")
-                            file_results = await FILE_MIGRATOR.migrate_files_for_batch(
-                                client, source_creds, target_creds, user_id, id_map,
-                                migrate_attachments, migrate_files, send_log
-                            )
-                            await send_log(
-                                f"[{target_object}] Files complete — "
-                                f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
-                                f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
-                            )
+                        await send_log(f"[{target_object}] Starting file/attachment migration for {len(job_id_map)} synced record(s)...")
+                        file_results = await FILE_MIGRATOR.migrate_files_for_batch(
+                            client, source_creds, target_creds, user_id, job_id_map,
+                            migrate_attachments, migrate_files, send_log
+                        )
+                        await send_log(
+                            f"[{target_object}] Files complete — "
+                            f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
+                            f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
+                        )
             await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
             
             safe_success_data = []
