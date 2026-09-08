@@ -100,7 +100,76 @@ class IdMappingService:
                 PRIMARY KEY (source_crm, target_crm, source_instance, target_instance, object_name, source_id)
             )
         """)
+        IdMappingService._migrate_schema(conn)
         return conn
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        """
+        CREATE TABLE IF NOT EXISTS only creates the table when it's entirely
+        absent -- it does NOT touch a table that already exists under an
+        older layout. Since each user's id_mappings table lives in its own
+        on-disk SQLite file that persists indefinitely (that's the whole
+        point of this module), any file created before
+        source_instance/target_instance existed is stuck on the old layout
+        forever unless we patch it here.
+
+        This can't be a plain `ALTER TABLE ... ADD COLUMN`: the old table's
+        PRIMARY KEY is (source_crm, target_crm, object_name, source_id) --
+        4 columns -- while save_mappings()'s `INSERT ... ON CONFLICT(source_crm,
+        target_crm, source_instance, target_instance, object_name, source_id)`
+        names 6. SQLite requires an ON CONFLICT target to exactly match an
+        existing PRIMARY KEY or UNIQUE constraint, and ALTER TABLE cannot
+        redefine a PRIMARY KEY in place. Just adding the two columns would
+        trade the "no such column" crash for an immediate "ON CONFLICT
+        clause does not match any PRIMARY KEY or UNIQUE constraint" crash
+        instead of actually fixing anything.
+
+        So instead: build the new-shape table under a temp name, copy every
+        existing row across (source_instance/target_instance backfill to ''
+        -- the same default new rows already get, and the least-surprising
+        reading for a mapping saved before instance-scoping existed: treat
+        it as that CRM type's one unscoped/default org, per the tradeoff
+        save_mappings() already documents for omitted instance args), then
+        swap it in for the old table. Old rows survive; new rows get a real
+        6-column PK that ON CONFLICT can actually target.
+
+        Guarded by PRAGMA table_info() so this only runs once per file --
+        once the table has both columns (and, in practice, the rebuilt PK
+        that comes with them), later connects are a no-op.
+        """
+        cols = conn.execute("PRAGMA table_info(id_mappings)").fetchall()
+        existing_cols = {row[1] for row in cols}
+        if {"source_instance", "target_instance"} <= existing_cols:
+            return  # already current -- nothing to migrate
+
+        old_cols = [row[1] for row in cols]  # preserve actual on-disk column order
+        conn.execute("ALTER TABLE id_mappings RENAME TO id_mappings_old")
+        conn.execute("""
+            CREATE TABLE id_mappings (
+                source_crm      TEXT NOT NULL,
+                target_crm      TEXT NOT NULL,
+                source_instance TEXT NOT NULL DEFAULT '',
+                target_instance TEXT NOT NULL DEFAULT '',
+                object_name     TEXT NOT NULL,
+                source_id       TEXT NOT NULL,
+                target_id       TEXT NOT NULL,
+                updated_at      TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (source_crm, target_crm, source_instance, target_instance, object_name, source_id)
+            )
+        """)
+        select_cols = ", ".join(
+            c if c in old_cols else ("'' " if c in ("source_instance", "target_instance") else "NULL")
+            for c in ("source_crm", "target_crm", "source_instance", "target_instance",
+                      "object_name", "source_id", "target_id", "updated_at")
+        )
+        conn.execute(f"""
+            INSERT OR IGNORE INTO id_mappings
+                (source_crm, target_crm, source_instance, target_instance, object_name, source_id, target_id, updated_at)
+            SELECT {select_cols} FROM id_mappings_old
+        """)
+        conn.execute("DROP TABLE id_mappings_old")
+        conn.commit()
 
     @staticmethod
     def _normalize_id(raw_id: Any) -> str:
