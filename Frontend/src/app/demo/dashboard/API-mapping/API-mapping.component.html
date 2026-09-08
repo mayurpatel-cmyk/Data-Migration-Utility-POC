@@ -1388,15 +1388,49 @@
                     </div>
 
                     @if (isReferenceField(mapping.targetField)) {
-                    <div class="mt-1 d-flex align-items-center gap-1 animate__animated animate__fadeIn">
+                    <div class="mt-1 d-flex align-items-center gap-1 flex-wrap animate__animated animate__fadeIn">
                       <i class="feather icon-link text-warning"></i>
+
+                      @if (getReferenceParentCandidates(mapping).length > 1) {
+                      <div class="input-group input-group-sm shadow-sm" style="max-width: 180px;">
+                        <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis"
+                          style="font-size: 0.7rem;">Parent</span>
+                        <select class="form-select form-select-sm border-warning-subtle"
+                          [(ngModel)]="mapping.parentObjectName"
+                          (ngModelChange)="onParentObjectChange(mapping)">
+                          @for (candidate of getReferenceParentCandidates(mapping); track candidate) {
+                          <option [value]="candidate">{{ candidate }}</option>
+                          }
+                        </select>
+                      </div>
+                      }
+
                       <div class="input-group input-group-sm shadow-sm">
                         <span class="input-group-text bg-warning-subtle border-warning-subtle text-warning-emphasis"
-                          style="font-size: 0.7rem;">Parent Ext ID</span>
-                        <input type="text" class="form-control form-control-sm border-warning-subtle"
-                          [(ngModel)]="mapping.relationalExtIdField" placeholder="e.g., Id"
-                          (ngModelChange)="onRelationalExtIdFieldChange(mapping)">
+                          style="font-size: 0.7rem;"
+                          title="Which field on {{ getReferenceParentObjectName(mapping) }} to match against -- Account's own External ID, not this object's.">
+                          Match {{ getReferenceParentObjectName(mapping) }} By
+                        </span>
+                        <select class="form-select form-select-sm border-warning-subtle"
+                          [(ngModel)]="mapping.relationalExtIdField"
+                          (ngModelChange)="onRelationalExtIdFieldChange(mapping)"
+                          [disabled]="isLoadingParentFields">
+                          @for (f of getParentExternalIdOptions(mapping); track f.name) {
+                          <option [value]="f.name">{{ f.label }}</option>
+                          }
+                        </select>
                       </div>
+
+                      @if (isLoadingParentFields) {
+                      <small class="text-muted" style="font-size: 0.65rem;">
+                        <i class="feather icon-loader"></i> Loading {{ getReferenceParentObjectName(mapping) }} fields...
+                      </small>
+                      } @else if (getParentExternalIdFields(mapping).length === 0) {
+                      <small class="text-warning-emphasis" style="font-size: 0.65rem;">
+                        No External ID field found on {{ getReferenceParentObjectName(mapping) }} -- matching by Id
+                        requires {{ getReferenceParentObjectName(mapping) }} to already be migrated in the same run/session.
+                      </small>
+                      }
                     </div>
                     }
 

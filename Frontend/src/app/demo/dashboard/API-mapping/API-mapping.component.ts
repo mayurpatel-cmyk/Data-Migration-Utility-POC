@@ -168,6 +168,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   // Mapping Variables
   targetFields: FieldMeta[] = [];
+  parentFieldsCache: Record<string, FieldMeta[]> = {};
+  isLoadingParentFields = false;
   mappings: MappingRow[] = [];
   externalIdField = '';
   mappedCount = 0;
@@ -1386,8 +1388,11 @@ onReviewPanelDragEnd(): void {
 
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
+      const fieldMeta = this.targetFields.find((f) => f.name === fieldName);
+      mapping.parentObjectName = fieldMeta?.referenceTo?.[0];
     } else {
       mapping.relationalExtIdField = undefined;
+      mapping.parentObjectName = undefined;
     }
 
     this.updateMappedCount();
@@ -1498,12 +1503,115 @@ onReviewPanelDragEnd(): void {
     if (crm === 'zendesk') {
       return !!field.externalId;
     }
-    return field.name === 'Id' || !!field.externalId || !!field.idLookup;
+
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup || !!field.unique;
   }
 
   getExternalIdEligibleFields(): FieldMeta[] {
     if (!this.targetFields) return [];
     return this.targetFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
+  // ==========================================================
+  // PARENT OBJECT EXTERNAL-ID MATCHING (manual/no-database approach)
+  // ==========================================================
+  private getAllReferencedParentObjects(): string[] {
+    const names = new Set<string>();
+    (this.targetFields || []).forEach((f) => {
+      if (f.type === 'reference' || (f.referenceTo && f.referenceTo.length > 0)) {
+        (f.referenceTo || []).forEach((r) => { if (r) names.add(r); });
+      }
+    });
+    return Array.from(names);
+  }
+
+  private prefetchParentFieldMetadata(): void {
+    const parentObjects = this.getAllReferencedParentObjects();
+    this.parentFieldsCache = {};
+
+    if (parentObjects.length === 0) {
+      this.isLoadingParentFields = false;
+      return;
+    }
+
+    this.isLoadingParentFields = true;
+    const requests: Record<string, any> = {};
+    parentObjects.forEach((name) => {
+      requests[name] = this.mappingApi.getFields(this.targetCrmId, name, 'target');
+    });
+
+    forkJoin(requests)
+      .pipe(takeUntil(this.mappingCancel$))
+      .subscribe({
+        next: (results: any) => {
+          parentObjects.forEach((name) => {
+            this.parentFieldsCache[name] = results[name]?.fields || [];
+          });
+          this.isLoadingParentFields = false;
+          this.cdr.detectChanges();
+        },
+        error: (err) => {
+          console.error('Failed to load parent object metadata for External ID matching:', err);
+          this.isLoadingParentFields = false;
+          this.toastr.warning(
+            'Could not load field metadata for one or more referenced objects (e.g. Account) -- ' +
+            'the "Match By" list may be incomplete. Reference fields will default to matching by Id.',
+            'Reference Metadata Failed'
+          );
+          this.cdr.detectChanges();
+        }
+      });
+  }
+
+  /** All object types a given mapping row's reference field can point at (usually 1; more for polymorphic fields). */
+  getReferenceParentCandidates(mapping: MappingRow): string[] {
+    const fieldMeta = this.targetFields.find((f) => f.name === mapping.targetField);
+    return fieldMeta?.referenceTo || [];
+  }
+
+  /** The parent object currently in effect for this mapping row -- the user's explicit pick, or the field's first/only referenceTo. */
+  getReferenceParentObjectName(mapping: MappingRow): string | undefined {
+    const candidates = this.getReferenceParentCandidates(mapping);
+    return mapping.parentObjectName || candidates[0];
+  }
+
+  /** External-ID-eligible fields on the PARENT object, for the "Match By" dropdown. */
+  getParentExternalIdFields(mapping: MappingRow): FieldMeta[] {
+    const parentName = this.getReferenceParentObjectName(mapping);
+    if (!parentName) return [];
+    const parentFields = this.parentFieldsCache[parentName] || [];
+    return parentFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
+  getParentExternalIdOptions(mapping: MappingRow): FieldMeta[] {
+    const eligible = this.getParentExternalIdFields(mapping).map((f) => {
+
+      const isTrueExternalId = f.name === 'Id' || !!f.externalId || !!f.idLookup;
+      const tag = isTrueExternalId ? '' : ' -- Unique only, not flagged External ID';
+      return {
+        name: f.name,
+        label: `${f.label} (${f.name})${tag}`
+      };
+    });
+    const options: FieldMeta[] = [];
+
+    if (!eligible.some((f) => f.name.toLowerCase() === 'id')) {
+      options.push({ name: 'Id', label: 'Id (Record ID)' });
+    }
+    options.push(...eligible);
+
+    const current = mapping.relationalExtIdField;
+    if (current && !options.some((f) => f.name === current)) {
+      options.push({ name: current, label: `${current} (current selection)` });
+    }
+
+    return options;
+  }
+
+  onParentObjectChange(mapping: MappingRow): void {
+    mapping.relationalExtIdField = 'Id';
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
   }
 
   toggleSourceDropdown(event: Event) {
@@ -2109,6 +2217,7 @@ onReviewPanelDragEnd(): void {
           this.sourceFields = (sourceData.fields || []).filter(
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
+          this.prefetchParentFieldMetadata();
 
           this.previewHeaders = sourceData.headers || [];
           this.previewRecords = sourceData.sampleRecords || [];
@@ -2130,6 +2239,7 @@ onReviewPanelDragEnd(): void {
           this.reviewFilter = 'mapped';
           this.mappingSearchQuery = '';
 
+  
           this.externalIdField = '';
           this.jobStatus = 'Idle';
           this.validationResults = null;
