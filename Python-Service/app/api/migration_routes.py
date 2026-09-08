@@ -200,9 +200,12 @@ async def websocket_migration(websocket: WebSocket):
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
                     source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
 
+                source_instance = (source_creds or {}).get("instance_url") or (source_creds or {}).get("api_domain") or (source_creds or {}).get("subdomain")
+                target_instance = target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain")
 
                 await IdMappingService.remap_reference_fields(
-                    source_records, mappings, user_id, source_crm, target_crm, send_log
+                    source_records, mappings, user_id, source_crm, target_crm,
+                    source_instance=source_instance, target_instance=target_instance, send_log=send_log
                 )
 
                 options_base = {
@@ -264,6 +267,7 @@ async def websocket_migration(websocket: WebSocket):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
                     await dedupe_and_execute(p_load, op_mode, "Standard Sync")
 
+    
                 job_success_records = all_success_data[job_success_start_idx:]
                 job_id_map = {
                     (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
@@ -272,7 +276,8 @@ async def websocket_migration(websocket: WebSocket):
                 }
                 if job_id_map:
                     saved_count = IdMappingService.save_mappings(
-                        user_id, source_crm, target_crm, target_object, list(job_id_map.items())
+                        user_id, source_crm, target_crm, target_object, list(job_id_map.items()),
+                        source_instance=source_instance, target_instance=target_instance
                     )
                     await send_log(f"[{target_object}] Saved {saved_count} source->target Id mapping(s) for future reference lookups.")
 

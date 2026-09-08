@@ -25,20 +25,61 @@ in the map, and is left untouched rather than guessed at).
 One SQLite file per user (not per session/object like the validation
 staging DBs in migration_routes.py) so a mapping written by today's Contact
 run is still there next month when Account gets migrated.
+
+Known edge cases this module handles, and how:
+
+- Same CRM type, different physical org (a sandbox today, production next
+  month -- both report crm_type "salesforce"). `source_crm`/`target_crm`
+  alone can't tell those apart, so every read/write is also scoped by
+  `source_instance`/`target_instance` -- whatever per-connection identifier
+  the CRM exposes (Salesforce: instance_url; Zoho: api_domain; Zendesk:
+  subdomain). A mapping saved against one org is invisible to a run against
+  a different one, on purpose -- reusing it would mean sending an Id that
+  either doesn't exist in the new org, or (far less likely, but still
+  wrong) happens to collide with an unrelated record.
+
+- Salesforce's 15-char (case-sensitive) vs 18-char (case-insensitive,
+  checksum-suffixed) Id forms. SOQL extraction always returns 18-char, but
+  a value arriving from anywhere else might only have the 15-char form --
+  a strict string match would miss an otherwise-correct hit. Every key is
+  normalized to its first 15 characters before being stored or looked up
+  (Salesforce guarantees those 15 characters alone are already unique
+  within an org), so either form resolves to the same entry.
+
+- Polymorphic lookups (a field whose `referenceTo` lists more than one
+  object type, e.g. a "Related To" field that can point at either Contact
+  or Lead). Resolving against only `referenceTo[0]` for the whole batch
+  would silently miss every row that's actually the second type. Each row
+  is instead checked against every candidate parent's map in turn, so a
+  batch that mixes both types resolves correctly row by row.
+
+What this module deliberately does NOT handle (see migration_routes.py
+callers and the conversation history for the manual workarounds):
+  - Self-referencing lookups within the SAME batch (e.g. Account.ParentId
+    pointing at another Account in the same insert) -- the map for an
+    object is only written after that object's own job finishes, so a
+    sibling row in the same batch has no target Id yet. Needs a manual
+    two-pass run: insert without the self-ref field, then update with only
+    that field mapped.
+  - Staleness -- if a previously-migrated target record is later deleted
+    outside this tool, the saved mapping still points at it, and the next
+    run that depends on it will get a normal per-row "invalid reference"
+    error from the target CRM. Nothing here detects or prunes that
+    automatically.
 """
 import os
 import sqlite3
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 BASE_ID_MAP_DIR = os.path.join(os.getcwd(), "SureShift_id_maps")
+
+_SF_ID_KEY_LENGTH = 15
 
 
 class IdMappingService:
 
     @staticmethod
     def _db_path(user_id: str) -> str:
-        # user_id comes from Supabase auth (a UUID) but sanitize anyway
-        # before it touches a filesystem path.
         safe_user_id = "".join(c for c in (user_id or "") if c.isalnum() or c in ("-", "_")) or "unknown_user"
         os.makedirs(BASE_ID_MAP_DIR, exist_ok=True)
         return os.path.join(BASE_ID_MAP_DIR, f"{safe_user_id}.db")
@@ -48,16 +89,32 @@ class IdMappingService:
         conn = sqlite3.connect(IdMappingService._db_path(user_id))
         conn.execute("""
             CREATE TABLE IF NOT EXISTS id_mappings (
-                source_crm  TEXT NOT NULL,
-                target_crm  TEXT NOT NULL,
-                object_name TEXT NOT NULL,
-                source_id   TEXT NOT NULL,
-                target_id   TEXT NOT NULL,
-                updated_at  TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (source_crm, target_crm, object_name, source_id)
+                source_crm      TEXT NOT NULL,
+                target_crm      TEXT NOT NULL,
+                source_instance TEXT NOT NULL DEFAULT '',
+                target_instance TEXT NOT NULL DEFAULT '',
+                object_name     TEXT NOT NULL,
+                source_id       TEXT NOT NULL,
+                target_id       TEXT NOT NULL,
+                updated_at      TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (source_crm, target_crm, source_instance, target_instance, object_name, source_id)
             )
         """)
         return conn
+
+    @staticmethod
+    def _normalize_id(raw_id: Any) -> str:
+        """Truncates a Salesforce-length Id to its first 15 characters so the
+        case-sensitive 15-char form and the checksum-suffixed 18-char form
+        of the same record always land on the same key. No-ops (returns the
+        value unchanged, just stringified) for anything shorter -- every
+        other CRM's Ids compare in full."""
+        s = str(raw_id)
+        return s[:_SF_ID_KEY_LENGTH] if len(s) >= _SF_ID_KEY_LENGTH else s
+
+    @staticmethod
+    def _instance_key(instance: Optional[str]) -> str:
+        return (instance or "").strip().rstrip("/").lower()
 
     @staticmethod
     def save_mappings(
@@ -65,15 +122,30 @@ class IdMappingService:
         source_crm: str,
         target_crm: str,
         object_name: str,
-        pairs: List[Tuple[str, str]]
+        pairs: List[Tuple[str, str]],
+        source_instance: Optional[str] = None,
+        target_instance: Optional[str] = None,
     ) -> int:
         """
         Upserts (source_id -> target_id) pairs for one object migrated
-        between one specific source/target CRM pair. ON CONFLICT ... DO
-        UPDATE (last-write-wins) rather than erroring, so re-running an
-        object's migration (e.g. after fixing validation errors, or a
+        between one specific source/target CRM+instance pair. ON CONFLICT
+        ... DO UPDATE (last-write-wins) rather than erroring, so re-running
+        an object's migration (e.g. after fixing validation errors, or a
         second incremental sync) keeps the map current instead of failing
         on the duplicate primary key.
+
+        `source_instance`/`target_instance` should be whatever
+        per-connection identifier the CRM exposes (Salesforce: instance_url;
+        Zoho: api_domain; Zendesk: subdomain) -- this is what keeps a
+        sandbox run and a production run from colliding under the same
+        generic `crm_type` string. Omitting them is supported (defaults to
+        ''), but means every connection of that CRM type for this user
+        shares one map -- fine for a single-org setup, risky the moment a
+        second org of the same CRM type enters the picture.
+
+        Ids are normalized (see _normalize_id) before storage so a 15-char
+        and an 18-char Salesforce Id for the same record land on the same
+        key regardless of which form either run happened to produce.
 
         Returns the number of pairs actually written -- rows with a
         missing/empty source_id or target_id are silently dropped and not
@@ -82,21 +154,29 @@ class IdMappingService:
         field_access_utils.py).
         """
         clean_pairs = [
-            (str(sid), str(tid)) for sid, tid in pairs if sid not in (None, "") and tid not in (None, "")
+            (IdMappingService._normalize_id(sid), IdMappingService._normalize_id(tid))
+            for sid, tid in pairs if sid not in (None, "") and tid not in (None, "")
         ]
         if not clean_pairs:
             return 0
+
+        src_inst = IdMappingService._instance_key(source_instance)
+        tgt_inst = IdMappingService._instance_key(target_instance)
 
         conn = IdMappingService._connect(user_id)
         try:
             conn.executemany(
                 """
-                INSERT INTO id_mappings (source_crm, target_crm, object_name, source_id, target_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(source_crm, target_crm, object_name, source_id)
+                INSERT INTO id_mappings
+                    (source_crm, target_crm, source_instance, target_instance, object_name, source_id, target_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(source_crm, target_crm, source_instance, target_instance, object_name, source_id)
                 DO UPDATE SET target_id = excluded.target_id, updated_at = excluded.updated_at
                 """,
-                [(source_crm.lower(), target_crm.lower(), object_name, sid, tid) for sid, tid in clean_pairs]
+                [
+                    (source_crm.lower(), target_crm.lower(), src_inst, tgt_inst, object_name, sid, tid)
+                    for sid, tid in clean_pairs
+                ]
             )
             conn.commit()
             return len(clean_pairs)
@@ -104,18 +184,39 @@ class IdMappingService:
             conn.close()
 
     @staticmethod
-    def get_mapping(user_id: str, source_crm: str, target_crm: str, object_name: str) -> Dict[str, str]:
+    def get_mapping(
+        user_id: str,
+        source_crm: str,
+        target_crm: str,
+        object_name: str,
+        source_instance: Optional[str] = None,
+        target_instance: Optional[str] = None,
+    ) -> Dict[str, str]:
         """
-        Returns {source_id: target_id} for every pair migrated so far for
-        this object between this specific CRM pair. Loaded in one shot
-        rather than per-lookup -- a single migration batch typically needs
-        to resolve hundreds/thousands of reference values at once.
+        Returns {normalized_source_id: target_id} for every pair migrated so
+        far for this object, between this specific CRM+instance pair.
+        Loaded in one shot rather than per-lookup -- a single migration
+        batch typically needs to resolve hundreds/thousands of reference
+        values at once. Keys are normalized the same way save_mappings()
+        stored them, so callers should normalize any value they look up
+        with _normalize_id() too (remap_reference_fields() below does this
+        automatically).
         """
         conn = IdMappingService._connect(user_id)
         try:
             cursor = conn.execute(
-                "SELECT source_id, target_id FROM id_mappings WHERE source_crm = ? AND target_crm = ? AND object_name = ?",
-                (source_crm.lower(), target_crm.lower(), object_name)
+                """
+                SELECT source_id, target_id FROM id_mappings
+                WHERE source_crm = ? AND target_crm = ?
+                  AND source_instance = ? AND target_instance = ?
+                  AND object_name = ?
+                """,
+                (
+                    source_crm.lower(), target_crm.lower(),
+                    IdMappingService._instance_key(source_instance),
+                    IdMappingService._instance_key(target_instance),
+                    object_name,
+                )
             )
             return {row[0]: row[1] for row in cursor.fetchall()}
         finally:
@@ -128,6 +229,8 @@ class IdMappingService:
         user_id: str,
         source_crm: str,
         target_crm: str,
+        source_instance: Optional[str] = None,
+        target_instance: Optional[str] = None,
         send_log=None
     ) -> None:
         """
@@ -139,7 +242,7 @@ class IdMappingService:
         user hasn't explicitly configured an external-id for), replace
         that raw SOURCE org Id with whatever this SQLite map has on file
         as the corresponding TARGET org Id -- keyed off whichever parent
-        object the field's `referenceTo`/`parentObjectName` points at.
+        object(s) the field's `referenceTo`/`parentObjectName` points at.
 
         A source value with no entry in the map (parent record was never
         migrated through this tool, or hasn't been yet) is left completely
@@ -153,17 +256,27 @@ class IdMappingService:
 
         Fully dynamic: this makes no assumption about which two objects are
         involved or how many hops apart they are. Every reference-type
-        mapping is resolved independently against whatever parent object
+        mapping is resolved independently against whatever parent object(s)
         its own `referenceTo` metadata names, so Opportunity->Account,
         Opportunity->Contact, Contact->Account, or a five-object chain all
         go through the exact same per-mapping loop below. If ONE relation
         in that chain resolves and another doesn't, the difference is data
-        (was that parent actually migrated? under the same CRM pair? does
-        this specific field's metadata actually carry a referenceTo?), not
-        the mechanism -- which is exactly what the per-mapping diagnostics
-        below are for: they log each field independently so a "works for
-        Account, not for Contact" report tells you WHICH of those questions
-        to check, instead of just a single opaque total count.
+        (was that parent actually migrated? under the same CRM+instance
+        pair? does this specific field's metadata actually carry a
+        referenceTo?), not the mechanism -- which is exactly what the
+        per-mapping diagnostics below are for: they log each field
+        independently so a "works for Account, not for Contact" report
+        tells you WHICH of those questions to check, instead of just a
+        single opaque total count.
+
+        Polymorphic fields (referenceTo names MORE than one object type,
+        e.g. a "Related To" field that can point at either Contact or
+        Lead) are handled per ROW, not per field: since different rows in
+        the same batch can legitimately reference different object types,
+        each row's value is checked against every candidate parent's map
+        in turn, and the first match wins. Resolving only against
+        referenceTo[0] for the whole batch -- the previous behavior --
+        would silently miss every row that's actually the second type.
         """
         reference_mappings = [
             m for m in mappings
@@ -172,29 +285,32 @@ class IdMappingService:
         if not reference_mappings:
             return
 
-        # Cache one get_mapping() call per distinct parent object referenced
-        # in this job, however many reference fields point at it.
+        def _candidate_parents(m: dict) -> List[str]:
+            explicit = m.get("parentObjectName")
+            ref_to = list(m.get("referenceTo") or [])
+            if explicit and explicit not in ref_to:
+                ref_to = [explicit] + ref_to
+            elif explicit:
+                ref_to = [explicit] + [p for p in ref_to if p != explicit]
+            return ref_to
+
+
         maps_by_parent: Dict[str, Dict[str, str]] = {}
-
-        def _resolve_parent(m: dict) -> Any:
-            return m.get("parentObjectName") or next(iter(m.get("referenceTo") or []), None)
-
         for m in reference_mappings:
-            parent = _resolve_parent(m)
-            if not parent or parent in maps_by_parent:
-                continue
-            maps_by_parent[parent] = IdMappingService.get_mapping(user_id, source_crm, target_crm, parent)
+            for parent in _candidate_parents(m):
+                if parent in maps_by_parent:
+                    continue
+                maps_by_parent[parent] = IdMappingService.get_mapping(
+                    user_id, source_crm, target_crm, parent, source_instance, target_instance
+                )
 
         remapped_count = 0
         for m in reference_mappings:
             field_label = m.get("targetField") or m.get("sfField") or "(unnamed field)"
             source_field = m.get("sourceField") or m.get("csvField")
-            parent = _resolve_parent(m)
+            candidates = _candidate_parents(m)
 
-            # --- Diagnostics: report exactly why THIS field is/isn't resolving,
-            # instead of only a batch-wide total. Each branch below is a
-            # distinct, checkable root cause. ---
-            if not parent:
+            if not candidates:
                 if send_log:
                     await send_log(
                         f"[Reference Remap] SKIPPED '{field_label}': no parent object name found "
@@ -207,45 +323,54 @@ class IdMappingService:
 
             if not source_field:
                 if send_log:
-                    await send_log(f"[Reference Remap] SKIPPED '{field_label}' (parent: {parent}): mapping has no sourceField set.")
+                    await send_log(f"[Reference Remap] SKIPPED '{field_label}' (candidates: {candidates}): mapping has no sourceField set.")
                 continue
 
-            id_map = maps_by_parent.get(parent) or {}
-            if not id_map:
+            candidate_maps = [(p, maps_by_parent.get(p) or {}) for p in candidates]
+            if not any(cm for _, cm in candidate_maps):
                 if send_log:
                     await send_log(
-                        f"[Reference Remap] SKIPPED '{field_label}': no saved Id map found for parent "
-                        f"'{parent}' under {source_crm}->{target_crm}. Either '{parent}' hasn't been "
-                        f"migrated through this tool yet for this CRM pair, or it was migrated under a "
-                        f"different source/target connection than this run is using."
+                        f"[Reference Remap] SKIPPED '{field_label}': no saved Id map found for any of "
+                        f"{candidates} under {source_crm}->{target_crm} (instance {target_instance or 'default'}). "
+                        f"Either none of these have been migrated through this tool yet for this CRM+org pair, "
+                        f"or they were migrated under a different source/target connection than this run is using."
                     )
                 continue
 
             field_remapped = 0
             field_seen = 0
+            per_parent_hits = {p: 0 for p, _ in candidate_maps}
             sample_unmatched = None
             for row in source_records:
                 old_val = row.get(source_field)
                 if old_val is None:
                     continue
                 field_seen += 1
-                key = str(old_val)
-                if key in id_map:
-                    row[source_field] = id_map[key]
-                    field_remapped += 1
-                elif sample_unmatched is None:
-                    sample_unmatched = key
+                key = IdMappingService._normalize_id(old_val)
+        
+                for parent, id_map in candidate_maps:
+                    if key in id_map:
+                        row[source_field] = id_map[key]
+                        field_remapped += 1
+                        per_parent_hits[parent] += 1
+                        break
+                else:
+                    if sample_unmatched is None:
+                        sample_unmatched = key
 
             remapped_count += field_remapped
             if send_log:
-                if field_remapped == field_seen and field_seen > 0:
-                    await send_log(f"[Reference Remap] '{field_label}' (parent: {parent}): {field_remapped}/{field_seen} resolved.")
+                if len(candidates) > 1:
+                    breakdown = ", ".join(f"{p}: {n}" for p, n in per_parent_hits.items())
+                    await send_log(f"[Reference Remap] '{field_label}' (polymorphic, candidates: {candidates}): {field_remapped}/{field_seen} resolved [{breakdown}].")
+                elif field_remapped == field_seen and field_seen > 0:
+                    await send_log(f"[Reference Remap] '{field_label}' (parent: {candidates[0]}): {field_remapped}/{field_seen} resolved.")
                 elif field_seen > 0:
                     await send_log(
-                        f"[Reference Remap] '{field_label}' (parent: {parent}): only {field_remapped}/{field_seen} resolved -- "
-                        f"{field_seen - field_remapped} source value(s) had no match in the saved '{parent}' map "
-                        f"(e.g. '{sample_unmatched}'). Those records point at '{parent}' rows that either "
-                        f"weren't part of that object's migration batch, or weren't migrated through this tool at all."
+                        f"[Reference Remap] '{field_label}' (parent: {candidates[0]}): only {field_remapped}/{field_seen} resolved -- "
+                        f"{field_seen - field_remapped} source value(s) had no match in the saved map(s) for {candidates} "
+                        f"(e.g. '{sample_unmatched}'). Those records point at rows that either weren't part of that "
+                        f"object's migration batch, or weren't migrated through this tool at all."
                     )
 
         if send_log and remapped_count == 0 and reference_mappings:
