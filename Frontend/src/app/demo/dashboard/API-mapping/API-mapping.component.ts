@@ -71,7 +71,6 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private http = inject(HttpClient);
 
   private mappingCancel$ = new Subject<void>();
-  private lastLoadedTargetObject: string | null = null;
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -2096,9 +2095,6 @@ onReviewPanelDragEnd(): void {
     }
     this.cancelPendingMappingWork();
 
-    const targetObjectChanged = this.lastLoadedTargetObject !== this.selectedTargetObject;
-    this.lastLoadedTargetObject = this.selectedTargetObject;
-
     this.isLoading = true;
     this.cdr.detectChanges();
 
@@ -2134,10 +2130,15 @@ onReviewPanelDragEnd(): void {
           this.reviewFilter = 'mapped';
           this.mappingSearchQuery = '';
 
-          if (targetObjectChanged) {
-            this.externalIdField = '';
-            this.validationResults = null;
-          }
+          this.externalIdField = '';
+          this.jobStatus = 'Idle';
+          this.validationResults = null;
+          this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+          this.currentSessionId = '';
+          this.successData = [];
+          this.errorData = [];
+          this.skippedData = [];
+          this.isValidating = false;
 
           this.updateMappedCount();
           this.isLoading = false;
@@ -2450,15 +2451,18 @@ onReviewPanelDragEnd(): void {
     });
   }
 
-  private readonly VALIDATION_TERMINAL_STATUSES = new Set(['Validation Passed', 'Validation Warning', 'Validation Failed']);
+  private readonly VALIDATION_LIVE_STATUSES = new Set(['Idle', 'Connecting...', 'Re-validating...', 'Initializing...']);
 
   private invalidateValidationOnMappingChange(): void {
-    if (!this.VALIDATION_TERMINAL_STATUSES.has(this.jobStatus)) return;
+    if (this.isValidating || this.VALIDATION_LIVE_STATUSES.has(this.jobStatus)) return;
 
     this.jobStatus = 'Idle';
     this.validationResults = null;
     this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
     this.currentSessionId = '';
+    this.successData = [];
+    this.errorData = [];
+    this.skippedData = [];
 
     this.toastr.info(
       'Your mapping changed since the last validation run -- validate again before running the migration.',
