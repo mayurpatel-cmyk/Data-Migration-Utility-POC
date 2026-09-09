@@ -28,8 +28,11 @@ npm install
 
 2. PYTHON
 cd Python_service
-pip install -r requirements.txt (Linux)
-py -m pip install -r requirements.txt (Windows)
+pip install -U -r requirements.txt (Linux)
+pip install -U -r requirements.txt (Windows)
+
+pip install -U -r requirements.txt
+pip freeze > requirements.lock.txt
 
 ## Running the Application
 1. FRONTEND: ng serve

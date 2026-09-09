@@ -140,8 +140,6 @@ def _parse_date_range(
         )
 
     if start_raw and not end_raw:
-        # Open-ended: "From X" means "from X through today" in the caller's
-        # own local day, not the server's.
         local_now = datetime.utcnow() + timedelta(minutes=offset_minutes)
         end_raw = local_now.strftime(_DATE_FMT)
 

@@ -61,7 +61,8 @@ def get_salesforce_url(side: str, environment: str = "production", current_user 
         "scope": "api refresh_token offline_access",
         "state": encoded_state,
         "code_challenge": code_challenge,
-        "code_challenge_method": "S256"
+        "code_challenge_method": "S256",
+        "prompt": "login consent"
     }
     
     # &prompt=login forces Salesforce account chooser

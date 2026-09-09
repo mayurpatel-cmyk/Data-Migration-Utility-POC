@@ -141,9 +141,9 @@ class IdMappingService:
         cols = conn.execute("PRAGMA table_info(id_mappings)").fetchall()
         existing_cols = {row[1] for row in cols}
         if {"source_instance", "target_instance"} <= existing_cols:
-            return  # already current -- nothing to migrate
+            return  
 
-        old_cols = [row[1] for row in cols]  # preserve actual on-disk column order
+        old_cols = [row[1] for row in cols]  
         conn.execute("ALTER TABLE id_mappings RENAME TO id_mappings_old")
         conn.execute("""
             CREATE TABLE id_mappings (

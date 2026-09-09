@@ -308,6 +308,10 @@ isProfileDropdownOpen = false;
   resumeSession(sessionId: string, crm: string, object: string) {
     this.currentSessionId = sessionId;
     this.sourceCrmId = crm.toLowerCase();
+
+    if (this.selectedSourceObject !== object.toLowerCase()) {
+      this.resetMigrationTimeFilter();
+    }
     this.selectedSourceObject = object.toLowerCase();
 
     this.toastr.info(`Restoring previous session...`, 'Resuming');
@@ -1099,9 +1103,6 @@ toggleProfileDropdown(event: Event): void {
         'Mappings Cleared'
       );
     } else {
-      // Dismissed by clicking outside the popup, Esc, or the close button --
-      // the user never made a choice, so treat it as "never mind": revert the
-      // mode picker back to where it was and leave every mapping untouched.
       this.operationMode = previousMode;
       this.toastr.info(
         `Mode change cancelled -- staying on ${previousLabel} mode. Your mappings are unchanged.`,
@@ -1278,13 +1279,6 @@ onReviewPanelDragEnd(): void {
     return false;
   }
 
-  /**
-   * Generalized lookup/relationship-field detector that works for BOTH
-   * the source side and the target side (unlike isReferenceField, which
-   * only ever looks at targetFields). Used purely for UI highlighting so
-   * users can spot lookup fields at a glance in the mapping grid and the
-   * review panel.
-   */
   isLookupFieldMeta(field: FieldMeta | undefined | null): boolean {
     if (!field) return false;
 
@@ -1633,6 +1627,10 @@ onReviewPanelDragEnd(): void {
   }
 
   selectSourceEntity(entityName: string) {
+    if (this.selectedSourceObject !== entityName) {
+      this.resetMigrationTimeFilter();
+    }
+
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
@@ -1643,9 +1641,24 @@ onReviewPanelDragEnd(): void {
   }
 
   selectTargetObject(objName: string) {
+    if (this.selectedTargetObject !== objName) {
+      this.resetMigrationTimeFilter();
+    }
+
     this.selectedTargetObject = objName;
     this.isTargetDropdownOpen = false;
     this.loadMetadata();
+  }
+
+  private resetMigrationTimeFilter(): void {
+    this.migrationTimeFilter.startDate = '';
+    this.migrationTimeFilter.endDate = '';
+    this.migrationTimeFilter.field = this.timeFilterFieldOptions[0]?.value || '';
+    this.activeQuickRangePreset = null;
+    this.dateRangeError = null;
+    this.isMigrationFilterOpen = false;
+    this.previewRecords = [];
+    this.selectedSourceObjectCount = null;
   }
 
   private rankEntityMatches(entities: any[], query: string): any[] {

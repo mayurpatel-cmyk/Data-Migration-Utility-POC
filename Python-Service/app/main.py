@@ -1,16 +1,23 @@
 import asyncio
 import sys
 import ssl
+import os
 
 # =========================================================
-# GLOBAL SSL BYPASS (For Local Development Behind Proxies/VPNs)
+# SSL VERIFICATION (opt-in bypass only, never default)
 # =========================================================
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
+if os.getenv("DISABLE_SSL_VERIFY", "false").lower() in ("true", "1", "yes"):
+    if os.getenv("ENVIRONMENT", "development").lower() not in ("local", "development", "dev"):
+        raise RuntimeError(
+            "DISABLE_SSL_VERIFY is set but ENVIRONMENT is not local/development. "
+            "Refusing to disable TLS verification outside local dev."
+        )
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except AttributeError:
+        pass
 
-if sys.platform == 'win32':
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI
@@ -20,32 +27,39 @@ from app.api.migration_routes import router as migration_router
 from app.api.auth_routes import router as auth_router
 from app.api.crm_routes import router as crm_router
 from app.api.metadata_routes import router as metadata_router
-from app.api.migration_history import router as migration_history 
+from app.api.migration_history import router as migration_history
 
 app = FastAPI(title="Migration Engine")
 
 # =========================================================
-# CONFIGURE CORS MIDDLEWARE 
+# CORS
 # =========================================================
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:4200").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"], 
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"], 
-    allow_headers=["*"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Register our API routes
-app.include_router(metadata_router) 
+app.include_router(metadata_router)
 app.include_router(migration_router)
 app.include_router(migration_history)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
 app.include_router(validation_router)
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
 
 if __name__ == "__main__":
     import uvicorn
@@ -53,7 +67,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
-        ws_max_size=64 * 1024 * 1024,  # 64MB, up from the 16MB default -- large CSV migrate payloads over /ws/migrate need this
+        port=int(os.getenv("PORT", 8000)),
+        reload=os.getenv("ENVIRONMENT", "development").lower() in ("local", "development", "dev"),
+        ws_max_size=64 * 1024 * 1024,  # 64MB, up from 16MB default — large CSV migrate payloads over /ws/migrate need this
     )
