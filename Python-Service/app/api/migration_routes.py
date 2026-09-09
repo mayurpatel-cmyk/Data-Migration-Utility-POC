@@ -32,6 +32,8 @@ from fastapi.responses import StreamingResponse
 
 import re
 
+from app.services.staging_cleanup_service import cleanup_stale_staging_databases, DEFAULT_MAX_AGE_HOURS
+
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
 
@@ -682,3 +684,13 @@ async def get_crm_object_count(
             count = await _fetch(new_token)
             return {"count": count}
         raise e
+
+
+@router.post("/api/admin/staging/cleanup")
+async def trigger_staging_cleanup(
+    max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+    current_user = Depends(get_current_user)
+):
+    if max_age_hours <= 0:
+        raise HTTPException(status_code=400, detail="max_age_hours must be positive.")
+    return cleanup_stale_staging_databases(max_age_hours=max_age_hours)

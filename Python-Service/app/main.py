@@ -2,6 +2,7 @@ import asyncio
 import sys
 import ssl
 import os
+from contextlib import asynccontextmanager
 
 # =========================================================
 # SSL VERIFICATION (opt-in bypass only, never default)
@@ -28,8 +29,24 @@ from app.api.auth_routes import router as auth_router
 from app.api.crm_routes import router as crm_router
 from app.api.metadata_routes import router as metadata_router
 from app.api.migration_history import router as migration_history
+from app.services.staging_cleanup_service import run_staging_cleanup_loop
 
-app = FastAPI(title="Migration Engine")
+
+# =========================================================
+# LIFESPAN (background staging-DB cleanup)
+# =========================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cleanup_task = asyncio.create_task(run_staging_cleanup_loop())
+    yield
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="Migration Engine", lifespan=lifespan)
 
 # =========================================================
 # CORS
