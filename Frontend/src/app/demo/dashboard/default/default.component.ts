@@ -28,6 +28,8 @@ interface MappingMeta {
   isParentDropdownOpen?: boolean;
   parentSearchQuery?: string;
 
+  isActive?: boolean;
+
   _isAiProcessing?: boolean;
   _mappedBy?: 'rule' | 'ai';
 }
@@ -528,7 +530,8 @@ export class DefaultComponent implements OnInit {
       this.mappings = this.csvHeaders.map((header) => ({
         csvField: header,
         sfField: '',
-        relationalExtIdField: ''
+        relationalExtIdField: '',
+        isActive: true
       }));
     }
   }
@@ -539,7 +542,8 @@ export class DefaultComponent implements OnInit {
       this.mappings = this.csvHeaders.map((header) => ({
         csvField: header,
         sfField: '',
-        relationalExtIdField: ''
+        relationalExtIdField: '',
+        isActive: true
       }));
       this.showPreview = false;
       this.cdr.detectChanges();
@@ -770,7 +774,7 @@ export class DefaultComponent implements OnInit {
       };
 
       this.mappings.forEach((mapping) => {
-        if (!mapping.sfField) {
+        if (mapping.isActive !== false && !mapping.sfField) {
           const rawCsv = mapping.csvField;
           const normalCsv = normalizeString(rawCsv);
 
@@ -823,7 +827,7 @@ export class DefaultComponent implements OnInit {
       // =========================================================
       // PHASE 2: AI SEMANTIC MATCHING FOR WHATEVER RULES MISSED
       // =========================================================
-      const unmappedRows = this.mappings.filter((m) => !m.sfField);
+      const unmappedRows = this.mappings.filter((m) => m.isActive !== false && !m.sfField);
 
       if (unmappedRows.length === 0) {
         this.finishAutoMap(ruleMatchCount, 0);
@@ -918,6 +922,20 @@ export class DefaultComponent implements OnInit {
   }
 
   clearMapping(mapping: MappingMeta) {
+    mapping.sfField = '';
+    mapping._mappedBy = undefined;
+    mapping.parentObjectName = undefined;
+    mapping.relationalExtIdField = '';
+    mapping.isDropdownOpen = false;
+    this.mappings = [...this.mappings];
+    this.cdr.detectChanges();
+  }
+
+  // Cancel: remove this field from mapping entirely (mirrors the API mapping screen's removeMapping action).
+  // CSV columns can't be deleted from the grid, so "removing" a mapping here means marking it ignored so it's
+  // excluded from the migration and skipped by Auto-Map, the same as the "-- Ignore this column --" option.
+  removeMapping(mapping: MappingMeta) {
+    mapping.isActive = false;
     mapping.sfField = '';
     mapping._mappedBy = undefined;
     mapping.parentObjectName = undefined;
@@ -1137,7 +1155,7 @@ export class DefaultComponent implements OnInit {
     this.toastr.success(`${this.selectedObject} mapping saved to queue!`, 'Added to Queue');
     this.selectedObject = '';
     this.sfFields = [];
-    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '' }));
+    this.mappings = this.csvHeaders.map((header) => ({ csvField: header, sfField: '', relationalExtIdField: '', isActive: true }));
     this.confirmedMappings = [];
     this.targetExtIdField = '';
     this.operationMode = 'insert';

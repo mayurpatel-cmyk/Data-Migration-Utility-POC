@@ -5,26 +5,41 @@ from app.utils.constants import is_valid_email
 
 class SalesforceValidator:
     def __init__(self):
-        self.SF_COUNTRY_MAP, self.SF_STATE_MAP = self._build_iso_maps()
+        (
+            self.SF_COUNTRY_MAP,
+            self.SF_COUNTRY_NAME_MAP,
+            self.SF_STATE_MAP,
+            self.SF_STATE_NAME_MAP,
+        ) = self._build_iso_maps()
 
     def _build_iso_maps(self):
         c_map = {}
+        c_name_map = {}
         for c in pycountry.countries:
             c_map[c.name.lower()] = c.alpha_2
+            c_map[c.alpha_2.lower()] = c.alpha_2
+            c_name_map[c.alpha_2] = c.name
             if hasattr(c, 'official_name') and c.official_name:
                 c_map[c.official_name.lower()] = c.alpha_2
-        
+
         c_map.update({
-            'usa': 'US', 'uk': 'GB', 'uae': 'AE', 
-            'united states of america': 'US', 'great britain': 'GB',
-            'south korea': 'KR', 'north korea': 'KP', 'russia': 'RU'
+            'usa': 'US', 'uk': 'GB', 'uae': 'AE', 'u.s.a': 'US',
+            'united states': 'US', 'united states of america': 'US',
+            'great britain': 'GB', 'south korea': 'KR', 'north korea': 'KP',
+            'russia': 'RU', 'can': 'CA',
         })
+        c_name_map.setdefault('US', 'United States')
+        c_name_map.setdefault('GB', 'United Kingdom')
 
         s_map = {}
+        s_name_map = {}
         for s in pycountry.subdivisions:
-            s_map[s.name.lower()] = s.code.split('-')[-1]
-            
-        return c_map, s_map
+            code = s.code.split('-')[-1]
+            s_map[s.name.lower()] = code
+            s_map[code.lower()] = code
+            s_name_map[code] = s.name
+
+        return c_map, c_name_map, s_map, s_name_map
 
     def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "") -> dict:
         sf_rules = target_rules
@@ -101,11 +116,30 @@ class SalesforceValidator:
                 
                 if not raw_len: max_len = 32768 if sf_type == 'textarea' else 255
                 else: max_len = int(float(raw_len)) 
-                
-                if 'country' in sf_field.lower():
-                    df[csv_col] = df[csv_col].astype(str).str.lower().map(self.SF_COUNTRY_MAP).fillna(df[csv_col])
-                elif ('state' in sf_field.lower() or 'province' in sf_field.lower()):
-                    df[csv_col] = df[csv_col].astype(str).str.lower().map(self.SF_STATE_MAP).fillna(df[csv_col])
+
+                field_lower = sf_field.lower()
+                is_country_code_field = field_lower.endswith('countrycode')
+                is_state_code_field = field_lower.endswith('statecode') or field_lower.endswith('provincecode')
+                is_country_label_field = 'country' in field_lower and not is_country_code_field
+                is_state_label_field = ('state' in field_lower or 'province' in field_lower) and not is_state_code_field
+
+                if is_country_code_field:
+                    mapped = df[csv_col].astype(str).str.strip().str.lower().map(self.SF_COUNTRY_MAP)
+                    df[csv_col] = mapped.fillna(df[csv_col])
+                elif is_country_label_field:
+   
+                    lower_vals = df[csv_col].astype(str).str.strip().str.lower()
+                    mapped_code = lower_vals.map(self.SF_COUNTRY_MAP)
+                    canonical_name = mapped_code.map(self.SF_COUNTRY_NAME_MAP)
+                    df[csv_col] = canonical_name.fillna(df[csv_col])
+                elif is_state_code_field:
+                    mapped = df[csv_col].astype(str).str.strip().str.lower().map(self.SF_STATE_MAP)
+                    df[csv_col] = mapped.fillna(df[csv_col])
+                elif is_state_label_field:
+                    lower_vals = df[csv_col].astype(str).str.strip().str.lower()
+                    mapped_code = lower_vals.map(self.SF_STATE_MAP)
+                    canonical_name = mapped_code.map(self.SF_STATE_NAME_MAP)
+                    df[csv_col] = canonical_name.fillna(df[csv_col])
                     
                 str_lengths = df[csv_col].astype(str).str.len()
                 is_too_long = (str_lengths > max_len) & ~is_empty
