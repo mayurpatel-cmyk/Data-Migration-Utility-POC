@@ -1,0 +1,44 @@
+# Stage 1: Build Angular
+FROM node:20-alpine AS build
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --legacy-peer-deps
+COPY . .
+RUN npm run build -- --configuration=production
+
+# Stage 2: Serve with NGINX
+FROM nginx:1.27-alpine
+
+RUN apk add --no-cache curl \
+    && rm -f /etc/nginx/conf.d/default.conf
+
+# Handles both legacy (dist/<project>/) and Angular 17+ application builder
+# (dist/<project>/browser/) output layouts without hardcoding a project name.
+COPY --from=build /app/dist /tmp/dist
+RUN set -e; \
+    if [ -d /tmp/dist ]; then \
+        SRC=$(find /tmp/dist -maxdepth 2 -type d -name browser | head -n1); \
+        if [ -z "$SRC" ]; then \
+            SRC=$(find /tmp/dist -maxdepth 1 -mindepth 1 -type d | head -n1); \
+        fi; \
+        cp -r "$SRC"/. /usr/share/nginx/html/; \
+    fi; \
+    rm -rf /tmp/dist
+
+COPY nginx/templates /etc/nginx/templates
+
+# Overridden at deploy time (Container Apps env vars) to point at the
+# backend's internal FQDN; safe localhost defaults for local docker-compose.
+ENV BACKEND_HOST=python-engine
+ENV BACKEND_PORT=8000
+
+RUN addgroup -g 101 -S nginx-app 2>/dev/null || true; \
+    chown -R nginx:nginx /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+    CMD curl -fsS http://localhost/health || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

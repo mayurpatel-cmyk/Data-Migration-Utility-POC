@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "acrName": {
+      "value": "<globally-unique-acr-name>"
+    },
+    "storageAccountName": {
+      "value": "<globally-unique-storage-name>"
+    },
+    "corsAllowedOrigins": {
+      "value": "https://placeholder.azurecontainerapps.io"
+    },
+    "frontendImage": {
+      "value": "<acrLoginServer>/angular-frontend:latest"
+    },
+    "backendImage": {
+      "value": "<acrLoginServer>/python-engine:latest"
+    }
+  }
+}

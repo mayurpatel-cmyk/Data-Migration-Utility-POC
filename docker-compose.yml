@@ -1,10 +1,17 @@
+# Local dev / parity testing only. Azure runtime is Azure Container Apps
+# (see infra/main.bicep) — Compose files are not executed directly on Azure;
+# ACR only stores the images built from this file's `build:` blocks.
 services:
   angular-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+    image: ${ACR_LOGIN_SERVER:-local}/angular-frontend:${IMAGE_TAG:-latest}
     ports:
       - "80:80"
+    environment:
+      - BACKEND_HOST=python-engine
+      - BACKEND_PORT=8000
     networks:
       - migration-net
     depends_on:
@@ -14,13 +21,14 @@ services:
 
   python-engine:
     build: ./backend-python
+    image: ${ACR_LOGIN_SERVER:-local}/python-engine:${IMAGE_TAG:-latest}
     ports:
       - "8000:8000"
     environment:
       - FASTAPI_ENV=production
       - OLLAMA_BASE_URL=http://ollama:11434/api
       - EMBEDDING_MODEL=mxbai-embed-large
-      - CORS_ALLOWED_ORIGINS=http://localhost,http://localhost:4200
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost,http://localhost:4200}
     networks:
       - migration-net
     depends_on:
