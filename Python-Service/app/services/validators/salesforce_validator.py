@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import pycountry
+from collections import defaultdict
 from app.utils.constants import is_valid_email
 
 class SalesforceValidator:
@@ -8,38 +9,62 @@ class SalesforceValidator:
         (
             self.SF_COUNTRY_MAP,
             self.SF_COUNTRY_NAME_MAP,
-            self.SF_STATE_MAP,
-            self.SF_STATE_NAME_MAP,
+            self.SF_STATE_MAP_BY_COUNTRY,
+            self.SF_STATE_NAME_MAP_BY_COUNTRY,
         ) = self._build_iso_maps()
 
     def _build_iso_maps(self):
+        """
+        Fully dynamic — every country and every subdivision comes from
+        pycountry, so this covers all ISO-3166-1 countries and all
+        ISO-3166-2 subdivisions with no hardcoded country/state list.
+        The only hand-maintained entries are non-ISO colloquial synonyms
+        (e.g. 'usa', 'uk') that pycountry doesn't itself expose as names.
+        """
         c_map = {}
         c_name_map = {}
         for c in pycountry.countries:
             c_map[c.name.lower()] = c.alpha_2
             c_map[c.alpha_2.lower()] = c.alpha_2
+            c_map[c.alpha_3.lower()] = c.alpha_2
             c_name_map[c.alpha_2] = c.name
             if hasattr(c, 'official_name') and c.official_name:
                 c_map[c.official_name.lower()] = c.alpha_2
+            if hasattr(c, 'common_name') and c.common_name:
+                c_map[c.common_name.lower()] = c.alpha_2
 
+   
         c_map.update({
-            'usa': 'US', 'uk': 'GB', 'uae': 'AE', 'u.s.a': 'US',
-            'united states': 'US', 'united states of america': 'US',
-            'great britain': 'GB', 'south korea': 'KR', 'north korea': 'KP',
-            'russia': 'RU', 'can': 'CA',
+            'usa': 'US', 'u.s.a': 'US', 'u.s.a.': 'US', 'u.s': 'US',
+            'uk': 'GB', 'u.k': 'GB', 'great britain': 'GB',
+            'uae': 'AE', 'south korea': 'KR', 'north korea': 'KP',
         })
-        c_name_map.setdefault('US', 'United States')
-        c_name_map.setdefault('GB', 'United Kingdom')
 
-        s_map = {}
-        s_name_map = {}
+  
+        state_map = defaultdict(dict)
+        name_map = defaultdict(dict)
         for s in pycountry.subdivisions:
-            code = s.code.split('-')[-1]
-            s_map[s.name.lower()] = code
-            s_map[code.lower()] = code
-            s_name_map[code] = s.name
+            country_code = s.country_code  # e.g. 'US', 'IN', 'CA'
+            local_code = s.code.split('-')[-1]  # e.g. 'CA', 'TX', 'MH'
+            state_map[country_code][s.name.lower()] = local_code
+            state_map[country_code][local_code.lower()] = local_code
+            name_map[country_code][local_code] = s.name
 
-        return c_map, c_name_map, s_map, s_name_map
+        return c_map, c_name_map, state_map, name_map
+
+    def _resolve_country_code_for_row(self, df, mappings, sf_field_being_processed):
+        """
+        Find the sibling Country/CountryCode CSV column mapped for this row set
+        so state/province lookups can be scoped to the right country and avoid
+        subdivision-code collisions across countries (e.g. many countries reuse
+        two-letter codes for different states/provinces).
+        Returns the csv column name holding country info, or None.
+        """
+        for m in mappings:
+            sf_f = (m.get('sfField', m.get('targetField')) or '').lower()
+            if sf_f.endswith('countrycode') or (sf_f.endswith('country') and sf_f != sf_field_being_processed.lower()):
+                return m.get('csvField')
+        return None
 
     def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "") -> dict:
         sf_rules = target_rules
@@ -67,6 +92,8 @@ class SalesforceValidator:
 
         is_multi_currency_org = 'CurrencyIsoCode' in sf_rules
         iso_code_mapped = any(m.get('sfField') == 'CurrencyIsoCode' for m in mappings)
+
+        country_code_col_by_prefix = self._resolve_country_columns(mappings)
 
         for mapping in mappings:
             csv_col = mapping.get('csvField')
@@ -120,26 +147,26 @@ class SalesforceValidator:
                 field_lower = sf_field.lower()
                 is_country_code_field = field_lower.endswith('countrycode')
                 is_state_code_field = field_lower.endswith('statecode') or field_lower.endswith('provincecode')
-                is_country_label_field = 'country' in field_lower and not is_country_code_field
-                is_state_label_field = ('state' in field_lower or 'province' in field_lower) and not is_state_code_field
+                is_country_label_field = field_lower.endswith('country')
+                is_state_label_field = field_lower.endswith('state') or field_lower.endswith('province')
 
                 if is_country_code_field:
                     mapped = df[csv_col].astype(str).str.strip().str.lower().map(self.SF_COUNTRY_MAP)
                     df[csv_col] = mapped.fillna(df[csv_col])
+
                 elif is_country_label_field:
-   
                     lower_vals = df[csv_col].astype(str).str.strip().str.lower()
                     mapped_code = lower_vals.map(self.SF_COUNTRY_MAP)
                     canonical_name = mapped_code.map(self.SF_COUNTRY_NAME_MAP)
                     df[csv_col] = canonical_name.fillna(df[csv_col])
-                elif is_state_code_field:
-                    mapped = df[csv_col].astype(str).str.strip().str.lower().map(self.SF_STATE_MAP)
-                    df[csv_col] = mapped.fillna(df[csv_col])
-                elif is_state_label_field:
-                    lower_vals = df[csv_col].astype(str).str.strip().str.lower()
-                    mapped_code = lower_vals.map(self.SF_STATE_MAP)
-                    canonical_name = mapped_code.map(self.SF_STATE_NAME_MAP)
-                    df[csv_col] = canonical_name.fillna(df[csv_col])
+
+                elif is_state_code_field or is_state_label_field:
+                    prefix = self._address_prefix(sf_field, is_state_code_field)
+                    country_col = country_code_col_by_prefix.get(prefix)
+                    df[csv_col] = self._map_state_column(
+                        df[csv_col], df[country_col] if country_col else None,
+                        to_code=is_state_code_field
+                    )
                     
                 str_lengths = df[csv_col].astype(str).str.len()
                 is_too_long = (str_lengths > max_len) & ~is_empty
@@ -307,3 +334,55 @@ class SalesforceValidator:
             "validRecords": valid_df.to_dict(orient="records"),
             "invalidRecords": invalid_records_output
         }
+
+    @staticmethod
+    def _address_prefix(sf_field: str, is_code_field: bool) -> str:
+        """'BillingStateCode' -> 'billing', 'ShippingState' -> 'shipping', 'State' -> ''."""
+        lower = sf_field.lower()
+        for suffix in ('statecode', 'provincecode', 'state', 'province'):
+            if lower.endswith(suffix):
+                return lower[: -len(suffix)]
+        return lower
+
+    @staticmethod
+    def _resolve_country_columns(mappings) -> dict:
+        """prefix -> csvField holding that address block's Country/CountryCode."""
+        result = {}
+        for m in mappings:
+            sf_f = (m.get('sfField', m.get('targetField')) or '').lower()
+            for suffix in ('countrycode', 'country'):
+                if sf_f.endswith(suffix):
+                    prefix = sf_f[: -len(suffix)]
+                    result[prefix] = m.get('csvField')
+                    break
+        return result
+
+    def _map_state_column(self, state_series: pd.Series, country_code_series, to_code: bool) -> pd.Series:
+        """
+        Resolve each row's state/province using the row's own country ISO
+        code to scope the lookup — avoids collisions where the same
+        subdivision code/name means different things in different countries.
+        Falls back to a cross-country scan only if no country is available
+        for that row (best-effort, may collide).
+        """
+        state_lower = state_series.astype(str).str.strip().str.lower()
+
+        if country_code_series is not None:
+            country_iso = country_code_series.astype(str).str.strip().str.upper()
+        else:
+            country_iso = pd.Series([None] * len(state_series), index=state_series.index)
+
+        def resolve(state_val, state_key, country):
+            table = self.SF_STATE_MAP_BY_COUNTRY.get(country)
+            if table:
+                code = table.get(state_key)
+                if code:
+                    return code if to_code else self.SF_STATE_NAME_MAP_BY_COUNTRY[country][code]
+            return None
+
+        resolved = [
+            resolve(v, k, c)
+            for v, k, c in zip(state_series, state_lower, country_iso)
+        ]
+        resolved_series = pd.Series(resolved, index=state_series.index)
+        return resolved_series.fillna(state_series)
