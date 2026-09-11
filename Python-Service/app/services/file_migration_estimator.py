@@ -91,8 +91,7 @@ class FileMigrationEstimator:
         return OrgBudget(role=role, daily_limit=limit, used=used, remaining=remaining, available_calls=available)
 
     # ==========================================
-    # FILE/ATTACHMENT VOLUME ESTIMATION (against source org only -- that's
-    # where the record/file metadata + blobs actually live)
+    # FILE/ATTACHMENT VOLUME ESTIMATION 
     # ==========================================
     async def _aggregate_attachments(self, client, creds, user_id, parent_ids, send_log) -> FileTypeEstimate:
         total_count, total_bytes = 0, 0

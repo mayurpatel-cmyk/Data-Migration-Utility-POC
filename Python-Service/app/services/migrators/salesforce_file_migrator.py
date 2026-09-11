@@ -2,6 +2,10 @@ import base64
 import asyncio
 import csv
 import io
+import os
+import shutil
+import tempfile
+import uuid
 import zipfile
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -153,7 +157,7 @@ class SalesforceFileMigrator:
             raise ApiLimitNearExhaustionError(used, limit)
 
     # ==========================================
-    # EXTRACTION (from source org) -- REST, unchanged
+    # EXTRACTION (from source org) -- REST
     # ==========================================
     async def extract_attachments(self, client, creds, user_id, parent_ids: list, send_log):
         instance = creds.get("instance_url", "").rstrip('/')
@@ -258,6 +262,16 @@ class SalesforceFileMigrator:
         res.raise_for_status()
         return res.content
 
+    async def download_body_to_disk(self, client, creds, user_id, record_id: str, kind: str, staging_dir: str, send_log) -> Tuple[str, int]:
+        """Downloads a file's binary body and writes it straight to the
+        per-run staging directory instead of keeping it in memory for the
+        rest of the migration. Returns (path, size_bytes)."""
+        blob = await self.download_body(client, creds, user_id, record_id, kind, send_log)
+        path = os.path.join(staging_dir, f"{kind}_{record_id}_{uuid.uuid4().hex[:8]}.bin")
+        with open(path, "wb") as fh:
+            fh.write(blob)
+        return path, len(blob)
+
     # ==========================================
     # UPLOAD -- REST strategy
     # ==========================================
@@ -306,53 +320,53 @@ class SalesforceFileMigrator:
     # ==========================================
     # UPLOAD -- BULK_ZIP strategy (Bulk API 1.0 binary-attachment batches).
     # ==========================================
-    def _chunk_rows_for_zip(self, rows_with_blobs: List[Tuple[dict, bytes]]):
-        """Returns (batches, oversized), where each batch/oversized entry is
-        (original_index, row, blob) -- carrying the index lets callers place
-        results back at the position the caller originally gave us, instead
-        of assuming oversized rows can only ever be at the tail of the list."""
+    def _chunk_rows_for_zip(self, rows_with_paths: List[Tuple[dict, str, int]]):
+        """rows_with_paths: list of (row_dict, staged_file_path, size_bytes).
+        Returns (batches, oversized), where batch/oversized entries are
+        (original_index, row, path) -- files are staged on disk, so batching
+        decisions use the known size without reading the file into memory."""
         batches, current, current_bytes = [], [], 0
         oversized = []
 
-        for idx, (row, blob) in enumerate(rows_with_blobs):
-            blob_size = len(blob)
-            if blob_size > self.MAX_BULK_BATCH_BYTES:
-                oversized.append((idx, row, blob))
+        for idx, (row, path, size) in enumerate(rows_with_paths):
+            if size > self.MAX_BULK_BATCH_BYTES:
+                oversized.append((idx, row, path))
                 continue
 
-            projected = current_bytes + blob_size
+            projected = current_bytes + size
             if current and (projected > self.MAX_BULK_BATCH_BYTES or len(current) >= self.MAX_BULK_BATCH_ROWS):
                 batches.append(current)
                 current, current_bytes = [], 0
 
-            current.append((idx, row, blob))
-            current_bytes += blob_size
+            current.append((idx, row, path))
+            current_bytes += size
 
         if current:
             batches.append(current)
 
         return batches, oversized
 
-    def _build_zip_batch(self, rows_with_blobs: List[Tuple[dict, bytes]], csv_columns: List[str], blob_field: str) -> bytes:
+    def _build_zip_batch(self, rows_with_paths: List[Tuple[dict, str]], csv_columns: List[str], blob_field: str) -> bytes:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             csv_buf = io.StringIO()
             writer = csv.DictWriter(csv_buf, fieldnames=csv_columns)
             writer.writeheader()
 
-            for i, (row, blob) in enumerate(rows_with_blobs):
+            for i, (row, path) in enumerate(rows_with_paths):
                 part_name = f"part_{i}.bin"
-                zf.writestr(part_name, blob)
+                zf.write(path, part_name)  
                 csv_row = dict(row)
                 csv_row[blob_field] = f"#{part_name}"
                 writer.writerow(csv_row)
 
-            zf.writestr("request.csv", csv_buf.getvalue())
+
+            zf.writestr("request.txt", csv_buf.getvalue())
         return buf.getvalue()
 
     async def _bulk_zip_insert(
         self, client, creds, user_id, object_name: str, blob_field: str, csv_columns: List[str],
-        rows_with_blobs: List[Tuple[dict, bytes]], send_log
+        rows_with_paths: List[Tuple[dict, str, int]], send_log
     ) -> List[Tuple[bool, str]]:
         instance = creds.get("instance_url", "").rstrip('/')
         bulk_base_url = f"{instance}/services/async/{self.API_VERSION.lstrip('v')}"
@@ -366,10 +380,10 @@ class SalesforceFileMigrator:
         if job_res.status_code != 201 or job_json is None:
             err = job_res.text
             await send_log(f"[Bulk {object_name}] Job creation failed (status={job_res.status_code}): {err[:500]}")
-            return [(False, err) for _ in rows_with_blobs]
+            return [(False, err) for _ in rows_with_paths]
 
         job_id = job_json.get("id")
-        batches, oversized = self._chunk_rows_for_zip(rows_with_blobs)
+        batches, oversized = self._chunk_rows_for_zip(rows_with_paths)
 
         if oversized:
             await send_log(
@@ -381,7 +395,7 @@ class SalesforceFileMigrator:
         batch_ids = []
         for batch_rows in batches:
             zip_bytes = self._build_zip_batch(
-                [(row, blob) for _, row, blob in batch_rows], csv_columns, blob_field
+                [(row, path) for _, row, path in batch_rows], csv_columns, blob_field
             )
             b_res = await self._bulk_authed_request(
                 client, "POST", f"{bulk_base_url}/job/{job_id}/batch", creds, user_id, "target", send_log,
@@ -400,8 +414,7 @@ class SalesforceFileMigrator:
                 batch_ids.append(batch_json.get("id"))
                 continue
 
-            # Salesforce returns XML for zip/csv batch submissions even when
-            # Accept: application/json is set -- try that before giving up.
+
             xml_batch_id = self._parse_batch_xml_field(b_res.text, "id")
             if xml_batch_id:
                 batch_ids.append(xml_batch_id)
@@ -419,7 +432,7 @@ class SalesforceFileMigrator:
         )
 
         poll_delay = 1.0
-        max_poll_seconds = 600  # hard ceiling -- a stuck/unknown state must never hang the migration forever
+        max_poll_seconds = 600 
         elapsed = 0.0
         live_batch_ids = [b for b in batch_ids if b]
         timed_out = False
@@ -448,12 +461,13 @@ class SalesforceFileMigrator:
                 if parsed is not None:
                     states.append(parsed.get("state", "Unknown"))
                 else:
-                    # Same XML quirk as batch submission -- fall back before
-                    # giving up and stalling the whole poll loop on "Unknown".
+
                     states.append(self._parse_batch_xml_field(r.text, "state") or "Unknown")
             if all(s in ("Completed", "Failed", "NotProcessed") for s in states):
                 break
             poll_delay = min(poll_delay * 1.5, 4.0)
+
+        timed_out_ids = set(live_batch_ids) if timed_out else set()
 
         results_by_index: Dict[int, Tuple] = {}
         for b_id, batch_rows in zip(batch_ids, batches):
@@ -472,13 +486,7 @@ class SalesforceFileMigrator:
                     results_by_index[idx] = (False, "Batch submission failed")
                 continue
 
-            # A batch can fail at the WHOLE-BATCH level (malformed ZIP, job-level
-            # rejection) rather than per-row -- in that case /result does NOT
-            # return one CSV row per submitted record, it returns an error body
-            # or something short. Check batch state first so a whole-batch
-            # failure gets one explicit failure per row instead of csv.DictReader
-            # silently yielding fewer rows than we submitted (which used to make
-            # those rows vanish from `results` with no trace at all).
+
             status_r = await self._bulk_authed_request(
                 client, "GET", f"{bulk_base_url}/job/{job_id}/batch/{b_id}", creds, user_id, "target", send_log,
                 headers={"Accept": "application/json"},
@@ -514,10 +522,7 @@ class SalesforceFileMigrator:
                     row_results.append((False, csv_row.get("Error", "Unknown Bulk error")))
 
             if len(row_results) != len(batch_rows):
-                # Never let the result count silently drift from what we
-                # submitted -- pad/truncate so every input row gets exactly
-                # one accounted outcome, and log it so it's visible instead
-                # of just quietly under-reporting.
+
                 await send_log(
                     f"[Bulk {object_name}] Batch {b_id} returned {len(row_results)} result row(s) for "
                     f"{len(batch_rows)} submitted record(s) -- treating the difference as failed instead "
@@ -531,26 +536,28 @@ class SalesforceFileMigrator:
             for idx, res in zip(batch_indices, row_results):
                 results_by_index[idx] = res
 
-        for idx, row, _blob in oversized:
+        for idx, row, _path in oversized:
             results_by_index[idx] = ("__OVERSIZED__", row)
 
-        return [results_by_index[i] for i in range(len(rows_with_blobs))]
+        return [results_by_index[i] for i in range(len(rows_with_paths))]
 
     async def upload_attachments_bulk(self, client, creds, user_id, items: List[dict], send_log):
-        rows_with_blobs = [
-            ({"ParentId": it["ParentId"], "Name": it["Name"], "ContentType": it.get("ContentType") or "application/octet-stream"}, it["Body"])
+        rows_with_paths = [
+            ({"ParentId": it["ParentId"], "Name": it["Name"], "ContentType": it.get("ContentType") or "application/octet-stream"},
+             it["BodyPath"], it["Size"])
             for it in items
         ]
         return await self._bulk_zip_insert(client, creds, user_id, "Attachment", "Body",
-                                            ["ParentId", "Name", "ContentType", "Body"], rows_with_blobs, send_log)
+                                            ["ParentId", "Name", "ContentType", "Body"], rows_with_paths, send_log)
 
     async def upload_files_bulk(self, client, creds, user_id, items: List[dict], send_log):
-        rows_with_blobs = [
-            ({"Title": it["Title"], "PathOnClient": it["PathOnClient"], "FirstPublishLocationId": it["FirstPublishLocationId"]}, it["VersionData"])
+        rows_with_paths = [
+            ({"Title": it["Title"], "PathOnClient": it["PathOnClient"], "FirstPublishLocationId": it["FirstPublishLocationId"]},
+             it["VersionDataPath"], it["Size"])
             for it in items
         ]
         return await self._bulk_zip_insert(client, creds, user_id, "ContentVersion", "VersionData",
-                                            ["Title", "PathOnClient", "FirstPublishLocationId", "VersionData"], rows_with_blobs, send_log)
+                                            ["Title", "PathOnClient", "FirstPublishLocationId", "VersionData"], rows_with_paths, send_log)
 
     # ==========================================
     # ORCHESTRATION 
@@ -573,30 +580,34 @@ class SalesforceFileMigrator:
         if not old_ids:
             return results
 
+        staging_dir = tempfile.mkdtemp(prefix=f"sf_file_migration_{user_id}_")
         try:
-            if migrate_attachments:
-                await self._migrate_attachments(
-                    client, source_creds, target_creds, user_id, id_map, old_ids,
-                    send_log, semaphore, strategy, checkpoint, results,
+            try:
+                if migrate_attachments:
+                    await self._migrate_attachments(
+                        client, source_creds, target_creds, user_id, id_map, old_ids,
+                        send_log, semaphore, strategy, checkpoint, results, staging_dir,
+                    )
+                if migrate_files:
+                    await self._migrate_content_files(
+                        client, source_creds, target_creds, user_id, id_map, old_ids,
+                        send_log, semaphore, strategy, checkpoint, results, staging_dir,
+                    )
+            except ApiLimitNearExhaustionError as e:
+                await send_log(
+                    f"[Files] Stopping: Salesforce daily API usage reached {e.used}/{e.limit}. "
+                    f"Progress so far is checkpointed -- re-run later (next 24h window) to resume "
+                    f"the remaining files."
                 )
-            if migrate_files:
-                await self._migrate_content_files(
-                    client, source_creds, target_creds, user_id, id_map, old_ids,
-                    send_log, semaphore, strategy, checkpoint, results,
-                )
-        except ApiLimitNearExhaustionError as e:
-            await send_log(
-                f"[Files] Stopping: Salesforce daily API usage reached {e.used}/{e.limit}. "
-                f"Progress so far is checkpointed -- re-run later (next 24h window) to resume "
-                f"the remaining files."
-            )
-            results["apiLimitReached"] = True
+                results["apiLimitReached"] = True
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
         return results
 
     async def _migrate_attachments(
         self, client, source_creds, target_creds, user_id, id_map, old_ids,
-        send_log, semaphore, strategy, checkpoint: FileMigrationCheckpoint, results,
+        send_log, semaphore, strategy, checkpoint: FileMigrationCheckpoint, results, staging_dir: str,
     ):
         attachments = await self.extract_attachments(client, source_creds, user_id, old_ids, send_log)
         attachments = [a for a in attachments if a["Id"] not in checkpoint.migrated_attachment_ids]
@@ -618,10 +629,13 @@ class SalesforceFileMigrator:
                     )
                     return
                 try:
-                    blob = await self.download_body(client, source_creds, user_id, att["Id"], "attachment", send_log)
+                    path, size = await self.download_body_to_disk(
+                        client, source_creds, user_id, att["Id"], "attachment", staging_dir, send_log
+                    )
                     downloaded.append({
                         "SourceId": att["Id"], "ParentId": new_parent,
-                        "Name": att.get("Name", "attachment"), "ContentType": att.get("ContentType"), "Body": blob,
+                        "Name": att.get("Name", "attachment"), "ContentType": att.get("ContentType"),
+                        "BodyPath": path, "Size": size,
                     })
                 except ApiLimitNearExhaustionError:
                     raise
@@ -644,8 +658,10 @@ class SalesforceFileMigrator:
     async def _upload_attachments_rest(self, client, target_creds, user_id, downloaded, send_log, semaphore, checkpoint, results):
         async def upload_one(item):
             async with semaphore:
+                with open(item["BodyPath"], "rb") as fh:
+                    blob = fh.read()
                 ok, info = await self.upload_attachment(
-                    client, target_creds, user_id, item["ParentId"], item["Name"], item["ContentType"], item["Body"], send_log
+                    client, target_creds, user_id, item["ParentId"], item["Name"], item["ContentType"], blob, send_log
                 )
                 if ok:
                     results["attachments"]["success"] += 1
@@ -679,7 +695,7 @@ class SalesforceFileMigrator:
 
     async def _migrate_content_files(
         self, client, source_creds, target_creds, user_id, id_map, old_ids,
-        send_log, semaphore, strategy, checkpoint: FileMigrationCheckpoint, results,
+        send_log, semaphore, strategy, checkpoint: FileMigrationCheckpoint, results, staging_dir: str,
     ):
         files = await self.extract_files(client, source_creds, user_id, old_ids, send_log)
         files = [f for f in files if f["ContentVersionId"] not in checkpoint.migrated_content_version_ids]
@@ -694,12 +710,7 @@ class SalesforceFileMigrator:
             async with semaphore:
                 new_parent = id_map.get(f["ParentId"])
                 if not new_parent:
-                    # A ContentDocument can be linked (via ContentDocumentLink) to
-                    # more than just the records we're migrating -- e.g. also
-                    # shared to a User, a Chatter post, or another record outside
-                    # this batch. That link row's ParentId won't be in id_map.
-                    # Previously this was silently dropped with no trace, which is
-                    # why "Found N files" and "Done: X/Y" could disagree.
+
                     results["files"]["skipped"] += 1
                     await send_log(
                         f"[Files] Skipped '{f.get('Name')}' (ContentVersion {f['ContentVersionId']}): "
@@ -707,10 +718,12 @@ class SalesforceFileMigrator:
                     )
                     return
                 try:
-                    blob = await self.download_body(client, source_creds, user_id, f["ContentVersionId"], "file", send_log)
+                    path, size = await self.download_body_to_disk(
+                        client, source_creds, user_id, f["ContentVersionId"], "file", staging_dir, send_log
+                    )
                     downloaded.append({
                         "SourceId": f["ContentVersionId"], "ParentId": new_parent,
-                        "Name": f.get("Name", "file"), "VersionData": blob,
+                        "Name": f.get("Name", "file"), "VersionDataPath": path, "Size": size,
                     })
                 except ApiLimitNearExhaustionError:
                     raise
@@ -733,7 +746,9 @@ class SalesforceFileMigrator:
     async def _upload_files_rest(self, client, target_creds, user_id, downloaded, send_log, semaphore, checkpoint, results):
         async def upload_one(item):
             async with semaphore:
-                ok, info = await self.upload_file(client, target_creds, user_id, item["ParentId"], item["Name"], item["VersionData"], send_log)
+                with open(item["VersionDataPath"], "rb") as fh:
+                    blob = fh.read()
+                ok, info = await self.upload_file(client, target_creds, user_id, item["ParentId"], item["Name"], blob, send_log)
                 if ok:
                     results["files"]["success"] += 1
                     await checkpoint.mark("file", item["SourceId"])
@@ -749,7 +764,7 @@ class SalesforceFileMigrator:
 
         items = [{
             "Title": d["Name"], "PathOnClient": d["Name"],
-            "FirstPublishLocationId": d["ParentId"], "VersionData": d["VersionData"],
+            "FirstPublishLocationId": d["ParentId"], "VersionDataPath": d["VersionDataPath"], "Size": d["Size"],
         } for d in downloaded]
 
         bulk_results = await self.upload_files_bulk(client, target_creds, user_id, items, send_log)
