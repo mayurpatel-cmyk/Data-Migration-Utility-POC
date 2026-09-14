@@ -3216,7 +3216,7 @@ onReviewPanelDragEnd(): void {
       fileBudgetHtml = `
         <div class="alert alert-success text-start small mt-3 mb-0">
           <i class="feather icon-check-circle"></i> File migration budget check passed —
-          ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance.
+          ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance for Data Migration.
         </div>`;
     } else if (filesInScope && this.isCheckingFileMigrationBudget) {
       fileBudgetHtml = `
