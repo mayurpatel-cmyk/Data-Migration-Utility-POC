@@ -29,6 +29,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.crm_routes import router as crm_router
 from app.api.metadata_routes import router as metadata_router
 from app.api.migration_history import router as migration_history
+from app.api.file_migration_routes import router as file_migration_router
 from app.services.staging_cleanup_service import run_staging_cleanup_loop
 
 
@@ -68,6 +69,7 @@ app.add_middleware(
 app.include_router(metadata_router)
 app.include_router(migration_router)
 app.include_router(migration_history)
+app.include_router(file_migration_router)
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(crm_router, prefix="/api/crm", tags=["CRM Connections"])
 app.include_router(validation_router)

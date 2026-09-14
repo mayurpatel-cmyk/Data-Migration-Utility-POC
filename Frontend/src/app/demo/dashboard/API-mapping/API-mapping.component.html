@@ -1147,19 +1147,59 @@
           <div class="d-flex flex-wrap gap-3 mt-2 pt-2 border-top border-primary-subtle">
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateAttachmentsCheck"
-                [(ngModel)]="migrateAttachments">
+                [(ngModel)]="migrateAttachments" (ngModelChange)="onFileMigrationCheckboxToggle()">
               <label class="form-check-label fw-bold cursor-pointer small" for="migrateAttachmentsCheck">
                 <i class="feather icon-paperclip me-1"></i> Migrate Attachments (legacy)
               </label>
             </div>
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateFilesCheck"
-                [(ngModel)]="migrateFiles">
+                [(ngModel)]="migrateFiles" (ngModelChange)="onFileMigrationCheckboxToggle()">
               <label class="form-check-label fw-bold cursor-pointer small" for="migrateFilesCheck">
                 <i class="feather icon-file me-1"></i> Migrate Files
               </label>
             </div>
           </div>
+
+          @if (migrateAttachments || migrateFiles) {
+            <div class="mt-2">
+              @if (isCheckingFileMigrationBudget) {
+                <div class="small text-muted d-flex align-items-center gap-2">
+                  <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                  Checking today's API budget for this file migration...
+                </div>
+              } @else if (fileMigrationBudgetPreviewError) {
+                <div class="small text-muted">
+                  <i class="feather icon-info"></i> {{ fileMigrationBudgetPreviewError }}
+                </div>
+              } @else if (fileMigrationBudgetPreview && !fileMigrationBudgetPreview.fitsInBudget) {
+                <div class="alert alert-warning py-2 px-3 small mb-0">
+                  <div class="fw-bold mb-1"><i class="feather icon-alert-triangle"></i> API limit may be hit</div>
+                  <div>
+                    ~{{ fileMigrationBudgetPreview.totalFileCount | number }} file(s) across
+                    {{ fileMigrationBudgetPreview.totalRecordCount | number }} record(s) need
+                    ~{{ fileMigrationBudgetPreview.estimatedTotalCalls | number }} API call(s), but the
+                    <strong>{{ fileMigrationBudgetPreview.bindingOrg }}</strong> org only has
+                    {{ fileMigrationBudgetPreview.bindingOrg === 'target' ? (fileMigrationBudgetPreview.targetAvailable | number) : (fileMigrationBudgetPreview.sourceAvailable | number) }}
+                    call(s) left today.
+                  </div>
+                  <div class="mt-1">
+                    Recommended: files for ~{{ fileMigrationBudgetPreview.safeRecordCount | number }} of
+                    {{ fileMigrationBudgetPreview.totalRecordCount | number }} record(s) now; the rest can
+                    run once the daily allowance resets. You'll get a final confirmation with live numbers
+                    when the migration reaches the file transfer step.
+                  </div>
+                </div>
+              } @else if (fileMigrationBudgetPreview && fileMigrationBudgetPreview.fitsInBudget) {
+                <div class="alert alert-success py-2 px-3 small mb-0">
+                  <i class="feather icon-check-circle"></i>
+                  API budget check passed — ~{{ fileMigrationBudgetPreview.estimatedTotalCalls | number }}
+                  call(s) needed for ~{{ fileMigrationBudgetPreview.totalFileCount | number }} file(s),
+                  well within today's allowance.
+                </div>
+              }
+            </div>
+          }
           }
         </div>
 

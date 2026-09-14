@@ -9,11 +9,13 @@ the binding constraint is whichever org runs out first.
 import math
 import random
 import urllib.parse
+import re
 from dataclasses import dataclass
 from typing import List, Literal
 
 from app.services.crm_service import CrmService
 from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
+from app.services.time_filter_service import merge_time_clause, build_salesforce_time_clause, TimeFilterError
 
 API_VERSION = "v60.0"
 CHUNK_SIZE = 200
@@ -266,3 +268,79 @@ class FileMigrationEstimator:
         if order == "shuffled":
             random.shuffle(ids)
         return ids[:safe_record_count], ids[safe_record_count:]
+
+    # ==========================================
+    # PRE-FLIGHT PREVIEW (informational, runs BEFORE the migration starts --
+    # NOT a replacement for the live mid-run guard in migration_routes.py,
+    # which still uses fresh numbers right before any download/upload call)
+    # ==========================================
+    async def _fetch_ids_for_query(
+        self, client, source_creds: dict, user_id: str, obj_name: str, query: str,
+        time_filter, send_log,
+    ) -> List[str]:
+        """
+        Cheap Id-only extraction ("SELECT Id FROM {obj} WHERE ...") so a budget
+        preview can be computed before the real migration runs, without paying
+        the cost of a full field extraction. Mirrors SalesforceMigrator.extract()'s
+        query-building (time filter merge, raw-SOQL pass-through), projected to
+        Id only.
+
+        This itself costs API calls (1 per ~2000-record page via nextRecordsUrl) --
+        unavoidable for any pre-check, but small relative to the real migration.
+        The resulting budget numbers already account for this cost, since
+        get_org_budget() reads /limits AFTER this method runs.
+        """
+        instance = source_creds.get("instance_url", "").rstrip('/')
+        clean_query = (query or "").strip()
+
+        try:
+            time_clause = build_salesforce_time_clause(time_filter)
+        except TimeFilterError as e:
+            await send_log(f"[{obj_name}] Invalid migration filter for budget pre-check: {e}")
+            raise
+
+        if clean_query.lower().startswith("select "):
+            soql = clean_query
+            if time_clause:
+                soql = merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
+            # Pre-check only needs Id -- collapse whatever SELECT list is there
+            # down to Id-only rather than pulling every mapped field just to
+            # count records.
+            soql = re.sub(r'(?is)^select\s+.+?\s+from', 'SELECT Id FROM', soql, count=1)
+        else:
+            where_parts = []
+            if clean_query:
+                where_parts.append(f"({clean_query})")
+            if time_clause:
+                where_parts.append(time_clause)
+            where_combined = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+            soql = f"SELECT Id FROM {obj_name}{where_combined}"
+
+        url = f"{instance}/services/data/{API_VERSION}/query?q={urllib.parse.quote(soql)}"
+        ids: List[str] = []
+
+        while url:
+            data = await self._authed_get(client, url, source_creds, user_id, "source", send_log)
+            ids.extend(r["Id"] for r in data.get("records", []))
+            url = f"{instance}{data.get('nextRecordsUrl')}" if not data.get("done") else None
+
+        return ids
+
+    async def estimate_for_object(
+        self, client, source_creds: dict, target_creds: dict, user_id: str,
+        obj_name: str, query: str, time_filter, migrate_attachments: bool, migrate_files: bool,
+        send_log, safety_threshold: float = 0.90,
+    ) -> ApiBudgetEstimate:
+        """
+        Pre-flight budget preview -- call this the moment the user opts into file
+        migration, BEFORE the migration job actually starts. Fetches just the
+        record Ids matching the current query/filter, then reuses estimate()
+        exactly as the mid-run guard does.
+        """
+        parent_ids = await self._fetch_ids_for_query(
+            client, source_creds, user_id, obj_name, query, time_filter, send_log
+        )
+        return await self.estimate(
+            client, source_creds, target_creds, user_id, parent_ids,
+            migrate_attachments, migrate_files, send_log, safety_threshold=safety_threshold,
+        )

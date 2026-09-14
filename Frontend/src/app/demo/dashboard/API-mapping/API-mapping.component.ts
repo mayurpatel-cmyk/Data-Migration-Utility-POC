@@ -52,6 +52,41 @@ interface CrmEntity {
   label: string;
 }
 
+interface FileMigrationBudget {
+  jobRef: string;
+  targetObject: string;
+  message: string;
+  bindingOrg: 'source' | 'target' | 'none';
+  estimatedDownloadCalls: number;
+  estimatedUploadCalls: number;
+  estimatedTotalCalls: number;
+  totalRecordCount: number;
+  safeRecordCount: number;
+  totalFileCount: number;
+  safeFileCount: number;
+  sourceAvailable: number;
+  targetAvailable: number;
+}
+
+type FileMigrationDecisionAction = 'proceed_limited' | 'proceed_full' | 'skip';
+
+interface FileMigrationBudgetPreview {
+  fitsInBudget: boolean;
+  bindingOrg: 'source' | 'target' | 'none';
+  sourceAvailable: number;
+  targetAvailable: number;
+  estimatedDownloadCalls: number;
+  estimatedUploadCalls: number;
+  estimatedTotalCalls: number;
+  totalRecordCount: number;
+  safeRecordCount: number;
+  totalFileCount: number;
+  safeFileCount: number;
+  message: string;
+  attachmentFileCount: number;
+  contentFileCount: number;
+}
+
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
@@ -216,6 +251,13 @@ isProfileDropdownOpen = false;
   // Files & Attachments (Salesforce -> Salesforce only)
   migrateAttachments = false;
   migrateFiles = false;
+  pendingFileMigrationBudget: FileMigrationBudget | null = null;
+
+  // Pre-flight (informational)
+  fileMigrationBudgetPreview: FileMigrationBudgetPreview | null = null;
+  isCheckingFileMigrationBudget = false;
+  fileMigrationBudgetPreviewError: string | null = null;
+  private fileMigrationBudgetPreviewDebounce: ReturnType<typeof setTimeout> | null = null;
 
   get isSalesforceToSalesforce(): boolean {
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
@@ -274,6 +316,11 @@ isProfileDropdownOpen = false;
   ngOnDestroy() {
     this.mappingCancel$.next();
     this.mappingCancel$.complete();
+
+    if (this.pendingFileMigrationBudget && this.migrationSocket) {
+      this.sendFileMigrationDecision(this.migrationSocket, this.pendingFileMigrationBudget.jobRef, 'skip');
+      this.pendingFileMigrationBudget = null;
+    }
 
     // 1. Kill active websockets
     this.closeSocket(this.validationSocket);
@@ -469,6 +516,7 @@ get isMigrationFilterActive(): boolean {
 triggerLivePreview(): void {
   if (!this.validateDateRange()) return;
   this.applyFilter();
+  this.scheduleFileMigrationBudgetRecheck();
 }
 
 validateDateRange(): boolean {
@@ -522,6 +570,7 @@ clearDateRange(): void {
   this.activeQuickRangePreset = null;
   this.dateRangeError = null;
   this.applyFilter();
+  this.scheduleFileMigrationBudgetRecheck();
 }
 
 activeQuickRangePreset: string | null = null;
@@ -595,6 +644,7 @@ get isEligibleForTimeFilter(): boolean {
   onQueryEdited() {
     this.queryError = null;
     this.isDefaultQuery = false;
+    this.scheduleFileMigrationBudgetRecheck();
   }
 
   private getQueryFieldFilterSet(): Set<string> | null {
@@ -1629,6 +1679,8 @@ onReviewPanelDragEnd(): void {
   selectSourceEntity(entityName: string) {
     if (this.selectedSourceObject !== entityName) {
       this.resetMigrationTimeFilter();
+      this.fileMigrationBudgetPreview = null;
+      this.fileMigrationBudgetPreviewError = null;
     }
 
     this.selectedSourceObject = entityName;
@@ -3148,9 +3200,38 @@ onReviewPanelDragEnd(): void {
   }
 
   private show_confirmation_modal(activeMappings: any[]) {
+    const filesInScope = this.isSalesforceToSalesforce && (this.migrateAttachments || this.migrateFiles);
+    const preview = this.fileMigrationBudgetPreview;
+
+    let fileBudgetHtml = '';
+    if (filesInScope && preview && !preview.fitsInBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-warning text-start small mt-3 mb-0">
+          <strong><i class="feather icon-alert-triangle"></i> File migration budget notice:</strong>
+          ${preview.message}
+          You'll be asked to confirm the exact scope again once the migration reaches the file
+          transfer step, with live numbers at that moment.
+        </div>`;
+    } else if (filesInScope && preview && preview.fitsInBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-success text-start small mt-3 mb-0">
+          <i class="feather icon-check-circle"></i> File migration budget check passed —
+          ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance.
+        </div>`;
+    } else if (filesInScope && this.isCheckingFileMigrationBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-secondary text-start small mt-3 mb-0">
+          Still checking the file migration API budget in the background — this run will still
+          be guarded live during the file transfer step regardless.
+        </div>`;
+    }
+
     Swal.fire({
       title: 'Ready to Migrate!',
-      text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+      html: `
+        <p class="mb-0">Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.</p>
+        ${fileBudgetHtml}
+      `,
       icon: 'info',
       showCancelButton: true,
       confirmButtonColor: '#198754',
@@ -3198,6 +3279,183 @@ onReviewPanelDragEnd(): void {
     error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
   });
 }
+
+  onFileMigrationCheckboxToggle(): void {
+    this.scheduleFileMigrationBudgetRecheck();
+  }
+
+  /**
+   * Single funnel for "something that changes what the file migration would
+   * actually touch just changed" -- called on checkbox toggle, query edits,
+   * and time-filter changes (manual dates, clear, quick-range presets, field
+   * switch). Debounced so rapid edits (typing in Monaco, dragging a date)
+   * don't fire a request per keystroke.
+   */
+  private scheduleFileMigrationBudgetRecheck(): void {
+    if (this.fileMigrationBudgetPreviewDebounce) {
+      clearTimeout(this.fileMigrationBudgetPreviewDebounce);
+    }
+
+    if (!this.isSalesforceToSalesforce || (!this.migrateAttachments && !this.migrateFiles)) {
+      this.fileMigrationBudgetPreview = null;
+      this.fileMigrationBudgetPreviewError = null;
+      this.isCheckingFileMigrationBudget = false;
+      return;
+    }
+
+    // Mark stale immediately so the banner doesn't keep showing numbers for
+    // the query/filter state that just changed while the new check runs.
+    this.fileMigrationBudgetPreview = null;
+
+    this.fileMigrationBudgetPreviewDebounce = setTimeout(() => {
+      this.checkFileMigrationBudgetPreview();
+    }, 600);
+  }
+
+  private checkFileMigrationBudgetPreview(): void {
+    if (!this.selectedSourceObject) {
+      return;
+    }
+
+    this.isCheckingFileMigrationBudget = true;
+    this.fileMigrationBudgetPreviewError = null;
+    const token = localStorage.getItem('supabase_token') || '';
+
+    const body = {
+      sourceObject: this.selectedSourceObject,
+      query: this.customQuery?.trim() || '',
+      migrationTimeFilter: this.migrationTimeFilter,
+      migrateAttachments: this.migrateAttachments,
+      migrateFiles: this.migrateFiles
+    };
+
+    this.http.post<FileMigrationBudgetPreview>(
+      `${environment.apiUrl}/api/migration/files/precheck`,
+      body,
+      { headers: { Authorization: `Bearer ${token}` } }
+    ).subscribe({
+      next: (result) => {
+        this.fileMigrationBudgetPreview = result;
+        this.isCheckingFileMigrationBudget = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.fileMigrationBudgetPreview = null;
+        this.fileMigrationBudgetPreviewError =
+          err?.error?.detail || 'Could not check the API budget for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
+        this.isCheckingFileMigrationBudget = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private showFileMigrationBudgetPrompt(budget: FileMigrationBudget, ws: WebSocket): void {
+    this.pendingFileMigrationBudget = budget;
+
+    const safePercent = budget.totalRecordCount
+      ? Math.round((budget.safeRecordCount / budget.totalRecordCount) * 100)
+      : 0;
+    const deferredCount = budget.totalRecordCount - budget.safeRecordCount;
+
+    Swal.fire({
+      title: `File Migration — ${budget.targetObject}`,
+      html: `
+        <div class="text-start">
+          <p class="text-muted small mb-3">
+            ${budget.totalFileCount.toLocaleString()} file(s) attached to
+            ${budget.totalRecordCount.toLocaleString()} record(s) need to move, but today's Salesforce
+            API allowance on the <strong>${budget.bindingOrg}</strong> org can't cover all of them safely.
+          </p>
+          <div class="d-flex justify-content-around gap-3 mb-3">
+            <div class="p-2 border rounded bg-light w-100">
+              <div class="small fw-bold text-uppercase text-muted">Source (downloads)</div>
+              <div class="fw-bold">${budget.estimatedDownloadCalls.toLocaleString()} needed</div>
+              <div class="small text-muted">${budget.sourceAvailable.toLocaleString()} available today</div>
+            </div>
+            <div class="p-2 border rounded bg-light w-100">
+              <div class="small fw-bold text-uppercase text-muted">Target (uploads)</div>
+              <div class="fw-bold">${budget.estimatedUploadCalls.toLocaleString()} needed</div>
+              <div class="small text-muted">${budget.targetAvailable.toLocaleString()} available today</div>
+            </div>
+          </div>
+          <div class="alert alert-primary py-2 mb-0">
+            <strong>Recommended:</strong> migrate files for
+            <strong>${budget.safeRecordCount.toLocaleString()} of ${budget.totalRecordCount.toLocaleString()}</strong>
+            record(s) now (~${budget.safeFileCount.toLocaleString()} files, ${safePercent}%).
+            The remaining ${deferredCount.toLocaleString()} record(s) keep their field data — just no
+            files this pass — and can be re-run once the ${budget.bindingOrg} org's daily limit resets.
+          </div>
+        </div>
+      `,
+      icon: 'warning',
+      showConfirmButton: true,
+      confirmButtonText: `Migrate ${budget.safeRecordCount.toLocaleString()} now (recommended)`,
+      confirmButtonColor: '#0d6efd',
+      showDenyButton: true,
+      denyButtonText: 'Skip files this pass',
+      showCancelButton: true,
+      cancelButtonText: 'Migrate all anyway',
+      reverseButtons: true,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'proceed_limited');
+      } else if (result.isDenied) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'skip');
+      } else if (result.dismiss === Swal.DismissReason.cancel) {
+        this.confirmFullFileMigrationOverride(budget, ws);
+      } else {
+
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'skip');
+      }
+    });
+  }
+
+  private confirmFullFileMigrationOverride(budget: FileMigrationBudget, ws: WebSocket): void {
+    Swal.fire({
+      title: 'Migrate all records anyway?',
+      html: `
+        <p class="text-muted small mb-0">
+          This may exhaust the <strong>${budget.bindingOrg}</strong> org's daily API limit mid-run,
+          which can also affect other tools or integrations sharing that org today.
+        </p>
+      `,
+      icon: 'warning',
+      showConfirmButton: true,
+      confirmButtonText: `Yes, migrate all ${budget.totalRecordCount.toLocaleString()}`,
+      confirmButtonColor: '#d93025',
+      showCancelButton: true,
+      cancelButtonText: 'Go back',
+      reverseButtons: true,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'proceed_full');
+      } else {
+
+        this.showFileMigrationBudgetPrompt(budget, ws);
+      }
+    });
+  }
+
+  private sendFileMigrationDecision(ws: WebSocket, jobRef: string, action: FileMigrationDecisionAction): void {
+    if (ws.readyState !== WebSocket.OPEN) {
+      this.toastr.error('Connection to migration engine was lost before a file migration decision could be sent.', 'Engine Error');
+      this.pendingFileMigrationBudget = null;
+      return;
+    }
+    ws.send(JSON.stringify({ fileMigrationDecision: { jobRef, action } }));
+    this.pendingFileMigrationBudget = null;
+
+    const actionLabel =
+      action === 'proceed_limited' ? 'Proceeding with the recommended reduced scope...' :
+      action === 'proceed_full' ? 'Proceeding with the full scope...' :
+      'Skipping files for this pass...';
+    this.logMessages = [...this.logMessages, `[File Migration] ${actionLabel}`];
+    this.cdr.detectChanges();
+  }
 
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
@@ -3288,6 +3546,27 @@ onReviewPanelDragEnd(): void {
 
         if (data.log) {
           this.logMessages = [...this.logMessages, data.log];
+        }
+
+        if (data.status === 'AwaitingFileMigrationApproval' && data.fileMigrationBudget) {
+          this.showFileMigrationBudgetPrompt(data.fileMigrationBudget, ws);
+        }
+
+        if (data.fileMigrationJobResult) {
+          const r = data.fileMigrationJobResult;
+          const parts: string[] = [];
+          if (r.attachmentsSuccess || r.attachmentsError) {
+            parts.push(`Attachments: ${r.attachmentsSuccess} ok / ${r.attachmentsError} failed`);
+          }
+          if (r.filesSuccess || r.filesError) {
+            parts.push(`Files: ${r.filesSuccess} ok / ${r.filesError} failed`);
+          }
+          if (r.deferredRecordCount > 0) {
+            parts.push(`${r.deferredRecordCount} record(s) deferred (API budget)`);
+          }
+          if (parts.length) {
+            this.logMessages = [...this.logMessages, `[${r.targetObject}] ${parts.join(' \u00b7 ')}`];
+          }
         }
 
         if (data.status) {

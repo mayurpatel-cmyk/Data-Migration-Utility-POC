@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
 from app.services.file_migration_estimator import FileMigrationEstimator
-from app.services.salesforce_file_migrator import (
+from app.services.migrators.salesforce_file_migrator import (
     SalesforceFileMigrator, FileMigrationStrategy, FileMigrationCheckpoint,
 )
 
@@ -88,6 +88,76 @@ async def estimate_file_migration(payload: FileMigrationEstimateRequest, current
         message=result.message,
         attachmentFileCount=result.attachments.file_count, attachmentBytesEstimated=result.attachments.sampled,
         contentFileCount=result.files.file_count, contentBytesEstimated=result.files.sampled,
+    )
+
+
+# =========================================================
+# PRE-FLIGHT PREVIEW -- runs the moment the person opts into file migration,
+# BEFORE the migration job starts. Purely informational: the authoritative
+# live guard still runs inside the actual migration (migration_routes.py's
+# resolve_file_migration_scope), since record counts and org usage can shift
+# between this call and the real run.
+# =========================================================
+class FileMigrationPrecheckRequest(BaseModel):
+    sourceObject: str
+    query: str = ""
+    migrationTimeFilter: Optional[Dict[str, Any]] = None
+    migrateAttachments: bool = True
+    migrateFiles: bool = True
+    safetyThreshold: float = 0.90
+
+
+class FileMigrationPrecheckResponse(BaseModel):
+    fitsInBudget: bool
+    bindingOrg: str
+    sourceAvailable: int
+    targetAvailable: int
+    estimatedDownloadCalls: int
+    estimatedUploadCalls: int
+    estimatedTotalCalls: int
+    totalRecordCount: int
+    safeRecordCount: int
+    totalFileCount: int
+    safeFileCount: int
+    message: str
+    attachmentFileCount: int
+    contentFileCount: int
+
+
+@router.post("/api/migration/files/precheck", response_model=FileMigrationPrecheckResponse)
+async def precheck_file_migration(payload: FileMigrationPrecheckRequest, current_user=Depends(get_current_user)):
+    source_creds = CrmService.get_active_crm_credentials(current_user.id, "salesforce", "source")
+    target_creds = CrmService.get_active_crm_credentials(current_user.id, "salesforce", "target")
+
+    async def send_log(msg: str):
+        logger.info(msg)
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            result = await estimator.estimate_for_object(
+                client, source_creds, target_creds, str(current_user.id),
+                payload.sourceObject, payload.query, payload.migrationTimeFilter,
+                payload.migrateAttachments, payload.migrateFiles, send_log,
+                safety_threshold=payload.safetyThreshold,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("File migration pre-check failed")
+            raise HTTPException(status_code=500, detail=f"Could not pre-check API budget: {e}")
+
+    return FileMigrationPrecheckResponse(
+        fitsInBudget=result.fits_in_budget, bindingOrg=result.binding_org,
+        sourceAvailable=result.source_budget.available_calls,
+        targetAvailable=result.target_budget.available_calls,
+        estimatedDownloadCalls=result.estimated_download_calls,
+        estimatedUploadCalls=result.estimated_upload_calls,
+        estimatedTotalCalls=result.estimated_total_calls,
+        totalRecordCount=result.total_record_count, safeRecordCount=result.safe_record_count,
+        totalFileCount=result.total_file_count, safeFileCount=result.safe_file_count,
+        message=result.message,
+        attachmentFileCount=result.attachments.file_count,
+        contentFileCount=result.files.file_count,
     )
 
 
