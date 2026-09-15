@@ -1,0 +1,33 @@
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 260px;
+}
+
+.chart-container.chart-tall {
+  height: 320px;
+}
+
+.chart-container.chart-short {
+  height: 220px;
+}
+
+.nav-tabs .nav-link {
+  cursor: pointer;
+  color: #6c757d;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.nav-tabs .nav-link.active {
+  color: var(--bs-primary, #0d6efd);
+  border-bottom-color: var(--bs-primary, #0d6efd);
+  background: transparent;
+}
+
+.nav-tabs .nav-link:hover:not(.active) {
+  color: #495057;
+  border-bottom-color: #dee2e6;
+}

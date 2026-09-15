@@ -3215,13 +3215,13 @@ onReviewPanelDragEnd(): void {
     } else if (filesInScope && preview && preview.fitsInBudget) {
       fileBudgetHtml = `
         <div class="alert alert-success text-start small mt-3 mb-0">
-          <i class="feather icon-check-circle"></i> File migration budget check passed —
+          <i class="feather icon-check-circle"></i> File migration limit check passed —
           ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance for Data Migration.
         </div>`;
     } else if (filesInScope && this.isCheckingFileMigrationBudget) {
       fileBudgetHtml = `
         <div class="alert alert-secondary text-start small mt-3 mb-0">
-          Still checking the file migration API budget in the background — this run will still
+          Still checking the file migration API Limit in the background — this run will still
           be guarded live during the file transfer step regardless.
         </div>`;
     }
@@ -3284,13 +3284,6 @@ onReviewPanelDragEnd(): void {
     this.scheduleFileMigrationBudgetRecheck();
   }
 
-  /**
-   * Single funnel for "something that changes what the file migration would
-   * actually touch just changed" -- called on checkbox toggle, query edits,
-   * and time-filter changes (manual dates, clear, quick-range presets, field
-   * switch). Debounced so rapid edits (typing in Monaco, dragging a date)
-   * don't fire a request per keystroke.
-   */
   private scheduleFileMigrationBudgetRecheck(): void {
     if (this.fileMigrationBudgetPreviewDebounce) {
       clearTimeout(this.fileMigrationBudgetPreviewDebounce);
@@ -3303,8 +3296,7 @@ onReviewPanelDragEnd(): void {
       return;
     }
 
-    // Mark stale immediately so the banner doesn't keep showing numbers for
-    // the query/filter state that just changed while the new check runs.
+
     this.fileMigrationBudgetPreview = null;
 
     this.fileMigrationBudgetPreviewDebounce = setTimeout(() => {
@@ -3342,7 +3334,7 @@ onReviewPanelDragEnd(): void {
       error: (err) => {
         this.fileMigrationBudgetPreview = null;
         this.fileMigrationBudgetPreviewError =
-          err?.error?.detail || 'Could not check the API budget for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
+          err?.error?.detail || 'Could not check the API Limit for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
         this.isCheckingFileMigrationBudget = false;
         this.cdr.detectChanges();
       }
@@ -3562,7 +3554,7 @@ onReviewPanelDragEnd(): void {
             parts.push(`Files: ${r.filesSuccess} ok / ${r.filesError} failed`);
           }
           if (r.deferredRecordCount > 0) {
-            parts.push(`${r.deferredRecordCount} record(s) deferred (API budget)`);
+            parts.push(`${r.deferredRecordCount} record(s) deferred (API Limit)`);
           }
           if (parts.length) {
             this.logMessages = [...this.logMessages, `[${r.targetObject}] ${parts.join(' \u00b7 ')}`];

@@ -1166,7 +1166,7 @@
               @if (isCheckingFileMigrationBudget) {
                 <div class="small text-muted d-flex align-items-center gap-2">
                   <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                  Checking today's API budget for this file migration...
+                  Checking today's API limit for this file migration...
                 </div>
               } @else if (fileMigrationBudgetPreviewError) {
                 <div class="small text-muted">
@@ -1193,7 +1193,7 @@
               } @else if (fileMigrationBudgetPreview && fileMigrationBudgetPreview.fitsInBudget) {
                 <div class="alert alert-success py-2 px-3 small mb-0">
                   <i class="feather icon-check-circle"></i>
-                  API budget check passed — ~{{ fileMigrationBudgetPreview.estimatedTotalCalls | number }}
+                  API limit check passed — ~{{ fileMigrationBudgetPreview.estimatedTotalCalls | number }}
                   call(s) needed for ~{{ fileMigrationBudgetPreview.totalFileCount | number }} file(s),
                   well within today's allowance.
                 </div>
