@@ -92,11 +92,7 @@ async def estimate_file_migration(payload: FileMigrationEstimateRequest, current
 
 
 # =========================================================
-# PRE-FLIGHT PREVIEW -- runs the moment the person opts into file migration,
-# BEFORE the migration job starts. Purely informational: the authoritative
-# live guard still runs inside the actual migration (migration_routes.py's
-# resolve_file_migration_scope), since record counts and org usage can shift
-# between this call and the real run.
+# PRE-FLIGHT PREVIEW 
 # =========================================================
 class FileMigrationPrecheckRequest(BaseModel):
     sourceObject: str

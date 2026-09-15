@@ -196,10 +196,10 @@ class FileMigrationEstimator:
         total_file_count = attachments_est.file_count + files_est.file_count
         total_bytes = attachments_est.total_bytes + files_est.total_bytes
 
-        # Download: 1 REST call per file (source org) -- no bulk/batch binary-download endpoint exists.
+        # Download: 1 REST call per file (source org)
         estimated_download_calls = total_file_count
 
-        # Upload: Bulk ZIP batches (target org), bounded by the migrator's byte/row caps.
+        # Upload: Bulk ZIP batches (target org),
         migrator_bytes_cap = SalesforceFileMigrator.MAX_BULK_BATCH_BYTES
         migrator_rows_cap = SalesforceFileMigrator.MAX_BULK_BATCH_ROWS
         batches_by_bytes = math.ceil(total_bytes / migrator_bytes_cap) if total_bytes else 0
@@ -270,9 +270,7 @@ class FileMigrationEstimator:
         return ids[:safe_record_count], ids[safe_record_count:]
 
     # ==========================================
-    # PRE-FLIGHT PREVIEW (informational, runs BEFORE the migration starts --
-    # NOT a replacement for the live mid-run guard in migration_routes.py,
-    # which still uses fresh numbers right before any download/upload call)
+    # PRE-FLIGHT PREVIEW
     # ==========================================
     async def _fetch_ids_for_query(
         self, client, source_creds: dict, user_id: str, obj_name: str, query: str,
@@ -303,9 +301,7 @@ class FileMigrationEstimator:
             soql = clean_query
             if time_clause:
                 soql = merge_time_clause(soql, time_clause, where_kw="WHERE", and_kw="AND")
-            # Pre-check only needs Id -- collapse whatever SELECT list is there
-            # down to Id-only rather than pulling every mapped field just to
-            # count records.
+
             soql = re.sub(r'(?is)^select\s+.+?\s+from', 'SELECT Id FROM', soql, count=1)
         else:
             where_parts = []

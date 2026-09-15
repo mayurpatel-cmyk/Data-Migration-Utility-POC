@@ -2,6 +2,7 @@ import base64
 import asyncio
 import csv
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -55,6 +56,7 @@ class SalesforceFileMigrator:
     MAX_INLINE_BYTES = 25 * 1024 * 1024
     MAX_BULK_BATCH_BYTES = 4_500_000
     MAX_BULK_BATCH_ROWS = 2000
+    MAX_MULTIPART_BYTES = 2 * 1024 * 1024 * 1024
 
     def __init__(self, api_usage_safety_threshold: float = 0.90):
         self.api_usage_safety_threshold = api_usage_safety_threshold
@@ -272,6 +274,55 @@ class SalesforceFileMigrator:
             fh.write(blob)
         return path, len(blob)
 
+    async def download_body_to_disk_streamed(
+        self, client, creds, user_id, record_id: str, kind: str, staging_dir: str, send_log
+    ) -> Tuple[str, int]:
+        """
+        Streaming counterpart to download_body_to_disk, used automatically
+        (see _migrate_attachments/_migrate_content_files) once a record's
+        already-known size (BodyLength for Attachment, ContentSize for
+        ContentVersion) crosses MAX_INLINE_BYTES. download_body/
+        download_body_to_disk buffer the whole blob into `res.content`
+        before writing it out at all -- fine for small files, but with
+        download concurrency of 6 that's up to 6x the blob size resident in
+        memory at once, which is how a handful of large files can exhaust
+        memory well before hitting any Salesforce limit. This writes the
+        response to disk chunk-by-chunk via httpx's streaming API instead.
+
+        download_body and download_body_to_disk are unchanged and remain
+        the path for every file at or under MAX_INLINE_BYTES.
+        """
+        instance = creds.get("instance_url", "").rstrip('/')
+        if kind == "attachment":
+            url = f"{instance}/services/data/{self.API_VERSION}/sobjects/Attachment/{record_id}/Body"
+        else:
+            url = f"{instance}/services/data/{self.API_VERSION}/sobjects/ContentVersion/{record_id}/VersionData"
+
+        path = os.path.join(staging_dir, f"{kind}_{record_id}_{uuid.uuid4().hex[:8]}.bin")
+
+        async def _stream(bearer_token: str) -> Tuple[int, int]:
+            headers = {"Authorization": f"Bearer {bearer_token}"}
+            bytes_written = 0
+            async with client.stream("GET", url, headers=headers) as res:
+                if res.status_code == 401:
+                    return 401, 0
+                res.raise_for_status()
+                self._enforce_api_limit(res, send_log)
+                with open(path, "wb") as fh:
+                    async for chunk in res.aiter_bytes(chunk_size=1024 * 1024):
+                        fh.write(chunk)
+                        bytes_written += len(chunk)
+            return res.status_code, bytes_written
+
+        status, size = await _stream(creds.get("access_token"))
+        if status == 401:
+            await send_log(f"[Files] Source session expired mid-download (streamed). Refreshing token...")
+            new_token = await CrmService.refresh_crm_token(user_id, "salesforce", "source")
+            creds["access_token"] = new_token
+            status, size = await _stream(new_token)
+
+        return path, size
+
     # ==========================================
     # UPLOAD -- REST strategy
     # ==========================================
@@ -312,6 +363,89 @@ class SalesforceFileMigrator:
         }
         url = f"{instance}/services/data/{self.API_VERSION}/sobjects/ContentVersion/"
         res = await self._authed_request(client, "POST", url, creds, user_id, "target", send_log, json=payload)
+
+        if res.status_code == 201:
+            return True, res.json().get("id")
+        return False, res.text
+
+    # ==========================================
+    # UPLOAD -- multipart/form-data strategy (blobs over MAX_INLINE_BYTES)
+    # ==========================================
+    async def _upload_blob_multipart(
+        self, client, creds, user_id, role: str, url: str, entity_content: dict,
+        blob_field: str, file_path: str, filename: str, content_type: str, send_log,
+    ):
+        async def _send(bearer_token: str):
+            with open(file_path, "rb") as fh:
+                files = {
+                    "entity_content": (None, json.dumps(entity_content), "application/json"),
+                    blob_field: (filename, fh, content_type or "application/octet-stream"),
+                }
+                headers = {"Authorization": f"Bearer {bearer_token}"}
+                return await client.post(url, headers=headers, files=files)
+
+        res = await _send(creds.get("access_token"))
+
+        if res.status_code == 401:
+            await send_log(f"[Files] {role.capitalize()} session expired mid-transfer (multipart). Refreshing token...")
+            new_token = await CrmService.refresh_crm_token(user_id, "salesforce", role)
+            creds["access_token"] = new_token
+            res = await _send(new_token)
+
+        self._enforce_api_limit(res, send_log)
+        return res
+
+    async def upload_attachment_multipart(
+        self, client, creds, user_id, new_parent_id: str, name: str, content_type: str,
+        file_path: str, size: int, send_log,
+    ):
+        instance = creds.get("instance_url", "").rstrip('/')
+
+        if size > self.MAX_MULTIPART_BYTES:
+            msg = (
+                f"'{name}' is {size / 1e9:.2f}GB, over the "
+                f"{self.MAX_MULTIPART_BYTES / 1e9:.0f}GB multipart upload ceiling."
+            )
+            await send_log(f"[Attachment SKIPPED] {msg}")
+            return False, msg
+
+        entity_content = {
+            "ParentId": new_parent_id,
+            "Name": name,
+            "ContentType": content_type or "application/octet-stream",
+        }
+        url = f"{instance}/services/data/{self.API_VERSION}/sobjects/Attachment/"
+        res = await self._upload_blob_multipart(
+            client, creds, user_id, "target", url, entity_content, "Body", file_path, name, content_type, send_log
+        )
+
+        if res.status_code == 201:
+            return True, res.json().get("id")
+        return False, res.text
+
+    async def upload_file_multipart(
+        self, client, creds, user_id, new_parent_id: str, name: str, file_path: str, size: int, send_log,
+    ):
+        instance = creds.get("instance_url", "").rstrip('/')
+
+        if size > self.MAX_MULTIPART_BYTES:
+            msg = (
+                f"'{name}' is {size / 1e9:.2f}GB, over the "
+                f"{self.MAX_MULTIPART_BYTES / 1e9:.0f}GB multipart upload ceiling."
+            )
+            await send_log(f"[File SKIPPED] {msg}")
+            return False, msg
+
+        entity_content = {
+            "Title": name,
+            "PathOnClient": name,
+            "FirstPublishLocationId": new_parent_id,
+        }
+        url = f"{instance}/services/data/{self.API_VERSION}/sobjects/ContentVersion/"
+        res = await self._upload_blob_multipart(
+            client, creds, user_id, "target", url, entity_content, "VersionData",
+            file_path, name, "application/octet-stream", send_log,
+        )
 
         if res.status_code == 201:
             return True, res.json().get("id")
@@ -629,9 +763,16 @@ class SalesforceFileMigrator:
                     )
                     return
                 try:
-                    path, size = await self.download_body_to_disk(
-                        client, source_creds, user_id, att["Id"], "attachment", staging_dir, send_log
-                    )
+
+                    known_size = att.get("BodyLength") or 0
+                    if known_size > self.MAX_INLINE_BYTES:
+                        path, size = await self.download_body_to_disk_streamed(
+                            client, source_creds, user_id, att["Id"], "attachment", staging_dir, send_log
+                        )
+                    else:
+                        path, size = await self.download_body_to_disk(
+                            client, source_creds, user_id, att["Id"], "attachment", staging_dir, send_log
+                        )
                     downloaded.append({
                         "SourceId": att["Id"], "ParentId": new_parent,
                         "Name": att.get("Name", "attachment"), "ContentType": att.get("ContentType"),
@@ -658,11 +799,18 @@ class SalesforceFileMigrator:
     async def _upload_attachments_rest(self, client, target_creds, user_id, downloaded, send_log, semaphore, checkpoint, results):
         async def upload_one(item):
             async with semaphore:
-                with open(item["BodyPath"], "rb") as fh:
-                    blob = fh.read()
-                ok, info = await self.upload_attachment(
-                    client, target_creds, user_id, item["ParentId"], item["Name"], item["ContentType"], blob, send_log
-                )
+
+                if item["Size"] > self.MAX_INLINE_BYTES:
+                    ok, info = await self.upload_attachment_multipart(
+                        client, target_creds, user_id, item["ParentId"], item["Name"],
+                        item["ContentType"], item["BodyPath"], item["Size"], send_log
+                    )
+                else:
+                    with open(item["BodyPath"], "rb") as fh:
+                        blob = fh.read()
+                    ok, info = await self.upload_attachment(
+                        client, target_creds, user_id, item["ParentId"], item["Name"], item["ContentType"], blob, send_log
+                    )
                 if ok:
                     results["attachments"]["success"] += 1
                     await checkpoint.mark("attachment", item["SourceId"])
@@ -718,9 +866,16 @@ class SalesforceFileMigrator:
                     )
                     return
                 try:
-                    path, size = await self.download_body_to_disk(
-                        client, source_creds, user_id, f["ContentVersionId"], "file", staging_dir, send_log
-                    )
+
+                    known_size = f.get("ContentSize") or 0
+                    if known_size > self.MAX_INLINE_BYTES:
+                        path, size = await self.download_body_to_disk_streamed(
+                            client, source_creds, user_id, f["ContentVersionId"], "file", staging_dir, send_log
+                        )
+                    else:
+                        path, size = await self.download_body_to_disk(
+                            client, source_creds, user_id, f["ContentVersionId"], "file", staging_dir, send_log
+                        )
                     downloaded.append({
                         "SourceId": f["ContentVersionId"], "ParentId": new_parent,
                         "Name": f.get("Name", "file"), "VersionDataPath": path, "Size": size,
@@ -746,9 +901,16 @@ class SalesforceFileMigrator:
     async def _upload_files_rest(self, client, target_creds, user_id, downloaded, send_log, semaphore, checkpoint, results):
         async def upload_one(item):
             async with semaphore:
-                with open(item["VersionDataPath"], "rb") as fh:
-                    blob = fh.read()
-                ok, info = await self.upload_file(client, target_creds, user_id, item["ParentId"], item["Name"], blob, send_log)
+
+                if item["Size"] > self.MAX_INLINE_BYTES:
+                    ok, info = await self.upload_file_multipart(
+                        client, target_creds, user_id, item["ParentId"], item["Name"],
+                        item["VersionDataPath"], item["Size"], send_log
+                    )
+                else:
+                    with open(item["VersionDataPath"], "rb") as fh:
+                        blob = fh.read()
+                    ok, info = await self.upload_file(client, target_creds, user_id, item["ParentId"], item["Name"], blob, send_log)
                 if ok:
                     results["files"]["success"] += 1
                     await checkpoint.mark("file", item["SourceId"])
