@@ -1,8 +1,8 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, inject, Injector, NgZone, afterNextRender, signal, computed } from '@angular/core';
 import { CommonModule, DatePipe, TitleCasePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
-import { Chart, registerables } from 'chart.js';
+import { Chart, ChartConfiguration, registerables } from 'chart.js';
 import {
   MigrationApiService,
   MigrationHistoryRecord,
@@ -15,6 +15,14 @@ Chart.register(...registerables);
 
 type HistoryTab = 'migrations' | 'validations';
 
+interface KpiCard {
+  icon: string;
+  label: string;
+  value: string;
+  sublabel: string;
+  accent: 'primary' | 'success' | 'danger' | 'info' | 'warning';
+}
+
 @Component({
   selector: 'app-migration-history',
   standalone: true,
@@ -25,6 +33,9 @@ type HistoryTab = 'migrations' | 'validations';
 })
 export class MigrationHistoryComponent implements OnInit, OnDestroy {
   private migrationApi = inject(MigrationApiService);
+  private titleCasePipe = inject(TitleCasePipe);
+  private injector = inject(Injector);
+  private zone = inject(NgZone);
 
   @ViewChild('trendCanvas') trendCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('objectCanvas') objectCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -35,17 +46,78 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   private objectChart?: Chart;
   private pathwayChart?: Chart;
   private errorChart?: Chart;
+  private pendingChartFrame?: number;
 
-  activeTab: HistoryTab = 'migrations';
+  // ==========================================
+  // REACTIVE STATE
+  // ==========================================
+  activeTab = signal<HistoryTab>('migrations');
 
-  migrationLogs: MigrationHistoryRecord[] = [];
-  validationLogs: ValidationHistoryRecord[] = [];
-  analytics: AnalyticsSummary | null = null;
+  migrationLogs = signal<MigrationHistoryRecord[]>([]);
+  validationLogs = signal<ValidationHistoryRecord[]>([]);
+  analytics = signal<AnalyticsSummary | null>(null);
 
-  isLoading = true;
-  isAnalyticsLoading = true;
-  errorMessage: string | null = null;
-  analyticsErrorMessage: string | null = null;
+  isLoading = signal(true);
+  isAnalyticsLoading = signal(true);
+  errorMessage = signal<string | null>(null);
+  analyticsErrorMessage = signal<string | null>(null);
+  lastUpdated = signal<Date | null>(null);
+
+  readonly kpiCards = computed<KpiCard[]>(() => {
+    const analytics = this.analytics();
+    if (!analytics) return [];
+    const o = analytics.overview;
+    return [
+      {
+        icon: 'icon-upload-cloud',
+        label: 'Migrations Run',
+        value: `${o.totalMigrations}`,
+        sublabel: `${o.totalRecordsMigrated.toLocaleString()} records total`,
+        accent: 'primary',
+      },
+      {
+        icon: 'icon-check-circle',
+        label: 'Success Rate',
+        value: `${o.successRate}%`,
+        sublabel: `${o.totalSuccess.toLocaleString()} succeeded`,
+        accent: 'success',
+      },
+      {
+        icon: 'icon-alert-circle',
+        label: 'Failed Records',
+        value: `${o.totalErrors.toLocaleString()}`,
+        sublabel: 'across all migrations',
+        accent: 'danger',
+      },
+      {
+        icon: 'icon-check-square',
+        label: 'Validation Runs',
+        value: `${o.totalValidationRuns}`,
+        sublabel: `${o.totalValidated.toLocaleString()} records checked`,
+        accent: 'info',
+      },
+      {
+        icon: 'icon-shield',
+        label: 'Validation Pass Rate',
+        value: `${o.validationPassRate}%`,
+        sublabel: `${o.totalInvalid.toLocaleString()} invalid found`,
+        accent: 'primary',
+      },
+      {
+        icon: 'icon-copy',
+        label: 'Duplicates Caught',
+        value: `${o.totalDuplicates.toLocaleString()}`,
+        sublabel: 'during validation',
+        accent: 'warning',
+      },
+    ];
+  });
+
+  readonly hasChartData = computed<boolean>(() => {
+    const a = this.analytics();
+    if (!a) return false;
+    return a.trend.length > 0 || a.byObject.length > 0 || a.byPathway.length > 0 || a.topErrors.length > 0;
+  });
 
   readonly availableCRMs = [
     { id: 'zendesk', name: 'Zendesk' },
@@ -57,11 +129,28 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
 
   filters: HistoryFilters = {};
 
+  private readonly crmColorMap: Record<string, string> = {
+    salesforce: '#00A1E0',
+    zendesk: '#17494D',
+    hubspot: '#FF7A59',
+    zoho: '#E42527',
+    csv: '#6c757d',
+  };
+
+  private readonly chartPalette = [
+    '#0d6efd', '#198754', '#fd7e14', '#6f42c1',
+    '#20c997', '#dc3545', '#ffc107', '#0dcaf0',
+    '#6610f2', '#d63384',
+  ];
+
   ngOnInit(): void {
     this.fetchAll();
   }
 
   ngOnDestroy(): void {
+    if (this.pendingChartFrame !== undefined) {
+      cancelAnimationFrame(this.pendingChartFrame);
+    }
     this.destroyCharts();
   }
 
@@ -74,41 +163,53 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   }
 
   fetchHistory(): void {
-    this.isLoading = true;
-    this.errorMessage = null;
+    this.isLoading.set(true);
+    this.errorMessage.set(null);
 
     forkJoin({
       migrations: this.migrationApi.getMigrationHistory(this.filters),
       validations: this.migrationApi.getValidationHistory(this.filters),
     }).subscribe({
       next: ({ migrations, validations }) => {
-        this.migrationLogs = migrations.history || [];
-        this.validationLogs = validations.history || [];
-        this.isLoading = false;
+        this.migrationLogs.set(migrations.history || []);
+        this.validationLogs.set(validations.history || []);
+        this.isLoading.set(false);
+        this.lastUpdated.set(new Date());
       },
       error: (err) => {
         console.error('Failed to load history', err);
-        this.errorMessage = 'Unable to load audit logs. Please try again later.';
-        this.isLoading = false;
+        this.errorMessage.set('Unable to load audit logs. Please try again later.');
+        this.isLoading.set(false);
       }
     });
   }
 
   fetchAnalytics(): void {
-    this.isAnalyticsLoading = true;
-    this.analyticsErrorMessage = null;
+    this.isAnalyticsLoading.set(true);
+    this.analyticsErrorMessage.set(null);
 
     this.migrationApi.getAnalyticsSummary(this.filters).subscribe({
       next: (res) => {
-        this.analytics = res;
-        this.isAnalyticsLoading = false;
+        this.analytics.set(res);
+        this.isAnalyticsLoading.set(false);
 
-        setTimeout(() => this.renderCharts(), 0);
+        afterNextRender(
+          () => this.zone.runOutsideAngular(() => {
+            if (this.pendingChartFrame !== undefined) {
+              cancelAnimationFrame(this.pendingChartFrame);
+            }
+            this.pendingChartFrame = requestAnimationFrame(() => {
+              this.pendingChartFrame = undefined;
+              this.renderCharts();
+            });
+          }),
+          { injector: this.injector }
+        );
       },
       error: (err) => {
         console.error('Failed to load analytics summary', err);
-        this.analyticsErrorMessage = 'Unable to load analytics right now.';
-        this.isAnalyticsLoading = false;
+        this.analyticsErrorMessage.set('Unable to load analytics right now.');
+        this.isAnalyticsLoading.set(false);
       }
     });
   }
@@ -123,7 +224,7 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   }
 
   setTab(tab: HistoryTab): void {
-    this.activeTab = tab;
+    this.activeTab.set(tab);
   }
 
   // ==========================================
@@ -137,6 +238,10 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
     if (crm === 'zoho') return 'icon-layout text-info';
     if (crm === 'csv') return 'icon-file-text text-secondary';
     return 'icon-database text-dark';
+  }
+
+  getCrmColor(crmName: string | null | undefined): string {
+    return this.crmColorMap[(crmName || '').toLowerCase()] || '#6c757d';
   }
 
   topErrorCategories(summary: { category: string; count: number }[] | null | undefined, limit = 2): string {
@@ -156,103 +261,162 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   }
 
   private renderCharts(): void {
-    if (!this.analytics) return;
+    const analytics = this.analytics();
+    if (!analytics) return;
     this.destroyCharts();
-    this.renderTrendChart();
-    this.renderObjectChart();
-    this.renderPathwayChart();
-    this.renderErrorChart();
+    this.renderTrendChart(analytics);
+    this.renderObjectChart(analytics);
+    this.renderPathwayChart(analytics);
+    this.renderErrorChart(analytics);
   }
 
-  private renderTrendChart(): void {
+  private renderTrendChart(analytics: AnalyticsSummary): void {
     const canvas = this.trendCanvasRef?.nativeElement;
-    if (!canvas || !this.analytics) return;
-    const trend = this.analytics.trend;
+    if (!canvas) return;
+    const trend = analytics.trend;
+    if (trend.length === 0) return;
 
-    this.trendChart = new Chart(canvas, {
+    const config: ChartConfiguration<'line'> = {
       type: 'line',
       data: {
         labels: trend.map(t => t.date),
         datasets: [
-          { label: 'Migrated (Success)', data: trend.map(t => t.success), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.1)', tension: 0.3 },
-          { label: 'Migrated (Errors)', data: trend.map(t => t.errors), borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.1)', tension: 0.3 },
-          { label: 'Validated (Valid)', data: trend.map(t => t.valid), borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.1)', tension: 0.3, borderDash: [5, 4] },
-          { label: 'Validated (Invalid)', data: trend.map(t => t.invalid), borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.1)', tension: 0.3, borderDash: [5, 4] },
+          { label: 'Migrated (Success)', data: trend.map(t => t.success), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.12)', tension: 0.3, fill: true, pointRadius: 2 },
+          { label: 'Migrated (Errors)', data: trend.map(t => t.errors), borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.08)', tension: 0.3, fill: true, pointRadius: 2 },
+          { label: 'Validated (Valid)', data: trend.map(t => t.valid), borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius: 2 },
+          { label: 'Validated (Invalid)', data: trend.map(t => t.invalid), borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius: 2 },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom' } },
-        scales: { y: { beginAtZero: true } },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
+          tooltip: { padding: 10, boxPadding: 4 },
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 10, autoSkip: true }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
       },
-    });
+    };
+
+    this.trendChart = new Chart(canvas, config);
   }
 
-  private renderObjectChart(): void {
+  private renderObjectChart(analytics: AnalyticsSummary): void {
     const canvas = this.objectCanvasRef?.nativeElement;
-    if (!canvas || !this.analytics) return;
-    const rows = this.analytics.byObject.slice(0, 8);
+    if (!canvas) return;
+    const rows = analytics.byObject.slice(0, 8);
+    if (rows.length === 0) return;
 
-    this.objectChart = new Chart(canvas, {
+    const config: ChartConfiguration<'bar'> = {
       type: 'bar',
       data: {
         labels: rows.map(r => r.object),
         datasets: [
-          { label: 'Success', data: rows.map(r => r.success), backgroundColor: '#198754' },
-          { label: 'Errors', data: rows.map(r => r.errors), backgroundColor: '#dc3545' },
+          { label: 'Success', data: rows.map(r => r.success), backgroundColor: '#198754', borderRadius: 4 },
+          { label: 'Errors', data: rows.map(r => r.errors), backgroundColor: '#dc3545', borderRadius: 4 },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' } },
-        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
+          tooltip: { padding: 10, boxPadding: 4 },
+        },
+        scales: {
+          x: { stacked: true, grid: { display: false }, ticks: { autoSkip: false, maxRotation: 40, minRotation: 0 } },
+          y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } },
+        },
       },
-    });
+    };
+
+    this.objectChart = new Chart(canvas, config);
   }
 
-  private renderPathwayChart(): void {
+  private renderPathwayChart(analytics: AnalyticsSummary): void {
     const canvas = this.pathwayCanvasRef?.nativeElement;
-    if (!canvas || !this.analytics) return;
-    const rows = this.analytics.byPathway;
+    if (!canvas) return;
+    const rows = analytics.byPathway;
+    if (rows.length === 0) return;
 
-    this.pathwayChart = new Chart(canvas, {
+    const total = rows.reduce((sum, r) => sum + r.totalRecords, 0);
+
+    const config: ChartConfiguration<'doughnut'> = {
       type: 'doughnut',
       data: {
-        labels: rows.map(r => `${r.sourceCrm} \u2192 ${r.targetCrm}`),
+        labels: rows.map(r => `${this.titleCasePipe.transform(r.sourceCrm)} \u2192 ${this.titleCasePipe.transform(r.targetCrm)}`),
         datasets: [{
           data: rows.map(r => r.totalRecords),
-          backgroundColor: ['#0d6efd', '#198754', '#fd7e14', '#6f42c1', '#20c997', '#dc3545', '#ffc107', '#6c757d'],
+          backgroundColor: rows.map((_, i) => this.chartPalette[i % this.chartPalette.length]),
+          borderWidth: 2,
+          borderColor: '#ffffff',
+          hoverOffset: 6,
         }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' } },
+        cutout: '62%',
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
+          tooltip: {
+            padding: 10,
+            boxPadding: 4,
+            callbacks: {
+              label: (ctx) => {
+                const value = (ctx.parsed as number) ?? 0;
+                const pct = total ? ((value / total) * 100).toFixed(1) : '0.0';
+                return `${ctx.label}: ${value.toLocaleString()} records (${pct}%)`;
+              },
+            },
+          },
+        },
       },
-    });
+    };
+
+    this.pathwayChart = new Chart(canvas, config);
   }
 
-  private renderErrorChart(): void {
+  private renderErrorChart(analytics: AnalyticsSummary): void {
     const canvas = this.errorCanvasRef?.nativeElement;
-    if (!canvas || !this.analytics) return;
-    const rows = this.analytics.topErrors;
+    if (!canvas) return;
+    const rows = analytics.topErrors;
+    if (rows.length === 0) return;
 
-    this.errorChart = new Chart(canvas, {
+    const config: ChartConfiguration<'bar'> = {
       type: 'bar',
       data: {
         labels: rows.map(r => r.category),
-        datasets: [{ label: 'Occurrences', data: rows.map(r => r.count), backgroundColor: '#dc3545' }],
+        datasets: [{ label: 'Occurrences', data: rows.map(r => r.count), backgroundColor: '#dc3545', borderRadius: 4, maxBarThickness: 28 }],
       },
       options: {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { beginAtZero: true } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            padding: 10,
+            boxPadding: 4,
+            callbacks: {
+              afterLabel: (ctx) => {
+                const sample = rows[ctx.dataIndex]?.sample;
+                return sample ? `e.g. "${sample}"` : '';
+              },
+            },
+          },
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0 }, grid: { display: false } },
+          y: { grid: { display: false } },
+        },
       },
-    });
+    };
+
+    this.errorChart = new Chart(canvas, config);
   }
 }
