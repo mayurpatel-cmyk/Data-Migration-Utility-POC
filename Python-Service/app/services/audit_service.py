@@ -26,11 +26,6 @@ class AuditService:
     # ==========================================
     @staticmethod
     def categorize_error(error_message: str) -> str:
-        """Buckets a raw CRM/validation error string into a coarse category
-        for the analytics dashboard. Falls back to 'Other API Error' when
-        nothing recognizable matches -- that bucket is still surfaced in
-        the summary so it's obvious how much error volume is
-        uncategorized, rather than silently dropped."""
         msg = (error_message or "").lower()
         for category, keywords in ERROR_CATEGORIES:
             if any(kw in msg for kw in keywords):
@@ -39,14 +34,6 @@ class AuditService:
 
     @staticmethod
     def build_error_summary(error_data: list, top_n: int = 8) -> list:
-        """Turns a flat error list (each item shaped like
-        {"record": {...}, "error": "<message>"}) into a small, storable
-        summary: category + count + one representative sample message,
-        sorted by count descending and capped at top_n categories. Extra
-        volume beyond top_n is folded into a single 'Other' rollup so the
-        JSON stays small enough to store inline on the migration_history /
-        validation_history row -- the dashboard reads this column directly
-        instead of re-parsing the full error CSV on every page load."""
         if not error_data:
             return []
 
@@ -72,27 +59,74 @@ class AuditService:
         return summary
 
     # ==========================================
-    # SHARED CSV UPLOAD HELPER
+    # PDF TEXT SANITIZATION
     # ==========================================
     @staticmethod
-    def _upload_csv(rows: list, fieldnames: list, storage_path: str, bucket: str = "migration_reports") -> str:
-        """Writes rows to a temp CSV and uploads it to the given Supabase
-        Storage bucket/path, returning its public URL. Shared by the
-        migration and validation report paths so the upload/cleanup dance
-        only lives in one place."""
-        tmp_path = os.path.join(tempfile.gettempdir(), os.path.basename(storage_path))
-        with open(tmp_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+    def _sanitize_pdf_text(text) -> str:
+        """FPDF's core fonts (Arial/Helvetica/Times/Courier) only support
+        latin-1. Any character outside that range -- curly quotes, em/en
+        dashes, non-Latin scripts in a CRM error message or a Zoho/HubSpot
+        object label -- either raises inside fpdf2 or writes corrupt bytes
+        on classic PyFPDF, producing a PDF the browser can't parse at all.
+        Replacing common "smart" punctuation with ASCII equivalents first
+        keeps normal error text readable; anything left outside latin-1
+        after that gets replaced with '?' rather than crashing report
+        generation entirely."""
+        if text is None:
+            return ""
+        s = str(text)
+        replacements = {
+            "\u2018": "'", "\u2019": "'",   # ' '
+            "\u201c": '"', "\u201d": '"',   # " "
+            "\u2013": "-", "\u2014": "-",   # – —
+            "\u2026": "...",                 # …
+            "\u00a0": " ",                   # nbsp
+        }
+        for src, dst in replacements.items():
+            s = s.replace(src, dst)
+        return s.encode("latin-1", "replace").decode("latin-1")
 
-        with open(tmp_path, "rb") as f:
+    # ==========================================
+    # SHARED STORAGE UPLOAD HELPER
+    # ==========================================
+    @staticmethod
+    def _upload_file(local_path: str, storage_path: str, content_type: str, disposition: str, bucket: str = "migration_reports") -> str:
+        """Single upload path for both PDF and CSV so the
+        content-type/content-disposition logic can't drift out of sync
+        between the two again. `disposition` is either 'inline' (render in
+        browser -- PDFs) or 'attachment' (force download -- CSVs)."""
+        filename = os.path.basename(storage_path)
+        with open(local_path, "rb") as f:
             supabase.storage.from_(bucket).upload(
                 storage_path,
                 f,
-                file_options={"x-upsert": "true"}
+                file_options={
+                    "x-upsert": "true",
+                    "content-type": content_type,
+                    "content-disposition": f'{disposition}; filename="{filename}"',
+                }
             )
-        url = supabase.storage.from_(bucket).get_public_url(storage_path)
+        return supabase.storage.from_(bucket).get_public_url(storage_path)
+
+    @staticmethod
+    def _upload_csv(rows: list, fieldnames: list, storage_path: str, bucket: str = "migration_reports") -> str:
+        """'utf-8-sig' writes a UTF-8 BOM, which is what makes Excel
+        auto-detect the encoding and render special characters correctly
+        instead of showing mojibake or dumping everything into column A."""
+        filename = os.path.basename(storage_path)
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
+
+        with open(tmp_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        url = AuditService._upload_file(
+            tmp_path, storage_path,
+            content_type="text/csv; charset=utf-8",
+            disposition="attachment",   # CSVs always download straight to Excel
+            bucket=bucket,
+        )
         os.remove(tmp_path)
         return url
 
@@ -111,35 +145,36 @@ class AuditService:
         # ==========================================
         # 1. GENERATE & UPLOAD PDF SUMMARY
         # ==========================================
+        s = AuditService._sanitize_pdf_text
+
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=16, style="B")
-        pdf.cell(200, 10, txt="Migration Audit Report", ln=True, align='C')
+        pdf.cell(200, 10, txt=s("Migration Audit Report"), ln=True, align="C")
         pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=f"Session ID: {session_id}", ln=True)
-        pdf.cell(200, 10, txt=f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}", ln=True)
-        pdf.cell(200, 10, txt=f"Object: {target_object}", ln=True)
-        pdf.cell(200, 10, txt=f"Successful Records: {success_count}", ln=True)
-        pdf.cell(200, 10, txt=f"Failed Records: {error_count}", ln=True)
+        pdf.cell(200, 10, txt=s(f"Session ID: {session_id}"), ln=True)
+        pdf.cell(200, 10, txt=s(f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}"), ln=True)
+        pdf.cell(200, 10, txt=s(f"Object: {target_object}"), ln=True)
+        pdf.cell(200, 10, txt=s(f"Successful Records: {success_count}"), ln=True)
+        pdf.cell(200, 10, txt=s(f"Failed Records: {error_count}"), ln=True)
 
         if error_summary:
             pdf.ln(4)
             pdf.set_font("Arial", size=13, style="B")
-            pdf.cell(200, 10, txt="Top Error Categories", ln=True)
+            pdf.cell(200, 10, txt=s("Top Error Categories"), ln=True)
             pdf.set_font("Arial", size=11)
             for item in error_summary:
-                pdf.cell(200, 8, txt=f"- {item['category']}: {item['count']}", ln=True)
+                pdf.cell(200, 8, txt=s(f"- {item['category']}: {item['count']}"), ln=True)
 
         temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}.pdf")
         pdf.output(temp_pdf)
 
-        with open(temp_pdf, "rb") as f:
-            supabase.storage.from_("migration_reports").upload(
-                f"{user_id}/{session_id}.pdf",
-                f,
-                file_options={"x-upsert": "true"}
-            )
-        urls["pdf"] = supabase.storage.from_("migration_reports").get_public_url(f"{user_id}/{session_id}.pdf")
+        pdf_filename = f"{session_id}.pdf"
+        urls["pdf"] = AuditService._upload_file(
+            temp_pdf, f"{user_id}/{pdf_filename}",
+            content_type="application/pdf",
+            disposition="inline",   
+        )
         os.remove(temp_pdf)
 
         # ==========================================
@@ -203,17 +238,6 @@ class AuditService:
         invalid_records: list,
         auth_token: str,
     ):
-        """Persists a validation run (initial or re-validation) so it shows
-        up permanently in History & Analytics instead of only existing in
-        the temporary staging SQLite DB, which gets cleaned up after a few
-        hours. Writes the FULL invalid-record set (not just the 500-row UI
-        preview) to a CSV in Supabase Storage, and upserts one row per
-        session_id -- re-validating the same session overwrites its
-        previous snapshot rather than creating a duplicate history entry.
-
-        `invalid_records` is expected in the shape used elsewhere in this
-        codebase: [{"originalRow": {...}, "errors": "<message>"}, ...]
-        """
         invalid_csv_url = None
         error_like = [{"record": rec.get("originalRow", {}), "error": rec.get("errors", "")} for rec in invalid_records]
         error_summary = AuditService.build_error_summary(error_like)

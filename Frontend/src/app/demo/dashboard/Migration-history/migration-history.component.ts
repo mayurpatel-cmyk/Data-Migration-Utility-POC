@@ -175,6 +175,7 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
         this.validationLogs.set(validations.history || []);
         this.isLoading.set(false);
         this.lastUpdated.set(new Date());
+        this.reinitIcons();
       },
       error: (err) => {
         console.error('Failed to load history', err);
@@ -225,6 +226,7 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
 
   setTab(tab: HistoryTab): void {
     this.activeTab.set(tab);
+    this.reinitIcons();
   }
 
   // ==========================================
@@ -244,9 +246,43 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
     return this.crmColorMap[(crmName || '').toLowerCase()] || '#6c757d';
   }
 
+
+  getCrmBadgeStyle(crmName: string | null | undefined): { [klass: string]: string } {
+    const hex = this.getCrmColor(crmName);
+    const { r, g, b } = this.hexToRgb(hex);
+    return {
+      'background-color': `rgba(${r}, ${g}, ${b}, 0.12)`,
+      'color': hex,
+      'border': `1px solid rgba(${r}, ${g}, ${b}, 0.35)`,
+    };
+  }
+
+  private hexToRgb(hex: string): { r: number; g: number; b: number } {
+    const clean = hex.replace('#', '');
+    const bigint = parseInt(clean, 16);
+    return { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255 };
+  }
+
+  successPct(successCount: number, totalRecords: number): number {
+    if (!totalRecords) return 0;
+    return Math.round((successCount / totalRecords) * 100);
+  }
+
   topErrorCategories(summary: { category: string; count: number }[] | null | undefined, limit = 2): string {
     if (!summary || summary.length === 0) return '';
     return summary.slice(0, limit).map(s => `${s.category} (${s.count})`).join(', ');
+  }
+
+  private reinitIcons(): void {
+    afterNextRender(
+      () => this.zone.runOutsideAngular(() => {
+        const featherLib = (window as any).feather;
+        if (featherLib && typeof featherLib.replace === 'function') {
+          featherLib.replace();
+        }
+      }),
+      { injector: this.injector }
+    );
   }
 
   // ==========================================
