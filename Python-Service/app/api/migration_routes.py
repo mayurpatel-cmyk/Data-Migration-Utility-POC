@@ -15,8 +15,11 @@ from app.services.migrators.zoho_migrator import ZohoMigrator
 from app.services.migrators.zendesk_migrator import ZendeskMigrator
 from app.services.migrators.hubspot_migrator import HubspotMigrator
 from app.services.migrators.salesforce_file_migrator import SalesforceFileMigrator
+from app.services.file_migration_estimator import FileMigrationEstimator
 from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
+from app.services.field_access_utils import find_non_writable_mapped_fields
+from app.services.id_mapping_service import IdMappingService
 
 import uuid
 import sqlite3
@@ -30,6 +33,8 @@ from fastapi.responses import StreamingResponse
 
 import re
 
+from app.services.staging_cleanup_service import cleanup_stale_staging_databases, DEFAULT_MAX_AGE_HOURS
+
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
 
@@ -42,6 +47,8 @@ MIGRATORS = {
 
 # Files/Attachments migration is Salesforce -> Salesforce only
 FILE_MIGRATOR = SalesforceFileMigrator()
+FILE_MIGRATION_ESTIMATOR = FileMigrationEstimator()
+FILE_MIGRATION_DEFAULT_SAFETY_THRESHOLD = 0.90
 
 _SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
@@ -101,6 +108,99 @@ def sort_jobs_by_dependency(jobs):
     for job in jobs: visit(job)
     return sorted_jobs + pass3_jobs
 
+
+# ==========================================
+# FILE/ATTACHMENT MIGRATION API-BUDGET GATE
+# ==========================================
+async def resolve_file_migration_scope(
+    websocket: WebSocket, client, source_creds, target_creds, user_id: str,
+    job_id_map: dict, target_object: str, job_index: int,
+    migrate_attachments: bool, migrate_files: bool, send_log,
+) -> dict:
+    """
+    Runs the pre-flight API budget estimate for this job's file/attachment pass and,
+    if it doesn't fit the current daily allocation on either org, pauses the websocket
+    and waits for the client to acknowledge a decision before any download/upload call
+    is made. Returns the (possibly reduced) job_id_map to actually migrate, or an
+    empty dict if the user chose to skip.
+    """
+    await send_log(f"[{target_object}] Calculating file migration API budget...")
+
+    try:
+        estimate = await FILE_MIGRATION_ESTIMATOR.estimate(
+            client, source_creds, target_creds, user_id, list(job_id_map.keys()),
+            migrate_attachments, migrate_files, send_log,
+            safety_threshold=FILE_MIGRATION_DEFAULT_SAFETY_THRESHOLD,
+        )
+    except Exception as e:
+        await send_log(
+            f"[{target_object}] Could not calculate API budget ({str(e)}) -- "
+            f"proceeding without a pre-flight estimate."
+        )
+        return job_id_map
+
+    if estimate.fits_in_budget:
+        await send_log(
+            f"[{target_object}] Budget check passed: ~{estimate.estimated_total_calls:,} API calls "
+            f"needed for {estimate.total_file_count:,} file(s), well within today's allocation."
+        )
+        return job_id_map
+
+    job_ref = f"{target_object}#{job_index}"
+    await websocket.send_json({
+        "status": "AwaitingFileMigrationApproval",
+        "log": f"[{target_object}] {estimate.message}",
+        "fileMigrationBudget": {
+            "jobRef": job_ref,
+            "targetObject": target_object,
+            "message": estimate.message,
+            "bindingOrg": estimate.binding_org,
+            "estimatedDownloadCalls": estimate.estimated_download_calls,
+            "estimatedUploadCalls": estimate.estimated_upload_calls,
+            "estimatedTotalCalls": estimate.estimated_total_calls,
+            "totalRecordCount": estimate.total_record_count,
+            "safeRecordCount": estimate.safe_record_count,
+            "totalFileCount": estimate.total_file_count,
+            "safeFileCount": estimate.safe_file_count,
+            "sourceAvailable": estimate.source_budget.available_calls,
+            "targetAvailable": estimate.target_budget.available_calls,
+        },
+    })
+
+    decision_msg = await websocket.receive_json()
+    decision = (decision_msg.get("fileMigrationDecision") or {})
+    action = decision.get("action")
+    matched_ref = decision.get("jobRef")
+
+    if matched_ref and matched_ref != job_ref:
+        await send_log(
+            f"[{target_object}] File migration decision did not match the pending job "
+            f"(expected '{job_ref}', got '{matched_ref}') -- skipping this pass for safety."
+        )
+        return {}
+
+    if action == "proceed_limited":
+        included_ids, excluded_ids = FILE_MIGRATION_ESTIMATOR.select_batch_within_budget(
+            list(job_id_map.keys()), estimate.safe_record_count
+        )
+        await send_log(
+            f"[{target_object}] Proceeding with {len(included_ids):,} of {len(job_id_map):,} record(s) "
+            f"({len(excluded_ids):,} deferred to a future run once the daily allocation resets)."
+        )
+        return {oid: job_id_map[oid] for oid in included_ids}
+
+    elif action == "proceed_full":
+        await send_log(
+            f"[{target_object}] Proceeding with the FULL scope despite exceeding the estimated safe "
+            f"budget, per explicit user override. This may hit Salesforce's daily API limit mid-run."
+        )
+        return job_id_map
+
+    else:
+        await send_log(f"[{target_object}] File migration skipped for this pass by user decision.")
+        return {}
+
+
 # ==========================================
 # CORE MIGRATION ROUTE
 # ==========================================
@@ -143,7 +243,7 @@ async def websocket_migration(websocket: WebSocket):
         async with httpx.AsyncClient(timeout=120.0) as client:
             all_success_data, all_error_data, all_skipped_data = [], [], []
 
-            for job in execution_queue:
+            for job_index, job in enumerate(execution_queue):
                 target_object = job.get("targetObject")
                 source_object = job.get("sourceObject", "")
                 extraction_query = job.get("extractionQuery", "").strip()
@@ -162,6 +262,22 @@ async def websocket_migration(websocket: WebSocket):
                     )
                 
                 if not mappings: continue
+
+                sf_rules = job.get("sfRules", {})
+                fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+                if fls_violations:
+                    await websocket.send_json({
+                        "log": f"[{target_object}] FATAL: {len(fls_violations)} mapped field(s) can't be "
+                               f"written by the connected {target_crm.capitalize()} user "
+                               f"({', '.join(v['label'] for v in fls_violations)}). Remove them from the "
+                               f"mapping (or connect a user with field-level write access) and re-validate "
+                               f"before running.",
+                        "status": "Failed",
+                        "fieldAccessErrors": fls_violations
+                    })
+                    await websocket.close()
+                    return
+
                 source_records = []
 
                 session_id = job.get("sessionId")
@@ -181,6 +297,15 @@ async def websocket_migration(websocket: WebSocket):
                 else:
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
                     source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+
+                source_instance = (source_creds or {}).get("instance_url") or (source_creds or {}).get("api_domain") or (source_creds or {}).get("subdomain")
+                target_instance = target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain")
+
+                await IdMappingService.remap_reference_fields(
+                    source_records, mappings, user_id, source_crm, target_crm,
+                    source_instance=source_instance, target_instance=target_instance, send_log=send_log
+                )
+
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,
                     "token": target_creds.get("access_token"), "instance_url": target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain"),
@@ -240,6 +365,20 @@ async def websocket_migration(websocket: WebSocket):
                     p_load = PayloadBuilderService.build_payload(source_records, mappings, {"targetObject": target_object, "targetExtIdField": ext_id_field, "excludeReferencesTo": job.get("deferReferencesTo", []), "operationMode": op_mode}, target_crm)
                     await dedupe_and_execute(p_load, op_mode, "Standard Sync")
 
+    
+                job_success_records = all_success_data[job_success_start_idx:]
+                job_id_map = {
+                    (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
+                    for rec in job_success_records
+                    if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
+                }
+                if job_id_map:
+                    saved_count = IdMappingService.save_mappings(
+                        user_id, source_crm, target_crm, target_object, list(job_id_map.items()),
+                        source_instance=source_instance, target_instance=target_instance
+                    )
+                    await send_log(f"[{target_object}] Saved {saved_count} source->target Id mapping(s) for future reference lookups.")
+
                 # ==========================================
                 # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
                 # ==========================================
@@ -248,31 +387,31 @@ async def websocket_migration(websocket: WebSocket):
                         await send_log(f"[{target_object}] File migration skipped for this pass (reference patch pass, not the primary sync).")
                     elif source_crm != "salesforce" or target_crm != "salesforce":
                         await send_log(f"[{target_object}] File migration skipped: only Salesforce -> Salesforce is supported right now (got {source_crm} -> {target_crm}).")
+                    elif not job_id_map:
+                        await send_log(
+                            f"[{target_object}] File migration skipped: no source Id was found on synced records. "
+                            f"Sample record keys: {list(job_success_records[0].keys()) if job_success_records else 'N/A'}"
+                        )
                     else:
-                        job_success_records = all_success_data[job_success_start_idx:]
-                        await send_log(f"[{target_object}] {len(job_success_records)} record(s) synced this pass, checking for Id/Target_Id to build the file map...")
-                        
-                        id_map = {
-                            (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
-                            for rec in job_success_records
-                            if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
-                        }
-                        
-                        if not id_map:
-                            await send_log(
-                                f"[{target_object}] File migration skipped: no source Id was found on synced records. "
-                                f"Sample record keys: {list(job_success_records[0].keys()) if job_success_records else 'N/A'}"
-                            )
+                        scoped_id_map = await resolve_file_migration_scope(
+                            websocket, client, source_creds, target_creds, user_id,
+                            job_id_map, target_object, job_index,
+                            migrate_attachments, migrate_files, send_log,
+                        )
+
+                        if not scoped_id_map:
+                            await send_log(f"[{target_object}] No records in scope for file migration -- skipping this pass.")
                         else:
-                            await send_log(f"[{target_object}] Starting file/attachment migration for {len(id_map)} synced record(s)...")
+                            await send_log(f"[{target_object}] Starting file/attachment migration for {len(scoped_id_map)} synced record(s)...")
                             file_results = await FILE_MIGRATOR.migrate_files_for_batch(
-                                client, source_creds, target_creds, user_id, id_map,
+                                client, source_creds, target_creds, user_id, scoped_id_map,
                                 migrate_attachments, migrate_files, send_log
                             )
                             await send_log(
                                 f"[{target_object}] Files complete — "
                                 f"Attachments: {file_results['attachments']['success']} ok / {file_results['attachments']['error']} failed, "
                                 f"Files: {file_results['files']['success']} ok / {file_results['files']['error']} failed."
+                                + (" (Stopped early: daily API limit reached.)" if file_results.get("apiLimitReached") else "")
                             )
             await websocket.send_json({"log": f"QUEUE COMPLETE! Building final payload...", "status": "Processing"})
             
@@ -413,6 +552,18 @@ async def websocket_validate_stream(websocket: WebSocket):
             sf_rules = payload.get("sfRules", {})
             target_crm = payload.get("targetCrmId", "salesforce").lower()
             time_filter = payload.get("migrationTimeFilter")
+            op_mode = payload.get("operationMode", "insert")
+
+            fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+            if fls_violations:
+                await websocket.send_json({
+                    "log": f"Field-Level Access Denied: {len(fls_violations)} mapped field(s) can't be "
+                           f"written by the connected {target_crm.capitalize()} user.",
+                    "status": "Validation Failed",
+                    "fieldAccessErrors": fls_violations
+                })
+                await websocket.close()
+                return
 
             await websocket.send_json({"log": "System: Re-validating UI fixes...", "status": "Validating"})
 
@@ -464,6 +615,18 @@ async def websocket_validate_stream(websocket: WebSocket):
         dedupe_key = payload.get("dedupeKey", "")
         sf_rules = payload.get("sfRules", {})
         time_filter = payload.get("migrationTimeFilter")
+        op_mode = payload.get("operationMode", "insert")
+
+        fls_violations = find_non_writable_mapped_fields(mappings, sf_rules, op_mode)
+        if fls_violations:
+            await websocket.send_json({
+                "log": f"Field-Level Access Denied: {len(fls_violations)} mapped field(s) can't be "
+                       f"written by the connected {target_crm.capitalize()} user.",
+                "status": "Validation Failed",
+                "fieldAccessErrors": fls_violations
+            })
+            await websocket.close()
+            return
 
         source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
         source_migrator = MIGRATORS.get(source_crm)
@@ -492,7 +655,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                     await send_log("No records found matching criteria.", "Validation Passed")
                     await websocket.close()
                     return
-
+                
                 # 2. BATCH VALIDATE AND DB INSERTION
                 chunks = list(chunk_dataset(raw_records, 1000))
                 for chunk in chunks:
@@ -627,3 +790,13 @@ async def get_crm_object_count(
             count = await _fetch(new_token)
             return {"count": count}
         raise e
+
+
+@router.post("/api/admin/staging/cleanup")
+async def trigger_staging_cleanup(
+    max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+    current_user = Depends(get_current_user)
+):
+    if max_age_hours <= 0:
+        raise HTTPException(status_code=400, detail="max_age_hours must be positive.")
+    return cleanup_stale_staging_databases(max_age_hours=max_age_hours)

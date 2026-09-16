@@ -81,7 +81,9 @@ class CrmMetadataService:
                         "referenceTo": f.get("referenceTo") if f.get("referenceTo") else None,
                         "externalId": f.get("externalId", False),
                         "unique": f.get("unique", False),
-                        "idLookup": f.get("idLookup", False)
+                        "idLookup": f.get("idLookup", False),
+                        "createable": f.get("createable", False),
+                        "updateable": f.get("updateable", False)
                     })
 
                 sample_fields = select_fields_list[:15]
@@ -190,7 +192,9 @@ class CrmMetadataService:
                                     "isRequired": f.get("required", False) or f.get("required_in_portal", False),
                                     "custom": is_custom,
                                     "referenceTo": None,
-                                    "externalId": api_name in ("id", "external_id") or (api_name == "email" and singular_name == "user")
+                                    "externalId": api_name in ("id", "external_id") or (api_name == "email" and singular_name == "user"),
+                                    "createable": True,
+                                    "updateable": True
                                 }
                                 
                     # 2. Fetch Sample Data
@@ -214,7 +218,9 @@ class CrmMetadataService:
                                         "name": k, "label": k.replace("_", " ").title(), "type": field_type,
                                         "isRequired": False,
                                         "custom": False, "referenceTo": None,
-                                        "externalId": k in ("id", "external_id")
+                                        "externalId": k in ("id", "external_id"),
+                                        "createable": k != "id",
+                                        "updateable": k != "id"
                                     }
                         sample_records.append(flat_rec)
 
@@ -237,7 +243,9 @@ class CrmMetadataService:
                                 "custom": True,
                                 "referenceTo": None,
                                 "externalId": api_name in ("id", "external_id"),
-                                "unique": False
+                                "unique": False,
+                                "createable": True,
+                                "updateable": True
                             }
                             
                     # 2. Fetch Sample Data using the modern records endpoint
@@ -267,7 +275,9 @@ class CrmMetadataService:
                                 schema_fields_map[k] = {
                                     "name": k, "label": k.replace("_", " ").title(), "type": field_type,
                                     "isRequired": k == "id", "custom": False, "referenceTo": None,
-                                    "externalId": k in ("id", "external_id")
+                                    "externalId": k in ("id", "external_id"),
+                                    "createable": k not in ("id", "created_at", "updated_at"),
+                                    "updateable": k not in ("id", "created_at", "updated_at")
                                 }
                         sample_records.append(flat_rec)
 
@@ -369,13 +379,18 @@ class CrmMetadataService:
                     if not api_name.startswith("$") and f.get("data_type") not in dangerous_zoho_types:
                         select_fields_list.append(api_name)
 
+                    zoho_view_type = f.get("view_type") or {}
+                    zoho_is_read_only = f.get("read_only", False)
+
                     parsed_fields.append({
                         "name": api_name,
                         "label": f["field_label"],
                         "type": type_mapping.get(f["data_type"], "string"),
                         "isRequired": f.get("system_mandatory", False) or f.get("required", False),
                         "unique": f.get("unique") is not None,
-                        "externalId": api_name == "id"
+                        "externalId": api_name == "id",
+                        "createable": zoho_view_type.get("create", True) and not zoho_is_read_only,
+                        "updateable": zoho_view_type.get("edit", True) and not zoho_is_read_only
                     })
 
                 # 2. Fetch Sample Data
@@ -494,7 +509,8 @@ class CrmMetadataService:
                         
                     api_name = f.get("name")
                     select_fields_list.append(api_name)
-                    
+                    hs_read_only = (f.get("modificationMetadata") or {}).get("readOnlyValue", False)
+
                     parsed_fields.append({
                         "name": api_name,
                         "label": f.get("label"),
@@ -503,7 +519,9 @@ class CrmMetadataService:
                         "custom": not f.get("hubspotDefined", True),
                         "referenceTo": f.get("referencedObjectType"),
                         "unique": f.get("hasUniqueValue", False),
-                        "externalId": api_name in ("hs_object_id", "id")
+                        "externalId": api_name in ("hs_object_id", "id"),
+                        "createable": not hs_read_only,
+                        "updateable": not hs_read_only
                     })
 
 

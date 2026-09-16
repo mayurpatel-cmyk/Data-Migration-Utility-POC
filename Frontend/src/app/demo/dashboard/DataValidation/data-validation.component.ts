@@ -634,6 +634,20 @@ export class DataValidationComponent implements OnInit {
     this.cdr.detectChanges();
   }
 
+  // Cancel: remove this field from mapping entirely (mirrors the API mapping screen's removeMapping action).
+  // CSV columns can't be deleted from the grid, so "removing" a mapping here means excluding it from the
+  // migration entirely, the same way unchecking the CSV Header checkbox does.
+  removeMapping(mapping: any) {
+    mapping.isActive = false;
+    mapping.sfField = '';
+    mapping._mappedBy = undefined;
+    mapping.parentObjectName = undefined;
+    mapping.relationalExtIdField = '';
+    mapping.isDropdownOpen = false;
+    this.mappings = [...this.mappings];
+    this.cdr.detectChanges();
+  }
+
   clearAllMappings() {
     Swal.fire({
       title: 'Are you sure?',

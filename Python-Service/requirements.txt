@@ -1,5 +1,5 @@
 fastapi>=0.100.0
-uvicorn>=0.23.0
+uvicorn==0.27.0.post1
 pandas>=2.0.0
 numpy>=1.24.0
 pycountry>=22.3.5
@@ -8,8 +8,8 @@ python-multipart>=0.0.6
 httpx>=0.24.0
 python-dotenv>=1.0.0
 gunicorn==21.2.0
-uvicorn==0.27.0.post1
-supabase>=2.3.4
+supabase>=2.9.0,<3.0.0
 websockets>=12.0
 pip-system-certs>=4.0
 fpdf2>=2.8.7
+certifi>=2024.2.2

@@ -182,7 +182,6 @@ class CrmQueryService:
                         safe_fields = headers_list[:40] if headers_list else ["id"]
                         coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
                     else:
-                        # Floor-not-ceiling guarantee -- see query_field_utils.py.
                         coql_query = ensure_fields_selected(coql_query, headers_list)
                     if time_clause:
                         coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
@@ -361,7 +360,6 @@ class CrmQueryService:
 
         stripped = (query or "").strip()
 
-        # No filter at all -> the cheap unfiltered module total.
         if not stripped and not time_clause:
             url = f"{domain}/crm/v6/{obj_name}/actions/count"
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -370,8 +368,7 @@ class CrmQueryService:
                     raise HTTPException(status_code=400, detail=f"Zoho rejected count request: {res.text}")
                 return res.json().get("count", 0)
 
-        # Otherwise run a filtered COQL aggregate count so it matches the
-        # preview's record set exactly instead of the unfiltered module total.
+        
         if stripped.lower().startswith("select "):
             coql_query = re.sub(r'(?i)^select\s+.*?\s+from\s+', 'select COUNT(id) from ', stripped, count=1)
             coql_query = re.sub(r'(?i)\blimit\b\s+\d+', '', coql_query).strip()

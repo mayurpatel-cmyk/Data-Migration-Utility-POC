@@ -23,6 +23,13 @@ interface FieldMeta {
   externalId?: boolean;
   unique?: boolean;
   idLookup?: boolean;
+  createable?: boolean;
+  updateable?: boolean;
+}
+
+interface FieldAccessViolation {
+  targetField: string;
+  label: string;
 }
 
 interface MappingRow {
@@ -36,11 +43,48 @@ interface MappingRow {
   massUpdateValue?: string;
   _isAiProcessing?: boolean;
   _mappedBy?: 'rule' | 'ai';
+  _blockedTargetField?: string;
+  _blockedTargetLabel?: string;
 }
 
 interface CrmEntity {
   name: string;
   label: string;
+}
+
+interface FileMigrationBudget {
+  jobRef: string;
+  targetObject: string;
+  message: string;
+  bindingOrg: 'source' | 'target' | 'none';
+  estimatedDownloadCalls: number;
+  estimatedUploadCalls: number;
+  estimatedTotalCalls: number;
+  totalRecordCount: number;
+  safeRecordCount: number;
+  totalFileCount: number;
+  safeFileCount: number;
+  sourceAvailable: number;
+  targetAvailable: number;
+}
+
+type FileMigrationDecisionAction = 'proceed_limited' | 'proceed_full' | 'skip';
+
+interface FileMigrationBudgetPreview {
+  fitsInBudget: boolean;
+  bindingOrg: 'source' | 'target' | 'none';
+  sourceAvailable: number;
+  targetAvailable: number;
+  estimatedDownloadCalls: number;
+  estimatedUploadCalls: number;
+  estimatedTotalCalls: number;
+  totalRecordCount: number;
+  safeRecordCount: number;
+  totalFileCount: number;
+  safeFileCount: number;
+  message: string;
+  attachmentFileCount: number;
+  contentFileCount: number;
 }
 
 @Component({
@@ -62,7 +106,41 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private http = inject(HttpClient);
 
   private mappingCancel$ = new Subject<void>();
-  private lastLoadedTargetObject: string | null = null;
+
+  private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
+    'hs_object_id',
+    'url',
+    'createddate',
+    'lastmodifieddate',
+    'createdbyid',
+    'lastmodifiedbyid',
+    'systemmodstamp',
+    'isdeleted',
+    'hs_createdate',
+    'hs_lastmodifieddate',
+    'createdate',
+    'archived',
+    'created_at',
+    'updated_at',
+    'submitter_id',
+    'created_time',
+    'modified_time',
+    'created_by',
+    'modified_by',
+    '$state',
+    '$process_flow',
+    'createdat',
+    'updatedat',
+    'updateddate',
+    'deleted',
+    'ispartner',           // "Partner Account"
+    'iscustomerportal'     // "Customer Portal Account"
+  ]);
+
+  private isSystemManagedField(fieldName: string): boolean {
+    return this.SYSTEM_MANAGED_FIELDS.has((fieldName || '').toLowerCase());
+  }
+
   private isStandardZendeskObject(name: string): boolean {
     if (!name) return false;
     const std = ['tickets', 'users', 'organizations', 'groups', 'macros', 'triggers', 'views'];
@@ -125,6 +203,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   // Mapping Variables
   targetFields: FieldMeta[] = [];
+  parentFieldsCache: Record<string, FieldMeta[]> = {};
+  isLoadingParentFields = false;
   mappings: MappingRow[] = [];
   externalIdField = '';
   mappedCount = 0;
@@ -164,12 +244,20 @@ isProfileDropdownOpen = false;
   isMigrationFilterOpen = false;
 
   operationMode: string = 'insert';
+  private lastOperationMode: string = 'insert';
   batchSize: number = 5000;
   migrationQueue: any[] = [];
 
   // Files & Attachments (Salesforce -> Salesforce only)
   migrateAttachments = false;
   migrateFiles = false;
+  pendingFileMigrationBudget: FileMigrationBudget | null = null;
+
+  // Pre-flight (informational)
+  fileMigrationBudgetPreview: FileMigrationBudgetPreview | null = null;
+  isCheckingFileMigrationBudget = false;
+  fileMigrationBudgetPreviewError: string | null = null;
+  private fileMigrationBudgetPreviewDebounce: ReturnType<typeof setTimeout> | null = null;
 
   get isSalesforceToSalesforce(): boolean {
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
@@ -229,6 +317,11 @@ isProfileDropdownOpen = false;
     this.mappingCancel$.next();
     this.mappingCancel$.complete();
 
+    if (this.pendingFileMigrationBudget && this.migrationSocket) {
+      this.sendFileMigrationDecision(this.migrationSocket, this.pendingFileMigrationBudget.jobRef, 'skip');
+      this.pendingFileMigrationBudget = null;
+    }
+
     // 1. Kill active websockets
     this.closeSocket(this.validationSocket);
     this.closeSocket(this.migrationSocket);
@@ -262,6 +355,10 @@ isProfileDropdownOpen = false;
   resumeSession(sessionId: string, crm: string, object: string) {
     this.currentSessionId = sessionId;
     this.sourceCrmId = crm.toLowerCase();
+
+    if (this.selectedSourceObject !== object.toLowerCase()) {
+      this.resetMigrationTimeFilter();
+    }
     this.selectedSourceObject = object.toLowerCase();
 
     this.toastr.info(`Restoring previous session...`, 'Resuming');
@@ -419,6 +516,7 @@ get isMigrationFilterActive(): boolean {
 triggerLivePreview(): void {
   if (!this.validateDateRange()) return;
   this.applyFilter();
+  this.scheduleFileMigrationBudgetRecheck();
 }
 
 validateDateRange(): boolean {
@@ -472,6 +570,7 @@ clearDateRange(): void {
   this.activeQuickRangePreset = null;
   this.dateRangeError = null;
   this.applyFilter();
+  this.scheduleFileMigrationBudgetRecheck();
 }
 
 activeQuickRangePreset: string | null = null;
@@ -545,6 +644,7 @@ get isEligibleForTimeFilter(): boolean {
   onQueryEdited() {
     this.queryError = null;
     this.isDefaultQuery = false;
+    this.scheduleFileMigrationBudgetRecheck();
   }
 
   private getQueryFieldFilterSet(): Set<string> | null {
@@ -562,24 +662,25 @@ get isEligibleForTimeFilter(): boolean {
 
   get visibleMappings() {
     let filtered = this.mappings;
-
     const queryFieldSet = this.getQueryFieldFilterSet();
     if (queryFieldSet) {
       filtered = filtered.filter(
         (m) =>
+          m.isDropdownOpen ||
           queryFieldSet.has((m.sourceField || '').toLowerCase()) ||
           !!m.targetField 
       );
     }
 
     if (this.hideMappedFields) {
-      filtered = filtered.filter((m) => !m.targetField);
+      filtered = filtered.filter((m) => m.isDropdownOpen || !m.targetField);
     }
 
     if (this.mappingSearchQuery) {
       const query = this.mappingSearchQuery.toLowerCase().trim();
       filtered = filtered.filter(
         (m) =>
+          m.isDropdownOpen ||
           (m.sourceLabel && m.sourceLabel.toLowerCase().includes(query)) || (m.sourceField && m.sourceField.toLowerCase().includes(query))
       );
     }
@@ -958,10 +1059,119 @@ toggleProfileDropdown(event: Event): void {
     this.closeAllDropdowns();
   }
 
-  onOperationModeChange() {
-    if (this.operationMode === 'delete') {
-      this.externalIdField = '';
+  private readonly OPERATION_MODE_LABELS: Record<string, string> = {
+    insert: 'Insert',
+    update: 'Update',
+    upsert: 'Upsert',
+    delete: 'Delete'
+  };
+
+  async onOperationModeChange(): Promise<void> {
+    const newMode = this.operationMode;
+    const previousMode = this.lastOperationMode;
+
+    if (newMode === previousMode) {
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
+      this.updateMappedCount();
+      return;
     }
+
+    const mappedFieldCount = this.mappings.filter((m) => m.targetField !== '').length;
+
+    // Nothing mapped yet -- no decision to make, just switch.
+    if (mappedFieldCount === 0) {
+      this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
+      this.updateMappedCount();
+      return;
+    }
+
+    const previousLabel = this.OPERATION_MODE_LABELS[previousMode] || previousMode;
+    const newLabel = this.OPERATION_MODE_LABELS[newMode] || newMode;
+    const fieldWord = mappedFieldCount > 1 ? 'fields' : 'field';
+
+    const confirmResult = await Swal.fire({
+      title: `Switching to ${newLabel} Mode`,
+      html: `
+        <div class="text-start px-2">
+          <p class="mb-2">
+            You have <strong>${mappedFieldCount}</strong> mapped ${fieldWord} carried over from
+            <strong>${previousLabel}</strong> mode.
+          </p>
+          <p class="mb-0">
+            Keep using ${mappedFieldCount > 1 ? 'these mappings' : 'this mapping'} for
+            <strong>${newLabel}</strong>, or clear everything and remap them from scratch?
+          </p>
+        </div>
+      `,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#198754',
+      cancelButtonColor: '#dc3545',
+      confirmButtonText: `Yes, Keep My ${mappedFieldCount} Mapped ${fieldWord.charAt(0).toUpperCase() + fieldWord.slice(1)}`,
+      cancelButtonText: 'No, Clear Mapped Fields',
+      reverseButtons: true,
+      allowOutsideClick: true,
+      allowEscapeKey: true,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    });
+
+    if (confirmResult.isConfirmed) {
+      // Explicit "Yes, Keep My Mapped Fields" click -- switch mode, keep mappings.
+      this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
+
+      this.toastr.info(
+        `Keeping your mapped ${fieldWord} for ${newLabel} mode. Any without ${newMode === 'insert' ? 'create' : 'edit'} ` +
+        `access in ${this.targetSystem} will be auto-unmapped.`,
+        'Mappings Retained'
+      );
+    } else if (confirmResult.dismiss === Swal.DismissReason.cancel) {
+      // Explicit "No, Clear Mapped Fields" click -- switch mode, wipe mappings.
+      this.lastOperationMode = newMode;
+      if (newMode === 'delete') {
+        this.externalIdField = '';
+      }
+
+      this.mappings.forEach((m) => {
+        m.targetField = '';
+        m.relationalExtIdField = '';
+        delete m._mappedBy;
+        delete m._blockedTargetField;
+        delete m._blockedTargetLabel;
+      });
+      this.externalIdField = '';
+
+      this.toastr.info(
+        `Cleared ${mappedFieldCount} mapped ${fieldWord}. Map your fields for ${newLabel} mode and validate again.`,
+        'Mappings Cleared'
+      );
+    } else {
+      this.operationMode = previousMode;
+      this.toastr.info(
+        `Mode change cancelled -- staying on ${previousLabel} mode. Your mappings are unchanged.`,
+        'Cancelled'
+      );
+    }
+
+    this.updateMappedCount();
+    this.cdr.detectChanges();
+  }
+
+  onExternalIdFieldChange(): void {
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
+  }
+
+  onRelationalExtIdFieldChange(mapping: MappingRow): void {
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
   }
 
   closeAllDropdowns() {
@@ -1012,8 +1222,6 @@ startReviewPanelDrag(event: MouseEvent): void {
 onReviewPanelDrag(event: MouseEvent): void {
   if (!this.reviewPanelDragging) return;
 
-  // Keep at least a corner of the header reachable so a panel dragged to
-  // the edge can always be dragged back, instead of getting stuck off-screen.
   const margin = 60;
   const maxLeft = window.innerWidth - margin;
   const maxTop = window.innerHeight - margin;
@@ -1121,6 +1329,27 @@ onReviewPanelDragEnd(): void {
     return false;
   }
 
+  isLookupFieldMeta(field: FieldMeta | undefined | null): boolean {
+    if (!field) return false;
+
+    if (field.type === 'reference' || (field.referenceTo && field.referenceTo.length > 0)) {
+      return true;
+    }
+
+    if (field.idLookup) return true;
+
+    if (field.name && field.name.toLowerCase() !== 'id' && field.name.endsWith('Id')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  isLookupField(fieldName: string | undefined | null, side: 'source' | 'target'): boolean {
+    if (!fieldName) return false;
+    return this.isLookupFieldMeta(this.getFieldMeta(fieldName, side));
+  }
+
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
     if (!this.targetFields || this.targetFields.length === 0) return [];
@@ -1130,6 +1359,42 @@ onReviewPanelDragEnd(): void {
     const mappedFields = this.mappings.filter((m) => m.targetField !== '').map((m) => m.targetField);
 
     return requiredFields.filter((reqField) => !mappedFields.includes(reqField));
+  }
+
+  isFieldWritable(field: FieldMeta | undefined | null, mode: string = this.operationMode): boolean {
+    if (!field) return true;
+    if (mode === 'delete') return true;
+    const flag = mode === 'insert' ? field.createable : field.updateable;
+    return flag !== false;
+  }
+
+  private isSourceFieldWritable(field: FieldMeta | undefined | null): boolean {
+    if (!field) return true;
+    if (field.name?.toLowerCase() === 'id' || field.externalId || field.idLookup) return true;
+    return field.createable !== false || field.updateable !== false;
+  }
+
+  getFieldAccessViolations(): FieldAccessViolation[] {
+    if (this.operationMode === 'delete') return [];
+    if (!this.targetFields || this.targetFields.length === 0) return [];
+
+    const seen = new Set<string>();
+    const violations: FieldAccessViolation[] = [];
+
+    this.mappings.forEach((m) => {
+      if (!m.targetField || seen.has(m.targetField)) return;
+      const fieldMeta = this.targetFields.find((f) => f.name === m.targetField);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        seen.add(m.targetField);
+        violations.push({ targetField: m.targetField, label: fieldMeta.label });
+      }
+    });
+
+    return violations;
+  }
+
+  getFieldAccessViolationsLabel(): string {
+    return this.getFieldAccessViolations().map((v) => v.label).join(', ');
   }
 
   getIncompleteReferenceMappings(): string[] {
@@ -1143,14 +1408,35 @@ onReviewPanelDragEnd(): void {
   }
 
   selectField(mapping: any, fieldName: string) {
+    if (fieldName) {
+      const fieldMeta = this.targetFields.find((f) => f.name === fieldName);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        this.toastr.error(
+          `"${fieldMeta.label}" can't be mapped -- the connected ${this.targetSystem} user doesn't have field-level ` +
+          `${this.operationMode === 'insert' ? 'create' : 'edit'} access to it. Choose a different field, or connect ` +
+          `with a user that has write access to it.`,
+          'No Write Access'
+        );
+        mapping._blockedTargetField = fieldMeta.name;
+        mapping._blockedTargetLabel = fieldMeta.label;
+        mapping.isDropdownOpen = false;
+        return;
+      }
+    }
+
     mapping.targetField = fieldName;
     mapping.isDropdownOpen = false;
     delete mapping._mappedBy;
+    delete mapping._blockedTargetField;
+    delete mapping._blockedTargetLabel;
 
     if (this.isReferenceField(fieldName)) {
       mapping.relationalExtIdField = 'Id';
+      const fieldMeta = this.targetFields.find((f) => f.name === fieldName);
+      mapping.parentObjectName = fieldMeta?.referenceTo?.[0];
     } else {
       mapping.relationalExtIdField = undefined;
+      mapping.parentObjectName = undefined;
     }
 
     this.updateMappedCount();
@@ -1160,11 +1446,68 @@ onReviewPanelDragEnd(): void {
     return this.mappings.some((mapping) => mapping.targetField && this.isTypeMismatch(mapping));
   }
 
+  get validateBlockReason(): string | null {
+    if (this.getMissingRequiredFields().length > 0) {
+      return `Missing required field(s): ${this.getMissingRequiredFields().join(', ')}. Map them before validating.`;
+    }
+    if (this.getFieldAccessViolations().length > 0) {
+      const fieldList = this.getFieldAccessViolationsLabel();
+      return `Remove field(s) with no write access before validating: ${fieldList}.`;
+    }
+    if (this.hasActiveTypeMismatches()) {
+      return 'Fix the highlighted data-type mismatches before validating.';
+    }
+    return null;
+  }
+
+  onValidateClick(): void {
+    const reason = this.validateBlockReason;
+    if (reason) {
+      this.toastr.warning(reason, 'Validate Unavailable');
+      return;
+    }
+    this.validateData();
+  }
+
+  get runJobBlockReason(): string | null {
+    if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning') {
+      return 'Validate your mapping before running the migration.';
+    }
+    if (this.hasPendingEdits) {
+      return 'You have un-validated fixes in the grid. Click "Re-Validate Fixes" before running the migration.';
+    }
+    if (this.getMissingRequiredFields().length > 0) {
+      return `Missing required field(s): ${this.getMissingRequiredFields().join(', ')}. Map them before running.`;
+    }
+    if (this.getFieldAccessViolations().length > 0) {
+      const fieldList = this.getFieldAccessViolationsLabel();
+      return `Remove field(s) with no write access before running: ${fieldList}.`;
+    }
+    if (this.hasActiveTypeMismatches()) {
+      return 'Fix the highlighted data-type mismatches before running.';
+    }
+    return null;
+  }
+
+  onRunJobClick(): void {
+    const reason = this.runJobBlockReason;
+    if (reason) {
+      this.toastr.warning(reason, 'Run Job Unavailable');
+      return;
+    }
+    this.runMigration();
+  }
+
   getFilteredTargetFields(query: string | undefined, sourceFieldName: string): any[] {
     const claimedByOtherRows = new Set(
       this.mappings.filter((m) => m.sourceField !== sourceFieldName && m.targetField).map((m) => m.targetField)
     );
-    let filtered = this.targetFields.filter((t) => !claimedByOtherRows.has(t.name));
+    let filtered = this.targetFields.filter(
+      (t) =>
+        !claimedByOtherRows.has(t.name) &&
+        !this.isSystemManagedField(t.name) &&
+        this.isFieldWritable(t)
+    );
 
     if (this.isStrictMapping) {
       const sourceMeta = this.sourceFields.find((f) => f.name === sourceFieldName);
@@ -1204,12 +1547,115 @@ onReviewPanelDragEnd(): void {
     if (crm === 'zendesk') {
       return !!field.externalId;
     }
-    return field.name === 'Id' || !!field.externalId || !!field.idLookup;
+
+    return field.name === 'Id' || !!field.externalId || !!field.idLookup || !!field.unique;
   }
 
   getExternalIdEligibleFields(): FieldMeta[] {
     if (!this.targetFields) return [];
     return this.targetFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
+  // ==========================================================
+  // PARENT OBJECT EXTERNAL-ID MATCHING (manual/no-database approach)
+  // ==========================================================
+  private getAllReferencedParentObjects(): string[] {
+    const names = new Set<string>();
+    (this.targetFields || []).forEach((f) => {
+      if (f.type === 'reference' || (f.referenceTo && f.referenceTo.length > 0)) {
+        (f.referenceTo || []).forEach((r) => { if (r) names.add(r); });
+      }
+    });
+    return Array.from(names);
+  }
+
+  private prefetchParentFieldMetadata(): void {
+    const parentObjects = this.getAllReferencedParentObjects();
+    this.parentFieldsCache = {};
+
+    if (parentObjects.length === 0) {
+      this.isLoadingParentFields = false;
+      return;
+    }
+
+    this.isLoadingParentFields = true;
+    const requests: Record<string, any> = {};
+    parentObjects.forEach((name) => {
+      requests[name] = this.mappingApi.getFields(this.targetCrmId, name, 'target');
+    });
+
+    forkJoin(requests)
+      .pipe(takeUntil(this.mappingCancel$))
+      .subscribe({
+        next: (results: any) => {
+          parentObjects.forEach((name) => {
+            this.parentFieldsCache[name] = results[name]?.fields || [];
+          });
+          this.isLoadingParentFields = false;
+          this.cdr.detectChanges();
+        },
+        error: (err) => {
+          console.error('Failed to load parent object metadata for External ID matching:', err);
+          this.isLoadingParentFields = false;
+          this.toastr.warning(
+            'Could not load field metadata for one or more referenced objects (e.g. Account) -- ' +
+            'the "Match By" list may be incomplete. Reference fields will default to matching by Id.',
+            'Reference Metadata Failed'
+          );
+          this.cdr.detectChanges();
+        }
+      });
+  }
+
+  /** All object types a given mapping row's reference field can point at (usually 1; more for polymorphic fields). */
+  getReferenceParentCandidates(mapping: MappingRow): string[] {
+    const fieldMeta = this.targetFields.find((f) => f.name === mapping.targetField);
+    return fieldMeta?.referenceTo || [];
+  }
+
+  /** The parent object currently in effect for this mapping row -- the user's explicit pick, or the field's first/only referenceTo. */
+  getReferenceParentObjectName(mapping: MappingRow): string | undefined {
+    const candidates = this.getReferenceParentCandidates(mapping);
+    return mapping.parentObjectName || candidates[0];
+  }
+
+  /** External-ID-eligible fields on the PARENT object, for the "Match By" dropdown. */
+  getParentExternalIdFields(mapping: MappingRow): FieldMeta[] {
+    const parentName = this.getReferenceParentObjectName(mapping);
+    if (!parentName) return [];
+    const parentFields = this.parentFieldsCache[parentName] || [];
+    return parentFields.filter((f) => this.isExternalIdEligible(f));
+  }
+
+  getParentExternalIdOptions(mapping: MappingRow): FieldMeta[] {
+    const eligible = this.getParentExternalIdFields(mapping).map((f) => {
+
+      const isTrueExternalId = f.name === 'Id' || !!f.externalId || !!f.idLookup;
+      const tag = isTrueExternalId ? '' : ' -- Unique only, not flagged External ID';
+      return {
+        name: f.name,
+        label: `${f.label} (${f.name})${tag}`
+      };
+    });
+    const options: FieldMeta[] = [];
+
+    if (!eligible.some((f) => f.name.toLowerCase() === 'id')) {
+      options.push({ name: 'Id', label: 'Id (Record ID)' });
+    }
+    options.push(...eligible);
+
+    const current = mapping.relationalExtIdField;
+    if (current && !options.some((f) => f.name === current)) {
+      options.push({ name: current, label: `${current} (current selection)` });
+    }
+
+    return options;
+  }
+
+  onParentObjectChange(mapping: MappingRow): void {
+    mapping.relationalExtIdField = 'Id';
+    this.invalidateValidationOnMappingChange();
+    this.cdr.detectChanges();
   }
 
   toggleSourceDropdown(event: Event) {
@@ -1231,6 +1677,12 @@ onReviewPanelDragEnd(): void {
   }
 
   selectSourceEntity(entityName: string) {
+    if (this.selectedSourceObject !== entityName) {
+      this.resetMigrationTimeFilter();
+      this.fileMigrationBudgetPreview = null;
+      this.fileMigrationBudgetPreviewError = null;
+    }
+
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
 
@@ -1241,9 +1693,24 @@ onReviewPanelDragEnd(): void {
   }
 
   selectTargetObject(objName: string) {
+    if (this.selectedTargetObject !== objName) {
+      this.resetMigrationTimeFilter();
+    }
+
     this.selectedTargetObject = objName;
     this.isTargetDropdownOpen = false;
     this.loadMetadata();
+  }
+
+  private resetMigrationTimeFilter(): void {
+    this.migrationTimeFilter.startDate = '';
+    this.migrationTimeFilter.endDate = '';
+    this.migrationTimeFilter.field = this.timeFilterFieldOptions[0]?.value || '';
+    this.activeQuickRangePreset = null;
+    this.dateRangeError = null;
+    this.isMigrationFilterOpen = false;
+    this.previewRecords = [];
+    this.selectedSourceObjectCount = null;
   }
 
   private rankEntityMatches(entities: any[], query: string): any[] {
@@ -1801,9 +2268,6 @@ onReviewPanelDragEnd(): void {
     }
     this.cancelPendingMappingWork();
 
-    const targetObjectChanged = this.lastLoadedTargetObject !== this.selectedTargetObject;
-    this.lastLoadedTargetObject = this.selectedTargetObject;
-
     this.isLoading = true;
     this.cdr.detectChanges();
 
@@ -1815,7 +2279,10 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = sourceData.fields || [];
+          this.sourceFields = (sourceData.fields || []).filter(
+            (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
+          );
+          this.prefetchParentFieldMetadata();
 
           this.previewHeaders = sourceData.headers || [];
           this.previewRecords = sourceData.sampleRecords || [];
@@ -1826,7 +2293,7 @@ onReviewPanelDragEnd(): void {
             this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
           }
 
-          this.mappings = (sourceData.fields || []).map((field: FieldMeta) => ({
+          this.mappings = this.sourceFields.map((field: FieldMeta) => ({
             sourceField: field.name,
             sourceLabel: `${field.label} (${field.name})`,
             targetField: ''
@@ -1837,10 +2304,16 @@ onReviewPanelDragEnd(): void {
           this.reviewFilter = 'mapped';
           this.mappingSearchQuery = '';
 
-          if (targetObjectChanged) {
-            this.externalIdField = '';
-            this.validationResults = null;
-          }
+  
+          this.externalIdField = '';
+          this.jobStatus = 'Idle';
+          this.validationResults = null;
+          this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+          this.currentSessionId = '';
+          this.successData = [];
+          this.errorData = [];
+          this.skippedData = [];
+          this.isValidating = false;
 
           this.updateMappedCount();
           this.isLoading = false;
@@ -1872,6 +2345,8 @@ onReviewPanelDragEnd(): void {
     mapping.targetField = '';
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
+    delete mapping._blockedTargetField;
+    delete mapping._blockedTargetLabel;
     this.updateMappedCount();
   }
 
@@ -1885,6 +2360,8 @@ onReviewPanelDragEnd(): void {
       m.targetField = '';
       m.relationalExtIdField = '';
       delete m._mappedBy;
+      delete m._blockedTargetField;
+      delete m._blockedTargetLabel;
     });
 
     this.updateMappedCount();
@@ -1896,31 +2373,6 @@ onReviewPanelDragEnd(): void {
     this.isAutoMapping = true;
 
     let heuristicMatchCount = 0;
-    const restrictedTargetFields = [
-      'id',
-      'hs_object_id',
-      'createddate',
-      'lastmodifieddate',
-      'createdbyid',
-      'lastmodifiedbyid',
-      'systemmodstamp',
-      'hs_createdate',
-      'hs_lastmodifieddate',
-      'createdate',
-      'archived',
-      'created_at',
-      'updated_at',
-      'submitter_id',
-      'created_time',
-      'modified_time',
-      'created_by',
-      'modified_by',
-      '$state',
-      '$process_flow',
-      'createdat',
-      'updatedat',
-      'updateddate'
-    ];
 
     // =========================================================
     // PHASE 1: SYNCHRONOUS LOCAL TEXT MATCHING
@@ -1947,11 +2399,14 @@ onReviewPanelDragEnd(): void {
 
       let bestMatch: any = null;
       let highestScore = 0;
+      let bestBlockedMatch: any = null;
+      let highestBlockedScore = 0;
 
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
-        if (restrictedTargetFields.includes(tgtApiExact)) return;
+        if (this.isSystemManagedField(tgtApiExact)) return;
         if (claimedTargetFields.has(t.name)) return;
+        const fieldIsWritable = this.isFieldWritable(t);
 
         let score = 0;
         const tgtLabelExact = t.label.toLowerCase();
@@ -1989,9 +2444,12 @@ onReviewPanelDragEnd(): void {
           else if (isForgivingTypeMatch) score += 10;
         }
 
-        if (score > highestScore && score >= 50) {
+        if (score > highestScore && score >= 50 && fieldIsWritable) {
           highestScore = score;
           bestMatch = t;
+        } else if (score > highestBlockedScore && score >= 50 && !fieldIsWritable) {
+          highestBlockedScore = score;
+          bestBlockedMatch = t;
         }
       });
 
@@ -2002,7 +2460,12 @@ onReviewPanelDragEnd(): void {
           m.relationalExtIdField = 'Id';
         }
         m._mappedBy = 'rule';
+        delete m._blockedTargetField;
+        delete m._blockedTargetLabel;
         heuristicMatchCount++;
+      } else if (bestBlockedMatch) {
+        m._blockedTargetField = bestBlockedMatch['name'];
+        m._blockedTargetLabel = bestBlockedMatch['label'];
       }
     });
 
@@ -2092,15 +2555,27 @@ onReviewPanelDragEnd(): void {
                 );
  
                 const isStillValidTarget = backendMap.targetField && targetFieldsAtRequestTime.has(backendMap.targetField);
+                const suggestedFieldMeta = backendMap.targetField
+                  ? this.targetFields.find((f) => f.name === backendMap.targetField)
+                  : undefined;
+                const isWritable = this.isFieldWritable(suggestedFieldMeta);
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
                     localRow.relationalExtIdField = 'Id';
                   }
                   localRow._mappedBy = 'ai';
+                  delete localRow._blockedTargetField;
+                  delete localRow._blockedTargetLabel;
                   aiMatchCount++;
+                } else if (
+                  localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed &&
+                  !isWritable && suggestedFieldMeta
+                ) {
+                  localRow._blockedTargetField = suggestedFieldMeta.name;
+                  localRow._blockedTargetLabel = suggestedFieldMeta.label;
                 }
               });
             }
@@ -2125,11 +2600,20 @@ onReviewPanelDragEnd(): void {
 
             this.mappings.forEach((m) => (m._isAiProcessing = false));
             this.mappings = [...this.mappings];
+
+            if (typeof this.updateMappedCount === 'function') this.updateMappedCount();
             this.cdr.detectChanges();
+            this.reviewFilter = heuristicMatchCount > 0 ? 'mapped' : 'unmapped';
+            this.openReviewPanel();
 
             if (this.toastr) {
               if (error.status === 404) {
                 this.toastr.error('Backend endpoint not found (404).', 'Connection Error');
+              } else if (heuristicMatchCount > 0) {
+                this.toastr.warning(
+                  `The SureShift Agent connection was interrupted, but ${heuristicMatchCount} field(s) matched by rules were kept.`,
+                  'Incomplete'
+                );
               } else {
                 this.toastr.warning('The SureShift Agent connection was interrupted. Partial mappings saved.', 'Incomplete');
               }
@@ -2142,23 +2626,87 @@ onReviewPanelDragEnd(): void {
     });
   }
 
+  private readonly VALIDATION_LIVE_STATUSES = new Set(['Idle', 'Connecting...', 'Re-validating...', 'Initializing...']);
+
+  private invalidateValidationOnMappingChange(): void {
+    if (this.isValidating || this.VALIDATION_LIVE_STATUSES.has(this.jobStatus)) return;
+
+    this.jobStatus = 'Idle';
+    this.validationResults = null;
+    this.aggregateStats = { total: 0, valid: 0, invalid: 0, duplicates: 0 };
+    this.currentSessionId = '';
+    this.successData = [];
+    this.errorData = [];
+    this.skippedData = [];
+
+    this.toastr.info(
+      'Your mapping changed since the last validation run -- validate again before running the migration.',
+      'Re-Validation Required'
+    );
+  }
+
   updateMappedCount() {
+    this.invalidateValidationOnMappingChange();
+
     const validTargetFieldNames = new Set(this.targetFields.map((f) => f.name));
+    const autoUnmappedLabels: string[] = [];
+
     this.mappings.forEach((m) => {
-      if (m.targetField && !validTargetFieldNames.has(m.targetField)) {
+      if (!m.targetField) return;
+
+      if (!validTargetFieldNames.has(m.targetField)) {
         m.targetField = '';
         m.relationalExtIdField = '';
         delete m._mappedBy;
+        return;
+      }
+
+      const fieldMeta = this.targetFields.find((f) => f.name === m.targetField);
+      if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
+        autoUnmappedLabels.push(fieldMeta.label);
+        m.targetField = '';
+        m.relationalExtIdField = '';
+        delete m._mappedBy;
+        m._blockedTargetField = fieldMeta.name;
+        m._blockedTargetLabel = fieldMeta.label;
       }
     });
+
+    if (autoUnmappedLabels.length > 0) {
+      this.toastr.warning(
+        `Automatically unmapped ${autoUnmappedLabels.length} field(s) with no field-level write access for the ` +
+        `connected ${this.targetSystem} user (${this.operationMode.toUpperCase()} mode): ${autoUnmappedLabels.join(', ')}.`,
+        'Mapping Adjusted'
+      );
+    }
 
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
     this.cdr.detectChanges();
   }
 
+  isMappingBlockedByWriteAccess(mapping: MappingRow): boolean {
+    if (!mapping._blockedTargetField) return false;
+    const fieldMeta = this.targetFields.find((f) => f.name === mapping._blockedTargetField);
+    return !!fieldMeta && !this.isFieldWritable(fieldMeta);
+  }
+
   async validateData(isRevalidation: boolean = false, fixedRecords: any[] = []) {
     if (this.mappedCount === 0) {
       this.toastr.error('Validation Aborted: You must map at least one field to validate data.');
+      return;
+    }
+
+    const accessViolations = this.getFieldAccessViolations();
+    if (accessViolations.length > 0) {
+      this.jobStatus = 'Validation Failed';
+      const fieldList = accessViolations.map((v) => v.label).join(', ');
+      this.toastr.error(
+        `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. ` +
+        `Remove ${accessViolations.length > 1 ? 'these fields' : 'this field'} from the mapping, or connect ` +
+        `with a user that has field-level ${this.operationMode === 'insert' ? 'create' : 'edit'} rights, before validating.`,
+        'No Field-Level Write Access'
+      );
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
@@ -2287,6 +2835,7 @@ onReviewPanelDragEnd(): void {
       mappings: activeMappings,
       dedupeKey: this.externalIdField,
       sfRules: sfRules,
+      operationMode: this.operationMode,
       authToken: localStorage.getItem('supabase_token') || '',
       migrationTimeFilter: this.migrationTimeFilter
     };
@@ -2312,6 +2861,15 @@ onReviewPanelDragEnd(): void {
 
         if (data.status) {
           this.jobStatus = data.status;
+        }
+
+        if (data.fieldAccessErrors && data.fieldAccessErrors.length > 0) {
+          const fieldList = data.fieldAccessErrors.map((v: any) => v.label || v.field).join(', ');
+          this.toastr.error(
+            `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove them from the mapping and try again.`,
+            'No Field-Level Write Access'
+          );
+          this.isValidating = false;
         }
 
         if (data.stats) {
@@ -2397,6 +2955,19 @@ onReviewPanelDragEnd(): void {
     if (!this.validationResults?.invalidRecords) return false;
     const searchStr = `[${sourceField}:`;
     return this.validationResults.invalidRecords.some((record: any) => record.errors.includes(searchStr));
+  }
+
+  get sortedErrorTableFields(): MappingRow[] {
+    const mapped = this.mappings.filter((m) => m.targetField);
+    return [...mapped].sort((a, b) => {
+      const aHasError = this.hasErrorsInColumn(a.sourceField) ? 0 : 1;
+      const bHasError = this.hasErrorsInColumn(b.sourceField) ? 0 : 1;
+      return aHasError - bHasError;
+    });
+  }
+
+  get errorColumnCount(): number {
+    return this.sortedErrorTableFields.filter((m) => this.hasErrorsInColumn(m.sourceField)).length;
   }
 
   hasCellError(record: any, sourceField: string): boolean {
@@ -2544,6 +3115,15 @@ onReviewPanelDragEnd(): void {
       incompleteRefs: this.getIncompleteReferenceMappings()
     };
 
+    const accessViolations = this.getFieldAccessViolations();
+    if (accessViolations.length > 0) {
+      const fieldList = accessViolations.map((v) => v.label).join(', ');
+      errors.push(
+        `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove ` +
+        `${accessViolations.length > 1 ? 'these fields' : 'this field'} from the mapping before running.`
+      );
+    }
+
     if (this.customQuery && !this.validateQuery()) {
       errors.push('Please fix your query criteria before running.');
     }
@@ -2620,9 +3200,38 @@ onReviewPanelDragEnd(): void {
   }
 
   private show_confirmation_modal(activeMappings: any[]) {
+    const filesInScope = this.isSalesforceToSalesforce && (this.migrateAttachments || this.migrateFiles);
+    const preview = this.fileMigrationBudgetPreview;
+
+    let fileBudgetHtml = '';
+    if (filesInScope && preview && !preview.fitsInBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-warning text-start small mt-3 mb-0">
+          <strong><i class="feather icon-alert-triangle"></i> File migration budget notice:</strong>
+          ${preview.message}
+          You'll be asked to confirm the exact scope again once the migration reaches the file
+          transfer step, with live numbers at that moment.
+        </div>`;
+    } else if (filesInScope && preview && preview.fitsInBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-success text-start small mt-3 mb-0">
+          <i class="feather icon-check-circle"></i> File migration budget check passed —
+          ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance for Data Migration.
+        </div>`;
+    } else if (filesInScope && this.isCheckingFileMigrationBudget) {
+      fileBudgetHtml = `
+        <div class="alert alert-secondary text-start small mt-3 mb-0">
+          Still checking the file migration API budget in the background — this run will still
+          be guarded live during the file transfer step regardless.
+        </div>`;
+    }
+
     Swal.fire({
       title: 'Ready to Migrate!',
-      text: `Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.`,
+      html: `
+        <p class="mb-0">Are you sure you want to execute this ${this.operationMode.toUpperCase()} job? This will push live data into ${this.selectedTargetObject}.</p>
+        ${fileBudgetHtml}
+      `,
       icon: 'info',
       showCancelButton: true,
       confirmButtonColor: '#198754',
@@ -2671,6 +3280,183 @@ onReviewPanelDragEnd(): void {
   });
 }
 
+  onFileMigrationCheckboxToggle(): void {
+    this.scheduleFileMigrationBudgetRecheck();
+  }
+
+  /**
+   * Single funnel for "something that changes what the file migration would
+   * actually touch just changed" -- called on checkbox toggle, query edits,
+   * and time-filter changes (manual dates, clear, quick-range presets, field
+   * switch). Debounced so rapid edits (typing in Monaco, dragging a date)
+   * don't fire a request per keystroke.
+   */
+  private scheduleFileMigrationBudgetRecheck(): void {
+    if (this.fileMigrationBudgetPreviewDebounce) {
+      clearTimeout(this.fileMigrationBudgetPreviewDebounce);
+    }
+
+    if (!this.isSalesforceToSalesforce || (!this.migrateAttachments && !this.migrateFiles)) {
+      this.fileMigrationBudgetPreview = null;
+      this.fileMigrationBudgetPreviewError = null;
+      this.isCheckingFileMigrationBudget = false;
+      return;
+    }
+
+    // Mark stale immediately so the banner doesn't keep showing numbers for
+    // the query/filter state that just changed while the new check runs.
+    this.fileMigrationBudgetPreview = null;
+
+    this.fileMigrationBudgetPreviewDebounce = setTimeout(() => {
+      this.checkFileMigrationBudgetPreview();
+    }, 600);
+  }
+
+  private checkFileMigrationBudgetPreview(): void {
+    if (!this.selectedSourceObject) {
+      return;
+    }
+
+    this.isCheckingFileMigrationBudget = true;
+    this.fileMigrationBudgetPreviewError = null;
+    const token = localStorage.getItem('supabase_token') || '';
+
+    const body = {
+      sourceObject: this.selectedSourceObject,
+      query: this.customQuery?.trim() || '',
+      migrationTimeFilter: this.migrationTimeFilter,
+      migrateAttachments: this.migrateAttachments,
+      migrateFiles: this.migrateFiles
+    };
+
+    this.http.post<FileMigrationBudgetPreview>(
+      `${environment.apiUrl}/api/migration/files/precheck`,
+      body,
+      { headers: { Authorization: `Bearer ${token}` } }
+    ).subscribe({
+      next: (result) => {
+        this.fileMigrationBudgetPreview = result;
+        this.isCheckingFileMigrationBudget = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.fileMigrationBudgetPreview = null;
+        this.fileMigrationBudgetPreviewError =
+          err?.error?.detail || 'Could not check the API budget for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
+        this.isCheckingFileMigrationBudget = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private showFileMigrationBudgetPrompt(budget: FileMigrationBudget, ws: WebSocket): void {
+    this.pendingFileMigrationBudget = budget;
+
+    const safePercent = budget.totalRecordCount
+      ? Math.round((budget.safeRecordCount / budget.totalRecordCount) * 100)
+      : 0;
+    const deferredCount = budget.totalRecordCount - budget.safeRecordCount;
+
+    Swal.fire({
+      title: `File Migration — ${budget.targetObject}`,
+      html: `
+        <div class="text-start">
+          <p class="text-muted small mb-3">
+            ${budget.totalFileCount.toLocaleString()} file(s) attached to
+            ${budget.totalRecordCount.toLocaleString()} record(s) need to move, but today's Salesforce
+            API allowance on the <strong>${budget.bindingOrg}</strong> org can't cover all of them safely.
+          </p>
+          <div class="d-flex justify-content-around gap-3 mb-3">
+            <div class="p-2 border rounded bg-light w-100">
+              <div class="small fw-bold text-uppercase text-muted">Source (downloads)</div>
+              <div class="fw-bold">${budget.estimatedDownloadCalls.toLocaleString()} needed</div>
+              <div class="small text-muted">${budget.sourceAvailable.toLocaleString()} available today</div>
+            </div>
+            <div class="p-2 border rounded bg-light w-100">
+              <div class="small fw-bold text-uppercase text-muted">Target (uploads)</div>
+              <div class="fw-bold">${budget.estimatedUploadCalls.toLocaleString()} needed</div>
+              <div class="small text-muted">${budget.targetAvailable.toLocaleString()} available today</div>
+            </div>
+          </div>
+          <div class="alert alert-primary py-2 mb-0">
+            <strong>Recommended:</strong> migrate files for
+            <strong>${budget.safeRecordCount.toLocaleString()} of ${budget.totalRecordCount.toLocaleString()}</strong>
+            record(s) now (~${budget.safeFileCount.toLocaleString()} files, ${safePercent}%).
+            The remaining ${deferredCount.toLocaleString()} record(s) keep their field data — just no
+            files this pass — and can be re-run once the ${budget.bindingOrg} org's daily limit resets.
+          </div>
+        </div>
+      `,
+      icon: 'warning',
+      showConfirmButton: true,
+      confirmButtonText: `Migrate ${budget.safeRecordCount.toLocaleString()} now (recommended)`,
+      confirmButtonColor: '#0d6efd',
+      showDenyButton: true,
+      denyButtonText: 'Skip files this pass',
+      showCancelButton: true,
+      cancelButtonText: 'Migrate all anyway',
+      reverseButtons: true,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'proceed_limited');
+      } else if (result.isDenied) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'skip');
+      } else if (result.dismiss === Swal.DismissReason.cancel) {
+        this.confirmFullFileMigrationOverride(budget, ws);
+      } else {
+
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'skip');
+      }
+    });
+  }
+
+  private confirmFullFileMigrationOverride(budget: FileMigrationBudget, ws: WebSocket): void {
+    Swal.fire({
+      title: 'Migrate all records anyway?',
+      html: `
+        <p class="text-muted small mb-0">
+          This may exhaust the <strong>${budget.bindingOrg}</strong> org's daily API limit mid-run,
+          which can also affect other tools or integrations sharing that org today.
+        </p>
+      `,
+      icon: 'warning',
+      showConfirmButton: true,
+      confirmButtonText: `Yes, migrate all ${budget.totalRecordCount.toLocaleString()}`,
+      confirmButtonColor: '#d93025',
+      showCancelButton: true,
+      cancelButtonText: 'Go back',
+      reverseButtons: true,
+      customClass: { popup: 'rounded-4 shadow-lg border-0' }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.sendFileMigrationDecision(ws, budget.jobRef, 'proceed_full');
+      } else {
+
+        this.showFileMigrationBudgetPrompt(budget, ws);
+      }
+    });
+  }
+
+  private sendFileMigrationDecision(ws: WebSocket, jobRef: string, action: FileMigrationDecisionAction): void {
+    if (ws.readyState !== WebSocket.OPEN) {
+      this.toastr.error('Connection to migration engine was lost before a file migration decision could be sent.', 'Engine Error');
+      this.pendingFileMigrationBudget = null;
+      return;
+    }
+    ws.send(JSON.stringify({ fileMigrationDecision: { jobRef, action } }));
+    this.pendingFileMigrationBudget = null;
+
+    const actionLabel =
+      action === 'proceed_limited' ? 'Proceeding with the recommended reduced scope...' :
+      action === 'proceed_full' ? 'Proceeding with the full scope...' :
+      'Skipping files for this pass...';
+    this.logMessages = [...this.logMessages, `[File Migration] ${actionLabel}`];
+    this.cdr.detectChanges();
+  }
+
   private executeMigrationJob(activeMappings: any[]) {
     this.successData = [];
     this.errorData = [];
@@ -2718,6 +3504,11 @@ onReviewPanelDragEnd(): void {
     const fixedRecords =
       this.validationResults?.invalidRecords?.filter((rec: any) => rec._editedFields)?.map((rec: any) => rec.originalRow) || [];
 
+    const sfRules: any = {};
+    this.targetFields.forEach((field) => {
+      sfRules[field.name] = field;
+    });
+
     const job = {
       sessionId: this.currentSessionId,
       fixedRecords: fixedRecords,
@@ -2727,6 +3518,7 @@ onReviewPanelDragEnd(): void {
       targetCrmId: this.targetCrmId,
       extractionQuery: safeQuery,
       mappings: enhancedMappings,
+      sfRules: sfRules,
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
@@ -2754,6 +3546,27 @@ onReviewPanelDragEnd(): void {
 
         if (data.log) {
           this.logMessages = [...this.logMessages, data.log];
+        }
+
+        if (data.status === 'AwaitingFileMigrationApproval' && data.fileMigrationBudget) {
+          this.showFileMigrationBudgetPrompt(data.fileMigrationBudget, ws);
+        }
+
+        if (data.fileMigrationJobResult) {
+          const r = data.fileMigrationJobResult;
+          const parts: string[] = [];
+          if (r.attachmentsSuccess || r.attachmentsError) {
+            parts.push(`Attachments: ${r.attachmentsSuccess} ok / ${r.attachmentsError} failed`);
+          }
+          if (r.filesSuccess || r.filesError) {
+            parts.push(`Files: ${r.filesSuccess} ok / ${r.filesError} failed`);
+          }
+          if (r.deferredRecordCount > 0) {
+            parts.push(`${r.deferredRecordCount} record(s) deferred (API budget)`);
+          }
+          if (parts.length) {
+            this.logMessages = [...this.logMessages, `[${r.targetObject}] ${parts.join(' \u00b7 ')}`];
+          }
         }
 
         if (data.status) {

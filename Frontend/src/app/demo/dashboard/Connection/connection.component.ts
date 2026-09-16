@@ -2,7 +2,6 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
-import { CardComponent } from 'src/app/theme/shared/components/card/card.component';
 import { CrmAuthService, CrmConnection } from 'src/app/services/CrmAuthService.service';
 import { ToastrService } from 'ngx-toastr';
 import { Subscription, switchMap, delay } from 'rxjs';
@@ -10,7 +9,7 @@ import { Subscription, switchMap, delay } from 'rxjs';
 @Component({
   selector: 'app-connection',
   standalone: true,
-  imports: [CommonModule, FormsModule, CardComponent],
+  imports: [CommonModule, FormsModule],
   templateUrl: './connection.component.html',
   styleUrls: ['./connection.component.scss']
 })
