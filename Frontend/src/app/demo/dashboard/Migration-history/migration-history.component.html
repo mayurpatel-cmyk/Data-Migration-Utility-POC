@@ -85,7 +85,7 @@
   <!-- ========================================== -->
   @if (isAnalyticsLoading()) {
   <div class="row g-3 mb-3">
-    @for (i of [1,2,3,4,5,6]; track i) {
+    @for (i of [1,2,3,4,5]; track i) {
     <div class="col-6 col-md-4 col-xl-2">
       <div class="card border-0 shadow-sm h-100 kpi-card">
         <div class="card-body p-3">
@@ -100,7 +100,7 @@
   } @else if (analytics()) {
   <div class="row g-3 mb-3">
     @for (kpi of kpiCards(); track kpi.label) {
-    <div class="col-6 col-md-4 col-xl-2">
+    <div class="col-5 col-md-4 col-xl-2">
       <div class="card border-0 shadow-sm h-100 kpi-card">
         <div class="card-body p-3 d-flex flex-column gap-2">
           <div class="kpi-icon bg-{{ kpi.accent }}-subtle text-{{ kpi.accent }}">

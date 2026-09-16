@@ -103,13 +103,13 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
         sublabel: `${o.totalInvalid.toLocaleString()} invalid found`,
         accent: 'primary',
       },
-      {
-        icon: 'icon-copy',
-        label: 'Duplicates Caught',
-        value: `${o.totalDuplicates.toLocaleString()}`,
-        sublabel: 'during validation',
-        accent: 'warning',
-      },
+      // {
+      //   icon: 'icon-copy',
+      //   label: 'Duplicates Caught',
+      //   value: `${o.totalDuplicates.toLocaleString()}`,
+      //   sublabel: 'during validation',
+      //   accent: 'warning',
+      // },
     ];
   });
 
