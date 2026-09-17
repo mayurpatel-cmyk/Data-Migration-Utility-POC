@@ -11,6 +11,17 @@ from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY
 
 logger = logging.getLogger(__name__)
 
+LOGO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+LOGO_CANDIDATES = ["logo.png", "logo.jpg", "logo.jpeg", "logo.svg"]
+
+
+def _resolve_logo_path():
+    for name in LOGO_CANDIDATES:
+        candidate = os.path.join(LOGO_DIR, name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 
 ERROR_CATEGORIES = [
     ("Duplicate Record", ["duplicate", "already exists", "duplicate_value"]),
@@ -22,6 +33,81 @@ ERROR_CATEGORIES = [
     ("Rate Limit / API Budget", ["rate limit", "request_limit_exceeded", "too many requests", "api limit"]),
     ("Authentication / Session", ["invalid_session_id", "unauthorized", "expired token", "invalid token", "session expired"]),
 ]
+
+
+class SureShiftPDF(FPDF):
+    """FPDF subclass that draws the SureShift Migration branded header
+    (logo + tool name) and footer (page number + copyright) on every page
+    automatically, instead of that being drawn by hand once per report."""
+
+    report_title = "Migration Audit Report"
+
+    NAVY = (15, 23, 42)      # matches logo card background (#0F172A)
+    CYAN = (6, 182, 212)     # matches logo accent (#06B6D4)
+    GRAY = (148, 163, 184)   # matches logo tagline gray (#94A3B8)
+
+    def header(self):
+        s = AuditService._sanitize_pdf_text
+
+        # --- Banner background (navy, so the logo drops in seamlessly) ---
+        self.set_fill_color(*self.NAVY)
+        self.rect(0, 0, self.w, 26, style="F")
+
+        # --- Logo (falls back to a text wordmark if no file is present) ---
+        logo_path = _resolve_logo_path()
+        logo_drawn = False
+        logo_w = 0
+        if logo_path:
+            try:
+                logo_h = 18
+                logo_w = logo_h * (800 / 300)  # source logo's aspect ratio
+                self.image(logo_path, x=8, y=4, h=logo_h)
+                logo_drawn = True
+            except Exception:
+                logger.warning("Could not embed logo at %s -- falling back to text.", logo_path, exc_info=True)
+                logo_drawn = False
+
+        title_x = 8 + logo_w + 6 if logo_drawn else 10
+
+        # --- Report title (logo already carries the SureShift wordmark) ---
+        self.set_text_color(255, 255, 255)
+        if not logo_drawn:
+            self.set_xy(title_x, 5)
+            self.set_font("Arial", "B", 16)
+            self.cell(0, 8, txt=s("SureShift Migration"), ln=True)
+            self.set_x(title_x)
+
+        self.set_xy(title_x, 13)
+        self.set_font("Arial", "", 11)
+        self.cell(0, 6, txt=s(self.report_title))
+
+        self.set_text_color(0, 0, 0)
+        self.set_y(31)
+
+    def footer(self):
+        s = AuditService._sanitize_pdf_text
+        self.set_y(-18)
+
+        # --- Accent rule ---
+        self.set_draw_color(*self.CYAN)
+        self.set_line_width(0.6)
+        self.line(10, self.get_y(), self.w - 10, self.get_y())
+        self.set_line_width(0.2)
+
+        self.set_y(-14)
+        self.set_font("Arial", "", 8)
+        self.set_text_color(*self.GRAY)
+
+        self.cell(0, 6, txt=s(f"Page {self.page_no()} of {{nb}}"), align="C")
+
+        self.set_y(-9)
+        year = datetime.now().year
+        self.cell(
+            0, 5,
+            txt=s(f"\u00a9 {year} SureShift Migration. All rights reserved. | Confidential audit report."),
+            align="C",
+        )
+        self.set_text_color(0, 0, 0)
 
 
 class AuditService:
@@ -200,22 +286,15 @@ class AuditService:
         try:
             s = AuditService._sanitize_pdf_text
 
-            pdf = FPDF()
+            pdf = SureShiftPDF()
+            pdf.alias_nb_pages()
+            pdf.set_auto_page_break(auto=True, margin=22)
             pdf.add_page()
-            
+
             # --- WATERMARK ---
             pdf.set_font("Arial", "B", 40)
             pdf.set_text_color(240, 240, 240)  # Very light gray
-            pdf.text(25, 145, s("SureShift Migration"))
-
-            # --- HEADER SECTION ---
-            pdf.set_fill_color(41, 128, 185)  # Professional blue background
-            pdf.set_text_color(255, 255, 255) # White text
-            pdf.set_font("Arial", "B", 18)
-            pdf.cell(0, 15, txt=s(" SureShift Migration Audit Report"), ln=True, align="L", fill=True)
-            pdf.ln(5)
-            
-            # Reset text color for body
+            pdf.text(25, 165, s("SureShift Migration"))
             pdf.set_text_color(0, 0, 0)
 
             # --- RUN DETAILS ---
