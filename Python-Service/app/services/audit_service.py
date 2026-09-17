@@ -68,47 +68,25 @@ class AuditService:
     # ==========================================
     @staticmethod
     def _sanitize_pdf_text(text) -> str:
-        """FPDF's core fonts (Arial/Helvetica/Times/Courier) only support
-        latin-1. Any character outside that range -- curly quotes, em/en
-        dashes, non-Latin scripts in a CRM error message or a Zoho/HubSpot
-        object label -- either raises inside fpdf2 or writes corrupt bytes
-        on classic PyFPDF, producing a PDF the browser can't parse at all.
-        Replacing common "smart" punctuation with ASCII equivalents first
-        keeps normal error text readable; anything left outside latin-1
-        after that gets replaced with '?' rather than crashing report
-        generation entirely."""
         if text is None:
             return ""
         s = str(text)
         replacements = {
-            "\u2018": "'", "\u2019": "'",   # ' '
-            "\u201c": '"', "\u201d": '"',   # " "
-            "\u2013": "-", "\u2014": "-",   # – —
-            "\u2026": "...",                 # …
-            "\u00a0": " ",                   # nbsp
+            "\u2018": "'", "\u2019": "'",   
+            "\u201c": '"', "\u201d": '"',   
+            "\u2013": "-", "\u2014": "-",   
+            "\u2026": "...",                 
+            "\u00a0": " ",                   
         }
         for src, dst in replacements.items():
             s = s.replace(src, dst)
         return s.encode("latin-1", "replace").decode("latin-1")
 
     # ==========================================
-    # EFFECTIVE QUERY RECONSTRUCTION (for audit/debug visibility)
+    # EFFECTIVE QUERY RECONSTRUCTION 
     # ==========================================
     @staticmethod
     def _build_effective_query(source_crm: str, target_object: str, extraction_query: str, time_filter: dict = None) -> str:
-        """Best-effort reconstruction of the *actual* query sent to the
-        source CRM -- i.e. the user's raw extraction_query merged with the
-        migrationTimeFilter date range, mirroring what CrmQueryService does
-        at extraction time (see execute_salesforce_query / _salesforce_count
-        etc.). This exists purely for audit/debug visibility in the report,
-        so any failure here falls back to the raw query instead of blocking
-        PDF generation -- it must never be the reason a report fails.
-
-        Caveat: for a multi-job migration queue this is only ever called
-        with the LAST job's extraction_query/time_filter (that's what the
-        route currently threads through to generate_and_save_reports), so
-        on multi-object migrations the "full query" line reflects the last
-        object synced, not every job in the queue."""
         query = (extraction_query or "").strip()
         no_query_label = "(no query filter -- full object export)"
 
@@ -167,10 +145,6 @@ class AuditService:
     # ==========================================
     @staticmethod
     def _upload_file(local_path: str, storage_path: str, content_type: str, disposition: str, bucket: str = "migration_reports") -> str:
-        """Single upload path for both PDF and CSV so the
-        content-type/content-disposition logic can't drift out of sync
-        between the two again. `disposition` is either 'inline' (render in
-        browser -- PDFs) or 'attachment' (force download -- CSVs)."""
         filename = os.path.basename(storage_path)
         with open(local_path, "rb") as f:
             supabase.storage.from_(bucket).upload(
@@ -186,9 +160,6 @@ class AuditService:
 
     @staticmethod
     def _upload_csv(rows: list, fieldnames: list, storage_path: str, bucket: str = "migration_reports") -> str:
-        """'utf-8-sig' writes a UTF-8 BOM, which is what makes Excel
-        auto-detect the encoding and render special characters correctly
-        instead of showing mojibake or dumping everything into column A."""
         filename = os.path.basename(storage_path)
         tmp_path = os.path.join(tempfile.gettempdir(), filename)
 
@@ -200,7 +171,7 @@ class AuditService:
         url = AuditService._upload_file(
             tmp_path, storage_path,
             content_type="text/csv; charset=utf-8",
-            disposition="attachment",   # CSVs always download straight to Excel
+            disposition="attachment",
             bucket=bucket,
         )
         os.remove(tmp_path)
@@ -231,34 +202,81 @@ class AuditService:
 
             pdf = FPDF()
             pdf.add_page()
-            pdf.set_font("Arial", size=16, style="B")
-            pdf.cell(200, 10, txt=s("Migration Audit Report"), ln=True, align="C")
-            pdf.set_font("Arial", size=12)
-            pdf.cell(200, 10, txt=s(f"Session ID: {session_id}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Run By: {user_email or user_id}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Generated At: {run_timestamp}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Object: {target_object}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Extraction Mode: {extraction_mode}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Operation Mode: {op_mode}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Successful Records: {success_count}"), ln=True)
-            pdf.cell(200, 10, txt=s(f"Failed Records: {error_count}"), ln=True)
+            
+            # --- WATERMARK ---
+            pdf.set_font("Arial", "B", 40)
+            pdf.set_text_color(240, 240, 240)  # Very light gray
+            pdf.text(25, 145, s("SureShift Migration"))
 
+            # --- HEADER SECTION ---
+            pdf.set_fill_color(41, 128, 185)  # Professional blue background
+            pdf.set_text_color(255, 255, 255) # White text
+            pdf.set_font("Arial", "B", 18)
+            pdf.cell(0, 15, txt=s(" SureShift Migration Audit Report"), ln=True, align="L", fill=True)
+            pdf.ln(5)
+            
+            # Reset text color for body
+            pdf.set_text_color(0, 0, 0)
 
-            pdf.ln(2)
-            pdf.set_font("Arial", size=11, style="B")
-            pdf.cell(200, 8, txt=s("Full Query Used (incl. filters):"), ln=True)
-            pdf.set_font("Arial", size=10)
-            pdf.multi_cell(190, 6, txt=s(effective_query))
-            pdf.set_font("Arial", size=12)
+            # --- RUN DETAILS ---
+            pdf.set_fill_color(245, 245, 245) # Light grey section header
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, txt=s(" Migration Run Details"), ln=True, fill=True)
+            pdf.set_font("Arial", "", 10)
+            pdf.cell(95, 7, txt=s(f"  Session ID: {session_id}"))
+            pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"), ln=True)
+            pdf.cell(95, 7, txt=s(f"  Migration Run By: {user_email or user_id}"))
+            pdf.cell(95, 7, txt=s(f"  Operation Mode: {op_mode}"), ln=True)
+            pdf.ln(5)
 
+            # --- MIGRATION SCOPE ---
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, txt=s(" Migration Scope"), ln=True, fill=True)
+            pdf.set_font("Arial", "", 10)
+            pdf.cell(95, 7, txt=s(f"  Source: {source_crm.capitalize()}"))
+            pdf.cell(95, 7, txt=s(f"  Target: {target_crm.capitalize()}"), ln=True)
+            pdf.cell(95, 7, txt=s(f"  Object: {target_object}"))
+            pdf.cell(95, 7, txt=s(f"  Extraction Mode: {extraction_mode}"), ln=True)
+            pdf.ln(5)
+
+            # --- EXECUTION RESULTS ---
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, txt=s(" Execution Results"), ln=True, fill=True)
+            pdf.set_font("Arial", "B", 10)
+            pdf.cell(60, 7, txt=s(f"  Total Records: {total}"))
+            
+            pdf.set_text_color(39, 174, 96) # Green
+            pdf.cell(60, 7, txt=s(f"  Successful: {success_count}"))
+            
+            pdf.set_text_color(192, 57, 43) # Red
+            pdf.cell(60, 7, txt=s(f"  Failed: {error_count}"), ln=True)
+            
+            pdf.set_text_color(0, 0, 0) # Reset
+            pdf.ln(5)
+
+            # --- QUERY SECTION ---
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, txt=s(" Effective Query (incl. filters)"), ln=True, fill=True)
+            pdf.set_font("Courier", "", 9)
+            pdf.multi_cell(0, 6, txt=s(effective_query), border=1)
+            pdf.ln(5)
+
+            # --- ERROR SUMMARY TABLE ---
             if error_summary:
-                pdf.ln(4)
-                pdf.set_font("Arial", size=13, style="B")
-                pdf.cell(200, 10, txt=s("Top Error Categories"), ln=True)
-                pdf.set_font("Arial", size=11)
+                pdf.set_font("Arial", "B", 12)
+                pdf.cell(0, 8, txt=s(" Top Error Categories"), ln=True, fill=True)
+                
+                # Table Header
+                pdf.set_font("Arial", "B", 10)
+                pdf.set_fill_color(220, 220, 220)
+                pdf.cell(140, 7, txt=s("Error Category"), border=1, fill=True)
+                pdf.cell(50, 7, txt=s("Count"), border=1, ln=True, align="C", fill=True)
+                
+                # Table Rows
+                pdf.set_font("Arial", "", 10)
                 for item in error_summary:
-                    pdf.cell(200, 8, txt=s(f"- {item['category']}: {item['count']}"), ln=True)
+                    pdf.cell(140, 7, txt=s(item['category']), border=1)
+                    pdf.cell(50, 7, txt=s(str(item['count'])), border=1, ln=True, align="C")
 
             temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}.pdf")
             pdf.output(temp_pdf)
@@ -398,31 +416,10 @@ class AuditService:
 
     @staticmethod
     def _save_validation_row(scoped_client, session_id: str, row: dict) -> None:
-        """Writes one row to validation_history, keyed by session_id (a
-        re-validation pass overwrites the row from the initial pass rather
-        than adding a second one).
-
-        `.upsert(..., on_conflict="session_id")` only works if `session_id`
-        has a UNIQUE constraint in Postgres -- without it Postgrest raises
-        42P10 ("no unique or exclusion constraint matching the ON CONFLICT
-        specification") and the *entire* insert is rejected. That failure
-        was previously only caught by a bare `except Exception` at the
-        call site in migration_routes.py and printed to the server log, so
-        every validation run silently failed to persist and the
-        Validations tab in the history UI stayed empty forever with no
-        visible error anywhere.
-
-        This tries the fast upsert path first (works once the unique
-        constraint is added -- see the migration note in this file's
-        module docstring/README), and falls back to an explicit
-        select-then-update-or-insert if the DB doesn't have that
-        constraint, so a validation run is never silently lost either way.
-        """
         try:
             scoped_client.table("validation_history").upsert(row, on_conflict="session_id").execute()
             return
         except Exception as e:
-
             error_code = getattr(e, "code", None)
             if error_code != "42P10":
                 logger.exception(
