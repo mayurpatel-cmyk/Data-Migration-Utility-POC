@@ -67,6 +67,7 @@ class ZohoMigrator:
                     raise Exception(f"Zoho COQL Error: {res.text}")
                     
                 data = res.json().get("data", [])
+                actual_query_used = coql_query
             else:
                 await send_log(f"Extracting data from Zoho (Standard API)...")
                 data = []
@@ -88,6 +89,8 @@ class ZohoMigrator:
                         break
                     page += 1
 
+                actual_query_used = f"GET {obj_name} (Zoho Standard API, no filter -- fields: {', '.join(safe_fields)})"
+
             processed_data = []
             for r in data:
                 flat_rec = {}
@@ -98,7 +101,7 @@ class ZohoMigrator:
                         flat_rec[k] = v
                 processed_data.append(flat_rec)
 
-            return processed_data
+            return processed_data, actual_query_used
 
         except Exception as e:
             raise Exception(f"Failed to extract from Zoho: {str(e)}")

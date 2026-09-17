@@ -1,7 +1,9 @@
 import os
+import json
 import tempfile
 import csv
 import logging
+from datetime import datetime
 from collections import Counter
 from fpdf import FPDF
 from supabase import create_client
@@ -90,6 +92,77 @@ class AuditService:
         return s.encode("latin-1", "replace").decode("latin-1")
 
     # ==========================================
+    # EFFECTIVE QUERY RECONSTRUCTION (for audit/debug visibility)
+    # ==========================================
+    @staticmethod
+    def _build_effective_query(source_crm: str, target_object: str, extraction_query: str, time_filter: dict = None) -> str:
+        """Best-effort reconstruction of the *actual* query sent to the
+        source CRM -- i.e. the user's raw extraction_query merged with the
+        migrationTimeFilter date range, mirroring what CrmQueryService does
+        at extraction time (see execute_salesforce_query / _salesforce_count
+        etc.). This exists purely for audit/debug visibility in the report,
+        so any failure here falls back to the raw query instead of blocking
+        PDF generation -- it must never be the reason a report fails.
+
+        Caveat: for a multi-job migration queue this is only ever called
+        with the LAST job's extraction_query/time_filter (that's what the
+        route currently threads through to generate_and_save_reports), so
+        on multi-object migrations the "full query" line reflects the last
+        object synced, not every job in the queue."""
+        query = (extraction_query or "").strip()
+        no_query_label = "(no query filter -- full object export)"
+
+        if not time_filter:
+            return query or no_query_label
+
+        try:
+            from app.services.time_filter_service import (
+                build_salesforce_time_clause, build_zoho_time_clause,
+                build_zendesk_time_clause, build_hubspot_time_filters,
+                merge_time_clause,
+            )
+
+            crm = (source_crm or "").lower()
+
+            if crm == "salesforce":
+                time_clause = build_salesforce_time_clause(time_filter)
+                if not time_clause:
+                    return query or no_query_label
+                if query.lower().startswith("select "):
+                    return merge_time_clause(query, time_clause, where_kw="WHERE", and_kw="AND")
+                where_parts = [p for p in [f"({query})" if query else None, time_clause] if p]
+                return f"SELECT * FROM {target_object} WHERE {' AND '.join(where_parts)}"
+
+            elif crm == "zoho":
+                time_clause = build_zoho_time_clause(time_filter)
+                if not time_clause:
+                    return query or no_query_label
+                if query.lower().startswith("select "):
+                    return merge_time_clause(query, time_clause, where_kw="where", and_kw="and")
+                where_parts = [p for p in [f"({query})" if query else None, time_clause] if p]
+                return f"select * from {target_object} where {' and '.join(where_parts)}"
+
+            elif crm == "zendesk":
+                time_clause = build_zendesk_time_clause(time_filter)
+                parts = [p for p in [query, time_clause] if p]
+                return " ".join(parts) if parts else no_query_label
+
+            elif crm == "hubspot":
+                time_filters = build_hubspot_time_filters(time_filter)
+                base = query or "{}"
+                return f"{base}  |  time filters: {json.dumps(time_filters)}" if time_filters else base
+
+            else:
+                return query or no_query_label
+
+        except Exception:
+            logger.warning(
+                "[AUDIT] Could not reconstruct effective query for source_crm=%s -- "
+                "falling back to raw extraction_query.", source_crm, exc_info=True
+            )
+            return query or no_query_label
+
+    # ==========================================
     # SHARED STORAGE UPLOAD HELPER
     # ==========================================
     @staticmethod
@@ -137,13 +210,18 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, source_mode: str = None, actual_query_used: str = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
 
         urls = {"pdf": None, "success_csv": None, "error_csv": None}
         error_summary = AuditService.build_error_summary(error_data)
+
+        run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        extraction_mode = source_mode or ("CSV Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
+
+        effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter)
 
         # ==========================================
         # 1. GENERATE & UPLOAD PDF SUMMARY
@@ -157,10 +235,22 @@ class AuditService:
             pdf.cell(200, 10, txt=s("Migration Audit Report"), ln=True, align="C")
             pdf.set_font("Arial", size=12)
             pdf.cell(200, 10, txt=s(f"Session ID: {session_id}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Run By: {user_email or user_id}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Generated At: {run_timestamp}"), ln=True)
             pdf.cell(200, 10, txt=s(f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}"), ln=True)
             pdf.cell(200, 10, txt=s(f"Object: {target_object}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Extraction Mode: {extraction_mode}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Operation Mode: {op_mode}"), ln=True)
             pdf.cell(200, 10, txt=s(f"Successful Records: {success_count}"), ln=True)
             pdf.cell(200, 10, txt=s(f"Failed Records: {error_count}"), ln=True)
+
+
+            pdf.ln(2)
+            pdf.set_font("Arial", size=11, style="B")
+            pdf.cell(200, 8, txt=s("Full Query Used (incl. filters):"), ln=True)
+            pdf.set_font("Arial", size=10)
+            pdf.multi_cell(190, 6, txt=s(effective_query))
+            pdf.set_font("Arial", size=12)
 
             if error_summary:
                 pdf.ln(4)
@@ -260,6 +350,7 @@ class AuditService:
         auth_token: str,
     ):
         invalid_csv_url = None
+        valid_csv_url = None
         error_like = [{"record": rec.get("originalRow", {}), "error": rec.get("errors", "")} for rec in invalid_records]
         error_summary = AuditService.build_error_summary(error_like)
 

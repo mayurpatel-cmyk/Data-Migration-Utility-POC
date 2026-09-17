@@ -94,7 +94,7 @@ class SalesforceMigrator:
             url = f"{sf_instance}{data.get('nextRecordsUrl')}" if not data.get("done") else None
 
         await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
-        return source_records
+        return source_records, soql
 
     # ==========================================
     # UPLOAD (Push to Salesforce)

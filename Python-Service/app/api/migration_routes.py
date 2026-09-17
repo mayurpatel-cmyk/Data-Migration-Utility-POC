@@ -234,6 +234,7 @@ async def websocket_migration(websocket: WebSocket):
             return
             
         user_id = user_res.user.id
+        user_email = getattr(user_res.user, "email", None)
         source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() 
         target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() 
         
@@ -291,10 +292,12 @@ async def websocket_migration(websocket: WebSocket):
                     return
 
                 source_records = []
+                actual_query_used = None
 
                 session_id = job.get("sessionId")
                 if source_crm == "csv":
                     source_records = job.get("sourceRecords", [])
+                    source_mode = "CSV Upload"
                     await send_log(f"[{target_object}] Loaded {len(source_records)} records from CSV payload.")
                     
                 elif session_id:
@@ -304,11 +307,18 @@ async def websocket_migration(websocket: WebSocket):
                     cursor.execute("SELECT data FROM records WHERE is_valid = 1")
                     source_records = [json.loads(row[0]) for row in cursor.fetchall()]
                     conn.close()
+                    source_mode = "Staged (Pre-Validated) Records"
                     await send_log(f"[{target_object}] Loaded {len(source_records)} valid records from staging.")
                     
                 else:
+                    source_mode = "Direct API Sync"
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
-                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+                    extract_result = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+
+                    if isinstance(extract_result, tuple):
+                        source_records, actual_query_used = extract_result
+                    else:
+                        source_records = extract_result
 
                 source_instance = (source_creds or {}).get("instance_url") or (source_creds or {}).get("api_domain") or (source_creds or {}).get("subdomain")
                 target_instance = target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain")
@@ -497,9 +507,15 @@ async def websocket_migration(websocket: WebSocket):
                 source_crm=source_crm,
                 target_crm=target_crm,
                 target_object=target_object,
+                op_mode=op_mode,
                 auth_token=auth_token,
                 success_data=safe_success_data, 
                 error_data=formatted_errors,
+                extraction_query=extraction_query,
+                time_filter=time_filter,
+                user_email=user_email,
+                source_mode=source_mode,
+                actual_query_used=actual_query_used,
             )
         except Exception as e:
             logger.exception("Failed to generate/persist migration reports for session %s", session_id)
@@ -681,9 +697,14 @@ async def websocket_validate_stream(websocket: WebSocket):
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
-                raw_records = await source_migrator.extract(
+                extract_result = await source_migrator.extract(
                     client, source_creds, obj_name, query, mappings, send_log, time_filter
                 )
+
+                if isinstance(extract_result, tuple):
+                    raw_records, validation_query_used = extract_result
+                else:
+                    raw_records, validation_query_used = extract_result, None
                 
                 if not raw_records:
                     await send_log("No records found matching criteria.", "Validation Passed")
