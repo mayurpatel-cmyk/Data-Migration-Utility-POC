@@ -181,7 +181,7 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, source_mode: str = None, actual_query_used: str = None):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, source_mode: str = None, actual_query_used: str = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
@@ -225,7 +225,8 @@ class AuditService:
             pdf.set_font("Arial", "", 10)
             pdf.cell(95, 7, txt=s(f"  Session ID: {session_id}"))
             pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"), ln=True)
-            pdf.cell(95, 7, txt=s(f"  Migration Run By: {user_email or user_id}"))
+            pdf.cell(95, 7, txt=s(f"  User Name: {user_name or 'N/A'}"))
+            pdf.cell(95, 7, txt=s(f"  User Email: {user_email or 'N/A'}"), ln=True)
             pdf.cell(95, 7, txt=s(f"  Operation Mode: {op_mode}"), ln=True)
             pdf.ln(5)
 

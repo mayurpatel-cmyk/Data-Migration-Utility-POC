@@ -235,6 +235,7 @@ async def websocket_migration(websocket: WebSocket):
             
         user_id = user_res.user.id
         user_email = getattr(user_res.user, "email", None)
+        user_name = (getattr(user_res.user, "user_metadata", None) or {}).get("full_name")
         source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() 
         target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() 
         
@@ -521,6 +522,7 @@ async def websocket_migration(websocket: WebSocket):
                 extraction_query=extraction_query,
                 time_filter=time_filter,
                 user_email=user_email,
+                user_name=user_name,
                 source_mode=source_mode,
                 actual_query_used=actual_query_used,
             )
