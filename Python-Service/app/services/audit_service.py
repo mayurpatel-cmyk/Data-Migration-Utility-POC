@@ -267,7 +267,7 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, source_mode: str = None, actual_query_used: str = None):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, migration_mode: str = None, source_mode: str = None, actual_query_used: str = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
@@ -276,7 +276,7 @@ class AuditService:
         error_summary = AuditService.build_error_summary(error_data)
 
         run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        extraction_mode = source_mode or ("CSV Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
+        migration_mode_display = migration_mode or ("CSV / Excel Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
 
         effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter)
 
@@ -316,7 +316,9 @@ class AuditService:
             pdf.cell(95, 7, txt=s(f"  Source: {source_crm.capitalize()}"))
             pdf.cell(95, 7, txt=s(f"  Target: {target_crm.capitalize()}"), ln=True)
             pdf.cell(95, 7, txt=s(f"  Object: {target_object}"))
-            pdf.cell(95, 7, txt=s(f"  Extraction Mode: {extraction_mode}"), ln=True)
+            pdf.cell(95, 7, txt=s(f"  Migration Mode: {migration_mode_display}"), ln=True)
+            if source_mode:
+                pdf.cell(95, 7, txt=s(f"  Record Source: {source_mode}"), ln=True)
             pdf.ln(5)
 
             # --- EXECUTION RESULTS ---
@@ -429,6 +431,8 @@ class AuditService:
             "success_csv_url": urls["success_csv"],
             "error_csv_url": urls["error_csv"],
             "error_summary": error_summary,
+            "migration_mode": migration_mode_display,
+            "source_mode": source_mode,
         }).execute()
 
         return urls

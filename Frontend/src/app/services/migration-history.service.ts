@@ -23,6 +23,8 @@ export interface MigrationHistoryRecord {
   success_csv_url: string | null;
   error_csv_url: string | null;
   error_summary?: ErrorSummaryItem[] | null;
+  migration_mode?: string | null;
+   source_mode?: string | null;
 }
 
 export interface ValidationHistoryRecord {

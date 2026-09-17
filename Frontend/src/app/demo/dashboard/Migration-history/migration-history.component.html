@@ -308,7 +308,7 @@
                   <th class="py-3 text-muted small fw-bold text-uppercase">Target Object</th>
                   <th class="py-3 text-muted small fw-bold text-uppercase">Records</th>
                   <th class="py-3 text-muted small fw-bold text-uppercase">Status</th>
-                  <th class="py-3 text-muted small fw-bold text-uppercase">Top Errors</th>
+                  <th class="py-3 text-muted small fw-bold text-uppercase">Migration Mode</th>
                   <th class="py-3 pe-4 text-end text-muted small fw-bold text-uppercase">Download</th>
                 </tr>
               </thead>
@@ -395,13 +395,11 @@
                   </td>
 
                   <td>
-                    @if (log.error_summary && log.error_summary.length > 0) {
-                    <span class="small text-muted" [title]="topErrorCategories(log.error_summary, 8)">
-                      {{ topErrorCategories(log.error_summary) }}
+                    <span class="badge bg-dark text-dark border py-1 px-2 d-flex align-items-center gap-1 shadow-sm"
+                      style="width: fit-content;" [title]="log.source_mode || migrationModeLabel(log)">
+                      <i class="feather" [ngClass]="migrationModeIcon(log)"></i>
+                      {{ migrationModeLabel(log) }}
                     </span>
-                    } @else {
-                    <span class="small text-muted">—</span>
-                    }
                   </td>
 
                   <td class="pe-4 text-end">

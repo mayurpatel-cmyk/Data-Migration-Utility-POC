@@ -273,6 +273,19 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
     return summary.slice(0, limit).map(s => `${s.category} (${s.count})`).join(', ');
   }
 
+  migrationModeLabel(log: MigrationHistoryRecord): string {
+    if (log.migration_mode) return log.migration_mode;
+    return (log.source_crm || '').toLowerCase() === 'csv' ? 'CSV / Excel Upload' : 'Direct API Sync';
+  }
+
+  migrationModeIcon(log: MigrationHistoryRecord): string {
+    const mode = (log.migration_mode || '').toLowerCase();
+    if (mode.includes('csv')) return 'icon-file-text';
+    if (mode.includes('staged')) return 'icon-database';
+    if (mode.includes('api')) return 'icon-zap';
+    return (log.source_crm || '').toLowerCase() === 'csv' ? 'icon-file-text' : 'icon-zap';
+  }
+
   private reinitIcons(): void {
     afterNextRender(
       () => this.zone.runOutsideAngular(() => {
