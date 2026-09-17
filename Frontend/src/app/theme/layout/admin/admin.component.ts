@@ -12,7 +12,7 @@ import { LayoutStateService } from '../../shared/service/layout-state.service';
 
 @Component({
   selector: 'app-admin',
-  imports: [CommonModule, NavigationComponent, NavBarComponent, RouterModule, BreadcrumbComponent],
+  imports: [CommonModule, NavigationComponent, NavBarComponent, RouterModule],
   templateUrl: './admin.component.html',
   styleUrl: './admin.component.scss'
 })

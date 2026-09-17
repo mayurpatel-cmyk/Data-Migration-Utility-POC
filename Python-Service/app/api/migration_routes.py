@@ -306,6 +306,13 @@ async def websocket_migration(websocket: WebSocket):
                     cursor = conn.cursor()
                     cursor.execute("SELECT data FROM records WHERE is_valid = 1")
                     source_records = [json.loads(row[0]) for row in cursor.fetchall()]
+                    try:
+                        cursor.execute("SELECT value FROM session_meta WHERE key = 'query_used'")
+                        meta_row = cursor.fetchone()
+                        if meta_row:
+                            actual_query_used = meta_row[0]
+                    except sqlite3.OperationalError:
+                        pass
                     conn.close()
                     source_mode = "Staged (Pre-Validated) Records"
                     await send_log(f"[{target_object}] Loaded {len(source_records)} valid records from staging.")
@@ -690,6 +697,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         db_path = get_db_path(session_id)
         conn = sqlite3.connect(db_path)
         conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT)")
         
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
         await send_log(f"System: Initializing Streaming Validation...", "Connecting")
@@ -705,6 +713,13 @@ async def websocket_validate_stream(websocket: WebSocket):
                     raw_records, validation_query_used = extract_result
                 else:
                     raw_records, validation_query_used = extract_result, None
+
+                if validation_query_used:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO session_meta (key, value) VALUES ('query_used', ?)",
+                        (validation_query_used,),
+                    )
+                    conn.commit()
                 
                 if not raw_records:
                     await send_log("No records found matching criteria.", "Validation Passed")
