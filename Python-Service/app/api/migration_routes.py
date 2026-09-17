@@ -1,6 +1,7 @@
 import asyncio
 import httpx
 import traceback
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from app.api.dependencies.auth import get_current_user
 from app.services.validator_service import process_validation_batch
@@ -34,6 +35,8 @@ from fastapi.responses import StreamingResponse
 import re
 
 from app.services.staging_cleanup_service import cleanup_stale_staging_databases, DEFAULT_MAX_AGE_HOURS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
@@ -496,10 +499,10 @@ async def websocket_migration(websocket: WebSocket):
                 target_object=target_object,
                 auth_token=auth_token,
                 success_data=safe_success_data, 
-                error_data=formatted_errors     
+                error_data=formatted_errors,
             )
         except Exception as e:
-            print(f"Failed to generate reports: {e}")
+            logger.exception("Failed to generate/persist migration reports for session %s", session_id)
             report_urls = {}
 
         
@@ -625,7 +628,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                     auth_token=auth_token,
                 )
             except Exception as e:
-                print(f"Failed to persist re-validation history for session {session_id}: {e}")
+                logger.exception("Failed to persist re-validation history for session %s", session_id)
 
             await websocket.send_json({
                 "log": f"Re-validation Complete: Fixed {len(valid_inserts)} records.",
@@ -733,7 +736,7 @@ async def websocket_validate_stream(websocket: WebSocket):
                 auth_token=auth_token,
             )
         except Exception as e:
-            print(f"Failed to persist validation history for session {session_id}: {e}")
+            logger.exception("Failed to persist validation history for session %s", session_id)
 
         await websocket.send_json({
             "log": f"Stream Validation Complete: {aggregate_stats['total']} total records.",

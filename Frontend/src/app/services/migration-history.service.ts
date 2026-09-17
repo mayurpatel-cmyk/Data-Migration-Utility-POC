@@ -38,6 +38,7 @@ export interface ValidationHistoryRecord {
   invalid_count: number;
   duplicate_count: number;
   invalid_csv_url: string | null;
+  valid_csv_url: string | null;
   error_summary?: ErrorSummaryItem[] | null;
 }
 

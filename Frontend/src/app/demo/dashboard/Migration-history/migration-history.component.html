@@ -419,6 +419,7 @@
                         class="dl-btn dl-btn-success" title="Download successfully migrated records (CSV)">
                         <i class="feather icon-check-circle"></i>
                         <span>Success</span>
+                        <i class="feather icon-download dl-btn-download-icon"></i>
                       </a>
                       }
                       @if (log.error_csv_url) {
@@ -426,15 +427,17 @@
                         class="dl-btn dl-btn-danger" title="Download failed records &amp; errors (CSV)">
                         <i class="feather icon-alert-circle"></i>
                         <span>Errors</span>
+                        <i class="feather icon-download dl-btn-download-icon"></i>
                       </a>
                       }
-                      <!-- @if (log.pdf_url) {
+                      @if (log.pdf_url) {
                       <a [href]="log.pdf_url" target="_blank" rel="noopener noreferrer"
-                        class="dl-btn dl-btn-primary" title="View PDF summary">
+                        class="dl-btn dl-btn-primary" title="View PDF audit summary (opens in a new tab)">
                         <i class="feather icon-file-text"></i>
-                        <span>Summary</span>
+                        <span>Report</span>
+                        <i class="feather icon-download dl-btn-download-icon"></i>
                       </a>
-                      } -->
+                      }
                       @if (!log.success_csv_url && !log.error_csv_url && !log.pdf_url) {
                       <span class="small text-muted">—</span>
                       }
@@ -561,14 +564,21 @@
 
                   <td class="pe-4 text-end">
                     <div class="download-actions">
+                      @if (log.valid_csv_url) {
+                      <a [href]="log.valid_csv_url" target="_blank" rel="noopener noreferrer" download
+                        class="dl-btn dl-btn-success" title="Download successfully validated records (CSV)">
+                        <i class="feather icon-check-circle"></i>
+                        <span>Success</span>
+                        <i class="feather icon-download dl-btn-download-icon"></i>
+                      </a>
+                      }
                       @if (log.invalid_csv_url) {
                       <a [href]="log.invalid_csv_url" target="_blank" rel="noopener noreferrer" download
                         class="dl-btn dl-btn-danger" title="Download invalid records &amp; errors (CSV)">
                         <i class="feather icon-alert-circle"></i>
                         <span>Invalid</span>
+                        <i class="feather icon-download dl-btn-download-icon"></i>
                       </a>
-                      } @else {
-                      <span class="small text-muted">—</span>
                       }
                     </div>
                   </td>

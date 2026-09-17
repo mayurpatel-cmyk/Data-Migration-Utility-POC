@@ -1,10 +1,13 @@
 import os
 import tempfile
 import csv
+import logging
 from collections import Counter
 from fpdf import FPDF
 from supabase import create_client
 from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY
+
+logger = logging.getLogger(__name__)
 
 
 ERROR_CATEGORIES = [
@@ -134,7 +137,7 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
@@ -145,60 +148,78 @@ class AuditService:
         # ==========================================
         # 1. GENERATE & UPLOAD PDF SUMMARY
         # ==========================================
-        s = AuditService._sanitize_pdf_text
+        try:
+            s = AuditService._sanitize_pdf_text
 
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=16, style="B")
-        pdf.cell(200, 10, txt=s("Migration Audit Report"), ln=True, align="C")
-        pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=s(f"Session ID: {session_id}"), ln=True)
-        pdf.cell(200, 10, txt=s(f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}"), ln=True)
-        pdf.cell(200, 10, txt=s(f"Object: {target_object}"), ln=True)
-        pdf.cell(200, 10, txt=s(f"Successful Records: {success_count}"), ln=True)
-        pdf.cell(200, 10, txt=s(f"Failed Records: {error_count}"), ln=True)
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=16, style="B")
+            pdf.cell(200, 10, txt=s("Migration Audit Report"), ln=True, align="C")
+            pdf.set_font("Arial", size=12)
+            pdf.cell(200, 10, txt=s(f"Session ID: {session_id}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Source: {source_crm.capitalize()} -> Target: {target_crm.capitalize()}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Object: {target_object}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Successful Records: {success_count}"), ln=True)
+            pdf.cell(200, 10, txt=s(f"Failed Records: {error_count}"), ln=True)
 
-        if error_summary:
-            pdf.ln(4)
-            pdf.set_font("Arial", size=13, style="B")
-            pdf.cell(200, 10, txt=s("Top Error Categories"), ln=True)
-            pdf.set_font("Arial", size=11)
-            for item in error_summary:
-                pdf.cell(200, 8, txt=s(f"- {item['category']}: {item['count']}"), ln=True)
+            if error_summary:
+                pdf.ln(4)
+                pdf.set_font("Arial", size=13, style="B")
+                pdf.cell(200, 10, txt=s("Top Error Categories"), ln=True)
+                pdf.set_font("Arial", size=11)
+                for item in error_summary:
+                    pdf.cell(200, 8, txt=s(f"- {item['category']}: {item['count']}"), ln=True)
 
-        temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}.pdf")
-        pdf.output(temp_pdf)
+            temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}.pdf")
+            pdf.output(temp_pdf)
 
-        pdf_filename = f"{session_id}.pdf"
-        urls["pdf"] = AuditService._upload_file(
-            temp_pdf, f"{user_id}/{pdf_filename}",
-            content_type="application/pdf",
-            disposition="inline",   
-        )
-        os.remove(temp_pdf)
+            pdf_filename = f"{session_id}.pdf"
+            urls["pdf"] = AuditService._upload_file(
+                temp_pdf, f"{user_id}/{pdf_filename}",
+                content_type="application/pdf",
+                disposition="inline",
+            )
+            os.remove(temp_pdf)
+        except Exception:
+            logger.exception(
+                "[AUDIT] PDF summary generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
+            )
 
         # ==========================================
         # 2. GENERATE & UPLOAD SUCCESS CSV
         # ==========================================
-        if success_count > 0:
-            fieldnames = list(success_data[0].keys())
-            urls["success_csv"] = AuditService._upload_csv(
-                success_data, fieldnames, f"{user_id}/{session_id}_success.csv"
+        try:
+            if success_count > 0:
+                fieldnames = list(success_data[0].keys())
+                urls["success_csv"] = AuditService._upload_csv(
+                    success_data, fieldnames, f"{user_id}/{session_id}_success.csv"
+                )
+        except Exception:
+            logger.exception(
+                "[AUDIT] Success CSV generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
             )
 
         # ==========================================
         # 3. GENERATE & UPLOAD ERROR CSV
         # ==========================================
-        if error_count > 0:
-            flat_errors = []
-            for err in error_data:
-                flat_rec = dict(err.get("record", {}))
-                flat_rec["Migration_Error_Message"] = err.get("error", "Unknown Error")
-                flat_errors.append(flat_rec)
+        try:
+            if error_count > 0:
+                flat_errors = []
+                for err in error_data:
+                    flat_rec = dict(err.get("record", {}))
+                    flat_rec["Migration_Error_Message"] = err.get("error", "Unknown Error")
+                    flat_errors.append(flat_rec)
 
-            fieldnames = ["Migration_Error_Message"] + [k for k in flat_errors[0].keys() if k != "Migration_Error_Message"]
-            urls["error_csv"] = AuditService._upload_csv(
-                flat_errors, fieldnames, f"{user_id}/{session_id}_error.csv"
+                fieldnames = ["Migration_Error_Message"] + [k for k in flat_errors[0].keys() if k != "Migration_Error_Message"]
+                urls["error_csv"] = AuditService._upload_csv(
+                    flat_errors, fieldnames, f"{user_id}/{session_id}_error.csv"
+                )
+        except Exception:
+            logger.exception(
+                "[AUDIT] Error CSV generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
             )
 
         # ==========================================
@@ -242,24 +263,30 @@ class AuditService:
         error_like = [{"record": rec.get("originalRow", {}), "error": rec.get("errors", "")} for rec in invalid_records]
         error_summary = AuditService.build_error_summary(error_like)
 
-        if invalid_records:
-            flat_rows = []
-            for rec in invalid_records:
-                flat_rec = dict(rec.get("originalRow", {}))
-                flat_rec.pop("_db_id", None)
-                flat_rec["Validation_Errors"] = rec.get("errors", "")
-                flat_rows.append(flat_rec)
+        try:
+            if invalid_records:
+                flat_rows = []
+                for rec in invalid_records:
+                    flat_rec = dict(rec.get("originalRow", {}))
+                    flat_rec.pop("_db_id", None)
+                    flat_rec["Validation_Errors"] = rec.get("errors", "")
+                    flat_rows.append(flat_rec)
 
-            fieldnames = ["Validation_Errors"] + [k for k in flat_rows[0].keys() if k != "Validation_Errors"]
-            invalid_csv_url = AuditService._upload_csv(
-                flat_rows, fieldnames, f"{user_id}/{session_id}_validation_invalid.csv",
-                bucket="migration_reports",
+                fieldnames = ["Validation_Errors"] + [k for k in flat_rows[0].keys() if k != "Validation_Errors"]
+                invalid_csv_url = AuditService._upload_csv(
+                    flat_rows, fieldnames, f"{user_id}/{session_id}_validation_invalid.csv",
+                    bucket="migration_reports",
+                )
+        except Exception:
+            logger.exception(
+                "[AUDIT] Invalid-records CSV generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
             )
 
         scoped_client = create_client(SUPABASE_URL, SUPABASE_KEY)
         scoped_client.auth.set_session(access_token=auth_token, refresh_token="")
 
-        scoped_client.table("validation_history").upsert({
+        row = {
             "user_id": user_id,
             "session_id": session_id,
             "source_crm": source_crm,
@@ -270,7 +297,63 @@ class AuditService:
             "invalid_count": stats.get("invalid", 0),
             "duplicate_count": stats.get("duplicates", 0),
             "invalid_csv_url": invalid_csv_url,
+            "valid_csv_url": valid_csv_url,
             "error_summary": error_summary,
-        }, on_conflict="session_id").execute()
+        }
 
-        return {"invalid_csv_url": invalid_csv_url, "error_summary": error_summary}
+        AuditService._save_validation_row(scoped_client, session_id, row)
+
+        return {"invalid_csv_url": invalid_csv_url,"valid_csv_url": valid_csv_url, "error_summary": error_summary}
+
+    @staticmethod
+    def _save_validation_row(scoped_client, session_id: str, row: dict) -> None:
+        """Writes one row to validation_history, keyed by session_id (a
+        re-validation pass overwrites the row from the initial pass rather
+        than adding a second one).
+
+        `.upsert(..., on_conflict="session_id")` only works if `session_id`
+        has a UNIQUE constraint in Postgres -- without it Postgrest raises
+        42P10 ("no unique or exclusion constraint matching the ON CONFLICT
+        specification") and the *entire* insert is rejected. That failure
+        was previously only caught by a bare `except Exception` at the
+        call site in migration_routes.py and printed to the server log, so
+        every validation run silently failed to persist and the
+        Validations tab in the history UI stayed empty forever with no
+        visible error anywhere.
+
+        This tries the fast upsert path first (works once the unique
+        constraint is added -- see the migration note in this file's
+        module docstring/README), and falls back to an explicit
+        select-then-update-or-insert if the DB doesn't have that
+        constraint, so a validation run is never silently lost either way.
+        """
+        try:
+            scoped_client.table("validation_history").upsert(row, on_conflict="session_id").execute()
+            return
+        except Exception as e:
+
+            error_code = getattr(e, "code", None)
+            if error_code != "42P10":
+                logger.exception(
+                    "[AUDIT] validation_history upsert failed for session %s: %s", session_id, e
+                )
+                raise
+            logger.warning(
+                "[AUDIT] validation_history.session_id has no UNIQUE constraint (Postgrest 42P10) -- "
+                "falling back to manual select+insert/update for session %s. Add "
+                "`ALTER TABLE validation_history ADD CONSTRAINT validation_history_session_id_key "
+                "UNIQUE (session_id);` to restore the fast upsert path.",
+                session_id,
+            )
+
+        existing = (
+            scoped_client.table("validation_history")
+            .select("id")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            scoped_client.table("validation_history").update(row).eq("session_id", session_id).execute()
+        else:
+            scoped_client.table("validation_history").insert(row).execute()
