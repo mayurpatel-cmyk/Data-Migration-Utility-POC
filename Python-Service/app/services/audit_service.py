@@ -317,8 +317,6 @@ class AuditService:
             pdf.cell(95, 7, txt=s(f"  Target: {target_crm.capitalize()}"), ln=True)
             pdf.cell(95, 7, txt=s(f"  Object: {target_object}"))
             pdf.cell(95, 7, txt=s(f"  Migration Mode: {migration_mode_display}"), ln=True)
-            if source_mode:
-                pdf.cell(95, 7, txt=s(f"  Record Source: {source_mode}"), ln=True)
             pdf.ln(5)
 
             # --- EXECUTION RESULTS ---
