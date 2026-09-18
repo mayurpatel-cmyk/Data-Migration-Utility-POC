@@ -330,9 +330,6 @@
     flex-shrink: 0;
   }
 
-  // Trailing icon that marks the pill as a download/open action, distinct
-  // from the leading status icon (check/alert/file). Kept smaller and
-  // dimmer so it reads as a secondary affordance, not a second status.
   .dl-btn-download-icon {
     width: 10px;
     height: 10px;

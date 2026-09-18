@@ -17,7 +17,7 @@
             <i class="feather icon-clock"></i> Updated {{ updatedAt | date:'shortTime' }}
           </span>
           }
-          <button class="btn btn-outline-primary bg-white shadow-sm d-flex align-items-center gap-2 rounded-pill px-3"
+          <button class="btn btn-outline-primary bg-blue shadow-sm d-flex align-items-center gap-2 rounded-pill px-3"
             (click)="fetchAll()" [disabled]="isLoading() || isAnalyticsLoading()">
             <i class="feather icon-refresh-cw" [class.fa-spin]="isLoading() || isAnalyticsLoading()"></i> Refresh
           </button>

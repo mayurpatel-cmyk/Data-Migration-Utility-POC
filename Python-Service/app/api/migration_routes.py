@@ -296,8 +296,6 @@ async def websocket_migration(websocket: WebSocket):
                 actual_query_used = None
 
                 session_id = job.get("sessionId")
-                migration_mode = "CSV / Excel Upload" if source_crm == "csv" else "Direct API Sync"
-
                 if source_crm == "csv":
                     source_records = job.get("sourceRecords", [])
                     source_mode = "CSV Upload"
@@ -525,7 +523,6 @@ async def websocket_migration(websocket: WebSocket):
                 time_filter=time_filter,
                 user_email=user_email,
                 user_name=user_name,
-                migration_mode=migration_mode,
                 source_mode=source_mode,
                 actual_query_used=actual_query_used,
             )

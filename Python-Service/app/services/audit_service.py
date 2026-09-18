@@ -11,7 +11,7 @@ from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY
 
 logger = logging.getLogger(__name__)
 
-LOGO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+LOGO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets/images")
 LOGO_CANDIDATES = ["logo.png", "logo.jpg", "logo.jpeg", "logo.svg"]
 
 
