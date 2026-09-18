@@ -10,16 +10,15 @@ def chunk_dataset(data: list, chunk_size: int = 100):
 
 class HubspotMigrator:
 
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         token = creds.get("access_token")
         user_id = creds.get("user_id")
         domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
+
         safe_obj = obj_name.lower()
         source_records = []
-        
-        
+
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
@@ -30,9 +29,9 @@ class HubspotMigrator:
             url = f"{domain}/crm/v3/objects/{safe_obj}/search"
             payload = {
                 "limit": 100,
-                "properties": properties[:100] 
+                "properties": properties[:100]
             }
-            
+
             if query and query.strip():
                 try:
                     query_dict = json.loads(query)
@@ -41,10 +40,22 @@ class HubspotMigrator:
                 except json.JSONDecodeError:
                     await send_log(f" [HubSpot Extraction] Invalid query format. Ignoring.")
 
+            if time_filter:
+                await send_log(
+                    f" [HubSpot Extraction] Migration time filter was supplied but is not yet "
+                    f"applied to HubSpot search filterGroups -- results are unfiltered by date."
+                )
+
+           
+            effective_query = json.dumps(
+                {k: v for k, v in payload.items() if k != "after"},
+                sort_keys=True
+            )
+
             while True:
                 while True:
                     res = await client.post(url, headers=headers, json=payload)
-                    
+
                     if res.status_code == 401:
                         await send_log(f" HubSpot token expired. Silently refreshing...")
                         token = await CrmService.refresh_crm_token(user_id, "hubspot", "source")
@@ -56,20 +67,20 @@ class HubspotMigrator:
                         await send_log(f" [HubSpot Rate Limit] Pausing extraction for {retry_after}s...")
                         await asyncio.sleep(retry_after)
                         continue
-                        
-                    break 
-                    
+
+                    break
+
                 res.raise_for_status()
                 data = res.json()
                 records = data.get("results", [])
-                
+
                 if not records: break
-                
+
                 for rec in records:
                     flat_rec = {"id": rec.get("id")}
                     props = rec.get("properties", {})
                     if props:
-                        for k, v in props.items(): 
+                        for k, v in props.items():
                             if isinstance(v, dict):
                                 flat_rec[k] = str(v)
                             elif isinstance(v, list):
@@ -77,19 +88,19 @@ class HubspotMigrator:
                             else:
                                 flat_rec[k] = v
                     source_records.append(flat_rec)
-                
+
                 if len(source_records) % 1000 == 0:
                     await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
-                
+
                 paging = data.get("paging", {}).get("next", {})
                 if "after" in paging:
                     payload["after"] = paging["after"]
                 else:
                     break
-                    
+
             await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
-            return source_records
-            
+            return source_records, effective_query
+
         except Exception as e:
             await send_log(f"[{obj_name}] Extract Failed: {str(e)}")
             raise e
@@ -132,7 +143,7 @@ class HubspotMigrator:
         else:
             endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
 
-        semaphore = asyncio.Semaphore(10) 
+        semaphore = asyncio.Semaphore(10)
 
         async def process_chunk(chunk):
             async with semaphore:
@@ -164,11 +175,11 @@ class HubspotMigrator:
                     }
 
                 req_payload = {"inputs": hs_records}
-                
+
                 try:
                     while True:
                         res = await client.post(endpoint, json=req_payload, headers=headers)
-                        
+
                         if res.status_code == 401:
                             await send_log(f" HubSpot token expired mid-migration. Silently refreshing...")
                             token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
@@ -180,22 +191,22 @@ class HubspotMigrator:
                             await send_log(f" [HubSpot Rate Limit] Pausing batch for {retry_after}s...")
                             await asyncio.sleep(retry_after)
                             continue
-                            
+
                         break
 
                     if res.status_code not in [201, 200, 207]:
                         error_body = res.json()
                         error_msg = error_body.get("message", res.text)
                         return {"chunk": chunk, "status": "error", "message": error_msg}
-                        
+
                     data = res.json()
-                    
+
                     successes = data.get("results", [])
                     success_map = {str(i): s for i, s in enumerate(successes)}
-                    
+
                     errors = data.get("errors", [])
                     error_map = {str(e.get("index")): e for e in errors}
-                    
+
                     results_by_index = {}
                     for hs_pos, orig_idx in enumerate(included_indices):
                         idx_str = str(hs_pos)
@@ -220,7 +231,6 @@ class HubspotMigrator:
                         else:
                             results_by_index[orig_idx] = {"success": True, "id": "Success"}
 
-
                     for orig_idx in skipped_indices:
                         results_by_index[orig_idx] = {
                             "success": False,
@@ -230,7 +240,7 @@ class HubspotMigrator:
                     results = [results_by_index[i] for i in range(len(chunk))]
 
                     return {"chunk": chunk, "status": "completed", "results": results}
-                        
+
                 except Exception as exc:
                     return {"chunk": chunk, "status": "error", "message": str(exc)}
 
@@ -238,7 +248,7 @@ class HubspotMigrator:
 
         for batch_res in batch_results:
             chunk = batch_res["chunk"]
-            
+
             if batch_res["status"] == "error":
                 for item in chunk:
                     orig_record = source_records[item["originalIndex"]]
@@ -264,7 +274,7 @@ class HubspotMigrator:
                     if hs_res.get("success"):
                         raw_id = hs_res.get("id")
                         orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
-                        
+
                         all_success_data.append(orig_record)
                         total_success += 1
                     else:

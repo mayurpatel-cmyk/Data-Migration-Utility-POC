@@ -3,6 +3,7 @@ import { CommonModule, DatePipe, TitleCasePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 import { Chart, ChartConfiguration, registerables } from 'chart.js';
+import ChartDataLabels, { Context } from 'chartjs-plugin-datalabels';
 import {
   MigrationApiService,
   MigrationHistoryRecord,
@@ -11,7 +12,8 @@ import {
   HistoryFilters,
 } from '../../../services/migration-history.service';
 
-Chart.register(...registerables);
+Chart.register(...registerables, ChartDataLabels);
+Chart.defaults.set('plugins.datalabels', { display: true });
 
 type HistoryTab = 'migrations' | 'validations';
 
@@ -320,152 +322,188 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   }
 
   private renderTrendChart(analytics: AnalyticsSummary): void {
-    const canvas = this.trendCanvasRef?.nativeElement;
-    if (!canvas) return;
-    const trend = analytics.trend;
-    if (trend.length === 0) return;
+  const canvas = this.trendCanvasRef?.nativeElement;
+  if (!canvas) return;
+  const trend = analytics.trend;
+  if (trend.length === 0) return;
 
-    const config: ChartConfiguration<'line'> = {
-      type: 'line',
-      data: {
-        labels: trend.map(t => t.date),
-        datasets: [
-          { label: 'Migrated (Success)', data: trend.map(t => t.success), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.12)', tension: 0.3, fill: true, pointRadius: 2 },
-          { label: 'Migrated (Errors)', data: trend.map(t => t.errors), borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.08)', tension: 0.3, fill: true, pointRadius: 2 },
-          { label: 'Validated (Valid)', data: trend.map(t => t.valid), borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius: 2 },
-          { label: 'Validated (Invalid)', data: trend.map(t => t.invalid), borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius: 2 },
-        ],
+  const isSingleDay = trend.length === 1;
+  const pointRadius = isSingleDay ? 7 : 2;
+  const pointHoverRadius = isSingleDay ? 9 : 4;
+
+  const config: ChartConfiguration<'line'> = {
+    type: 'line',
+    data: {
+      labels: trend.map(t => t.date),
+      datasets: [
+        { label: 'Migrated (Success)', data: trend.map(t => t.success), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.12)', tension: 0.3, fill: true, pointRadius, pointHoverRadius, pointBackgroundColor: '#198754' },
+        { label: 'Migrated (Errors)', data: trend.map(t => t.errors), borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.08)', tension: 0.3, fill: true, pointRadius, pointHoverRadius, pointBackgroundColor: '#dc3545' },
+        { label: 'Validated (Valid)', data: trend.map(t => t.valid), borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius, pointHoverRadius, pointBackgroundColor: '#0d6efd' },
+        { label: 'Validated (Invalid)', data: trend.map(t => t.invalid), borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.08)', tension: 0.3, borderDash: [5, 4], pointRadius, pointHoverRadius, pointBackgroundColor: '#fd7e14' },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
+        tooltip: { padding: 10, boxPadding: 4 },
+        datalabels: { display: false },
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
-          tooltip: { padding: 10, boxPadding: 4 },
+      scales: {
+        x: {
+          ticks: { maxTicksLimit: 10, autoSkip: true },
+          grid: { display: false },
+
+          offset: isSingleDay,
         },
-        scales: {
-          x: { ticks: { maxTicksLimit: 10, autoSkip: true }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { precision: 0 } },
+        y: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  };
+
+  this.trendChart = new Chart(canvas, config);
+}
+
+private renderObjectChart(analytics: AnalyticsSummary): void {
+  const canvas = this.objectCanvasRef?.nativeElement;
+  if (!canvas) return;
+  const rows = analytics.byObject.slice(0, 8);
+  if (rows.length === 0) return;
+
+  const config: ChartConfiguration<'bar'> = {
+    type: 'bar',
+    data: {
+      labels: rows.map(r => r.object),
+      datasets: [
+        { label: 'Success', data: rows.map(r => r.success), backgroundColor: '#198754', borderRadius: 4 },
+        { label: 'Errors', data: rows.map(r => r.errors), backgroundColor: '#dc3545', borderRadius: 4 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
+        tooltip: { padding: 10, boxPadding: 4 },
+        datalabels: {
+          color: '#fff',
+          font: { size: 11, weight: 'bold' },
+          formatter: (value: number) => (value > 0 ? value.toLocaleString() : ''), // hide 0-height segments
+          anchor: 'center',
+          align: 'center',
         },
       },
-    };
-
-    this.trendChart = new Chart(canvas, config);
-  }
-
-  private renderObjectChart(analytics: AnalyticsSummary): void {
-    const canvas = this.objectCanvasRef?.nativeElement;
-    if (!canvas) return;
-    const rows = analytics.byObject.slice(0, 8);
-    if (rows.length === 0) return;
-
-    const config: ChartConfiguration<'bar'> = {
-      type: 'bar',
-      data: {
-        labels: rows.map(r => r.object),
-        datasets: [
-          { label: 'Success', data: rows.map(r => r.success), backgroundColor: '#198754', borderRadius: 4 },
-          { label: 'Errors', data: rows.map(r => r.errors), backgroundColor: '#dc3545', borderRadius: 4 },
-        ],
+      scales: {
+        x: { stacked: true, grid: { display: true }, ticks: { autoSkip: false, maxRotation: 40, minRotation: 0 } },
+        y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } },
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 11 } } },
-          tooltip: { padding: 10, boxPadding: 4 },
-        },
-        scales: {
-          x: { stacked: true, grid: { display: false }, ticks: { autoSkip: false, maxRotation: 40, minRotation: 0 } },
-          y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } },
-        },
-      },
-    };
+    },
+  };
 
-    this.objectChart = new Chart(canvas, config);
-  }
+  this.objectChart = new Chart(canvas, config);
+}
 
-  private renderPathwayChart(analytics: AnalyticsSummary): void {
-    const canvas = this.pathwayCanvasRef?.nativeElement;
-    if (!canvas) return;
-    const rows = analytics.byPathway;
-    if (rows.length === 0) return;
+private renderPathwayChart(analytics: AnalyticsSummary): void {
+  const canvas = this.pathwayCanvasRef?.nativeElement;
+  if (!canvas) return;
+  const rows = analytics.byPathway;
+  if (rows.length === 0) return;
 
-    const total = rows.reduce((sum, r) => sum + r.totalRecords, 0);
+  const total = rows.reduce((sum, r) => sum + r.totalRecords, 0);
 
-    const config: ChartConfiguration<'doughnut'> = {
-      type: 'doughnut',
-      data: {
-        labels: rows.map(r => `${this.titleCasePipe.transform(r.sourceCrm)} \u2192 ${this.titleCasePipe.transform(r.targetCrm)}`),
-        datasets: [{
-          data: rows.map(r => r.totalRecords),
-          backgroundColor: rows.map((_, i) => this.chartPalette[i % this.chartPalette.length]),
-          borderWidth: 2,
-          borderColor: '#ffffff',
-          hoverOffset: 6,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: '62%',
-        plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
-          tooltip: {
-            padding: 10,
-            boxPadding: 4,
-            callbacks: {
-              label: (ctx) => {
-                const value = (ctx.parsed as number) ?? 0;
-                const pct = total ? ((value / total) * 100).toFixed(1) : '0.0';
-                return `${ctx.label}: ${value.toLocaleString()} records (${pct}%)`;
-              },
+  const config: ChartConfiguration<'doughnut'> = {
+    type: 'doughnut',
+    data: {
+      labels: rows.map(r => `${this.titleCasePipe.transform(r.sourceCrm)} \u2192 ${this.titleCasePipe.transform(r.targetCrm)}`),
+      datasets: [{
+        data: rows.map(r => r.totalRecords),
+        backgroundColor: rows.map((_, i) => this.chartPalette[i % this.chartPalette.length]),
+        borderWidth: 2,
+        borderColor: '#ffffff',
+        hoverOffset: 6,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '62%',
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
+        tooltip: {
+          padding: 10,
+          boxPadding: 4,
+          callbacks: {
+            label: (ctx) => {
+              const value = (ctx.parsed as number) ?? 0;
+              const pct = total ? ((value / total) * 100).toFixed(1) : '0.0';
+              return `${ctx.label}: ${value.toLocaleString()} records (${pct}%)`;
             },
           },
         },
+        datalabels: {
+          color: '#fff',
+          font: { size: 11, weight: 'bold' },
+          textStrokeColor: 'rgba(0,0,0,0.35)',
+          textStrokeWidth: 2,
+          formatter: (value: number) => {
+            if (!total) return '';
+            const pct = (value / total) * 100;
+            if (pct < 4) return ''; // slice too thin to hold a readable label
+            return `${value.toLocaleString()}\n(${pct.toFixed(1)}%)`;
+          },
+        },
       },
-    };
+    },
+  };
 
-    this.pathwayChart = new Chart(canvas, config);
-  }
+  this.pathwayChart = new Chart(canvas, config);
+}
 
-  private renderErrorChart(analytics: AnalyticsSummary): void {
-    const canvas = this.errorCanvasRef?.nativeElement;
-    if (!canvas) return;
-    const rows = analytics.topErrors;
-    if (rows.length === 0) return;
+private renderErrorChart(analytics: AnalyticsSummary): void {
+  const canvas = this.errorCanvasRef?.nativeElement;
+  if (!canvas) return;
+  const rows = analytics.topErrors;
+  if (rows.length === 0) return;
 
-    const config: ChartConfiguration<'bar'> = {
-      type: 'bar',
-      data: {
-        labels: rows.map(r => r.category),
-        datasets: [{ label: 'Occurrences', data: rows.map(r => r.count), backgroundColor: '#dc3545', borderRadius: 4, maxBarThickness: 28 }],
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            padding: 10,
-            boxPadding: 4,
-            callbacks: {
-              afterLabel: (ctx) => {
-                const sample = rows[ctx.dataIndex]?.sample;
-                return sample ? `e.g. "${sample}"` : '';
-              },
+  const config: ChartConfiguration<'bar'> = {
+    type: 'bar',
+    data: {
+      labels: rows.map(r => r.category),
+      datasets: [{ label: 'Occurrences', data: rows.map(r => r.count), backgroundColor: '#dc3545', borderRadius: 4, maxBarThickness: 28 }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          padding: 10,
+          boxPadding: 4,
+          callbacks: {
+            afterLabel: (ctx) => {
+              const sample = rows[ctx.dataIndex]?.sample;
+              return sample ? `e.g. "${sample}"` : '';
             },
           },
         },
-        scales: {
-          x: { beginAtZero: true, ticks: { precision: 0 }, grid: { display: false } },
-          y: { grid: { display: false } },
+        datalabels: {
+          color: '#212529',
+          font: { size: 11, weight: 'bold' },
+          anchor: 'end',
+          align: 'end',
+          formatter: (value: number) => value.toLocaleString(),
         },
       },
-    };
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 }, grid: { display: true } },
+        y: { grid: { display: true } },
+      },
+    },
+  };
 
-    this.errorChart = new Chart(canvas, config);
-  }
+  this.errorChart = new Chart(canvas, config);
+}
 }

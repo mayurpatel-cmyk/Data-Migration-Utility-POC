@@ -174,7 +174,7 @@ class AuditService:
     @staticmethod
     def _build_effective_query(source_crm: str, target_object: str, extraction_query: str, time_filter: dict = None) -> str:
         query = (extraction_query or "").strip()
-        no_query_label = "(no query filter -- full object export)"
+        no_query_label = "(no query filter -- CSV export)"
 
         if not time_filter:
             return query or no_query_label
