@@ -7,6 +7,7 @@ from app.services.time_filter_service import (
     TimeFilterError,
 )
 from app.services.query_field_utils import ensure_fields_selected
+from app.services.coql_query_builder import build_coql, extract_user_limit, COQL_PAGE_SIZE
 
 class ZohoMigrator:
 
@@ -15,76 +16,65 @@ class ZohoMigrator:
         domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
         if not domain.startswith("http"):
             domain = f"https://{domain}"
-            
+
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
-        # APPLY DYNAMIC TIME FILTER LOGIC (date-range only; see time_filter_service.py)
         try:
             time_clause = build_zoho_time_clause(time_filter)
         except TimeFilterError as e:
             await send_log(f"[{obj_name}] Invalid migration filter: {e}")
             raise
 
+        raw_query = (query or "").strip()
+
         try:
-            coql_query = query.strip() if query else ""
+            if raw_query or time_clause:
+                await send_log("Extracting data from Zoho using COQL...")
+                user_limit = extract_user_limit(raw_query)  # honour an explicit `limit N` typed in the editor
+                data, offset, actual_query_used = [], 0, ""
 
-            if coql_query or time_clause:
-                if coql_query.lower().startswith("select "):
-                    # COQL has no real "*" wildcard -- unlike SOQL, sending
-                    # it literally is a syntax error. "*" is purely this
-                    # app's own placeholder convention (the default query
-                    # the UI generates), so it's swapped for a real field
-                    # list here before ever reaching Zoho's API.
-                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
-                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
-                    else:
-                        # Floor-not-ceiling guarantee -- every mapped field
-                        # must actually be queried, or it comes back
-                        # silently empty even though it shows as "mapped".
-                        # See query_field_utils.py.
-                        coql_query = ensure_fields_selected(coql_query, safe_fields)
-                    if time_clause:
-                        coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
-                else:
-                    where_parts = []
-                    if coql_query:
-                        where_parts.append(f"({coql_query})")
-                    if time_clause:
-                        where_parts.append(time_clause)
-                    combined_where = " and ".join(where_parts)
-                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {combined_where}"
-
-                if " limit " not in coql_query.lower():
-                    coql_query += " limit 200"
-
-                await send_log(f"Extracting data from Zoho using COQL...")
-                
-                res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
-                
-                if res.status_code != 200:
-                    raise Exception(f"Zoho COQL Error: {res.text}")
-                    
-                data = res.json().get("data", [])
-                actual_query_used = coql_query
-            else:
-                await send_log(f"Extracting data from Zoho (Standard API)...")
-                data = []
-                page = 1
                 while True:
-                    res = await client.get(f"{domain}/crm/v6/{obj_name}?page={page}&per_page=200&fields={','.join(safe_fields)}", headers=headers)
+                    page_size = COQL_PAGE_SIZE if user_limit is None else min(COQL_PAGE_SIZE, user_limit - len(data))
+                    if page_size <= 0:
+                        break
+
+                    coql_query = build_coql(raw_query, obj_name, safe_fields, time_clause, limit=page_size, offset=offset)
+                    actual_query_used = actual_query_used or coql_query
+
+                    res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
+                    if res.status_code == 204:  # COQL returns 204 when nothing matches
+                        break
+                    if res.status_code != 200:
+                        raise Exception(f"Zoho COQL Error: {res.text} | Query: {coql_query}")
+
+                    body = res.json()
+                    batch = body.get("data", [])
+                    data.extend(batch)
+                    offset += len(batch)
+
+                    if len(data) % 1000 < COQL_PAGE_SIZE:
+                        await send_log(f"[{obj_name}] Extracted {len(data)} records...")
+                    if not batch or not body.get("info", {}).get("more_records"):
+                        break
+            else:
+                await send_log("Extracting data from Zoho (Standard API)...")
+                data, page = [], 1
+                while True:
+                    res = await client.get(
+                        f"{domain}/crm/v6/{obj_name}?page={page}&per_page=200&fields={','.join(safe_fields)}",
+                        headers=headers,
+                    )
                     if res.status_code == 204:
                         break
-                    
                     if res.status_code != 200:
                         raise Exception(f"Zoho API Error: {res.text}")
-                        
+
                     batch = res.json().get("data", [])
-                    if not batch: 
+                    if not batch:
                         break
                     data.extend(batch)
-                    
                     if not res.json().get("info", {}).get("more_records"):
                         break
                     page += 1
@@ -105,7 +95,6 @@ class ZohoMigrator:
 
         except Exception as e:
             raise Exception(f"Failed to extract from Zoho: {str(e)}")
-
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
         if not payload: return 0, 0, 0, [], [], []

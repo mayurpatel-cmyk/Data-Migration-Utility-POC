@@ -14,6 +14,7 @@ from app.services.time_filter_service import (
     TimeFilterError,
 )
 from app.services.query_field_utils import ensure_fields_selected
+from app.services.coql_query_builder import build_coql
 
 class CrmQueryService:
 
@@ -165,46 +166,30 @@ class CrmQueryService:
         if not domain.startswith("http"): domain = f"https://{domain}"
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
-        if limit > 200: limit = 200
+        limit = min(limit, 200)
 
         try:
             time_clause = build_zoho_time_clause(time_filter)
         except TimeFilterError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+        safe_fields = headers_list[:40] if headers_list else ["id"]
+        raw_query = (query or "").strip()
+
         async with httpx.AsyncClient(timeout=30.0) as client:
-            coql_query = query.strip() if query else ""
             used_coql = None
 
-            if coql_query or time_clause:
-                if coql_query.lower().startswith("select "):
-                    if " * " in coql_query.lower() or coql_query.lower().startswith("select *"):
-                        safe_fields = headers_list[:40] if headers_list else ["id"]
-                        coql_query = re.sub(r'(?i)select\s+\*\s+from', f"select {','.join(safe_fields)} from", coql_query)
-                    else:
-                        coql_query = ensure_fields_selected(coql_query, headers_list)
-                    if time_clause:
-                        coql_query = merge_time_clause(coql_query, time_clause, where_kw="where", and_kw="and")
-                    if "limit " not in coql_query.lower():
-                        coql_query += f" limit {limit}"
-                else:
-                    where_parts = []
-                    if coql_query:
-                        where_parts.append(f"({coql_query})")
-                    if time_clause:
-                        where_parts.append(time_clause)
-                    combined_where = " and ".join(where_parts)
-                    safe_fields = headers_list[:40] if headers_list else ["id"]
-                    coql_query = f"select {','.join(safe_fields)} from {obj_name} where {combined_where} limit {limit}"
-
-                used_coql = coql_query
-                res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
+            if raw_query or time_clause:
+                used_coql = build_coql(raw_query, obj_name, safe_fields, time_clause, limit=limit)
+                res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": used_coql})
             else:
-                safe_fields = headers_list[:40] if headers_list else ["id"]
-                res = await client.get(f"{domain}/crm/v6/{obj_name}?page=1&per_page={limit}&fields={','.join(safe_fields)}", headers=headers)
+                res = await client.get(
+                    f"{domain}/crm/v6/{obj_name}?page=1&per_page={limit}&fields={','.join(safe_fields)}",
+                    headers=headers,
+                )
 
             if res.status_code not in [200, 204]:
-                raise HTTPException(status_code=400, detail=f"Zoho rejected query: {res.text}")
+                raise HTTPException(status_code=400, detail=f"Zoho rejected query: {res.text} | Query: {used_coql}")
 
             raw_records = [] if res.status_code == 204 else res.json().get("data", [])
 
@@ -219,6 +204,49 @@ class CrmQueryService:
                 sample_records.append(flat_rec)
 
             return {"records": sample_records, "queryUsed": used_coql}
+
+    @staticmethod
+    async def _zoho_count(creds: dict, obj_name: str, query: str = "", time_filter: dict = None) -> int:
+        zoho_token = creds.get("access_token")
+        domain = (creds.get("api_domain") or "https://www.zohoapis.com").rstrip('/')
+        if not domain.startswith("http"):
+            domain = f"https://{domain}"
+
+        headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+
+        try:
+            time_clause = build_zoho_time_clause(time_filter)
+        except TimeFilterError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        stripped = (query or "").strip()
+
+        if not stripped and not time_clause:
+            url = f"{domain}/crm/v6/{obj_name}/actions/count"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"Zoho rejected count request: {res.text}")
+                return res.json().get("count", 0)
+
+        coql_query = build_coql(
+            stripped, obj_name, [], time_clause,
+            select_override="count(id)", keep_tail=False,
+        )
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
+            if res.status_code == 204:
+                return 0
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Zoho rejected count query: {res.text} | Query: {coql_query}")
+            rows = res.json().get("data", [])
+            if not rows:
+                return 0
+            for value in rows[0].values():
+                if isinstance(value, (int, float)):
+                    return int(value)
+            return 0
 
     @staticmethod
     async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
