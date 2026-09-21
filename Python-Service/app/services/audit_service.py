@@ -3,7 +3,7 @@ import json
 import tempfile
 import csv
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import Counter
 from fpdf import FPDF
 from supabase import create_client
@@ -275,7 +275,7 @@ class AuditService:
         urls = {"pdf": None, "success_csv": None, "error_csv": None}
         error_summary = AuditService.build_error_summary(error_data)
 
-        run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        run_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M:%S %p UTC")
         migration_mode_display = migration_mode or ("CSV / Excel Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
 
         effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter)
@@ -302,10 +302,9 @@ class AuditService:
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 8, txt=s(" Migration Run Details"), ln=True, fill=True)
             pdf.set_font("Arial", "", 10)
-            pdf.cell(95, 7, txt=s(f"  Session ID: {session_id}"))
-            pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"), ln=True)
             pdf.cell(95, 7, txt=s(f"  User Name: {user_name or 'N/A'}"))
             pdf.cell(95, 7, txt=s(f"  User Email: {user_email or 'N/A'}"), ln=True)
+            pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"))
             pdf.cell(95, 7, txt=s(f"  Operation Mode: {op_mode}"), ln=True)
             pdf.ln(5)
 
