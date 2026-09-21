@@ -85,6 +85,8 @@ interface FileMigrationBudgetPreview {
   message: string;
   attachmentFileCount: number;
   contentFileCount: number;
+  sourceBudgetVerified?: boolean;
+  targetBudgetVerified?: boolean;
 }
 
 @Component({
@@ -262,6 +264,18 @@ isProfileDropdownOpen = false;
   get isSalesforceToSalesforce(): boolean {
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
   }
+
+  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho'];
+
+get fileMigrationSupported(): boolean {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  return !!s && !!t && this.FILE_MIGRATION_CRMS.includes(s) && this.FILE_MIGRATION_CRMS.includes(t);
+}
+
+get isSourceZoho(): boolean {
+  return this.sourceCrmId?.toLowerCase() === 'zoho';
+}
 
   recentQueries: string[] = [];
   // --- MONACO EDITOR CONFIGURATION ---
@@ -3200,7 +3214,7 @@ onReviewPanelDragEnd(): void {
   }
 
   private show_confirmation_modal(activeMappings: any[]) {
-    const filesInScope = this.isSalesforceToSalesforce && (this.migrateAttachments || this.migrateFiles);
+    const filesInScope = this.fileMigrationSupported && (this.migrateAttachments || this.migrateFiles);
     const preview = this.fileMigrationBudgetPreview;
 
     let fileBudgetHtml = '';
@@ -3289,7 +3303,7 @@ onReviewPanelDragEnd(): void {
       clearTimeout(this.fileMigrationBudgetPreviewDebounce);
     }
 
-    if (!this.isSalesforceToSalesforce || (!this.migrateAttachments && !this.migrateFiles)) {
+    if (!this.fileMigrationSupported || (!this.migrateAttachments && !this.migrateFiles)) {
       this.fileMigrationBudgetPreview = null;
       this.fileMigrationBudgetPreviewError = null;
       this.isCheckingFileMigrationBudget = false;
@@ -3316,6 +3330,8 @@ onReviewPanelDragEnd(): void {
     const body = {
       sourceObject: this.selectedSourceObject,
       query: this.customQuery?.trim() || '',
+      sourceCrm: this.sourceCrmId.toLowerCase(),
+      targetCrm: this.targetCrmId.toLowerCase(),
       migrationTimeFilter: this.migrationTimeFilter,
       migrateAttachments: this.migrateAttachments,
       migrateFiles: this.migrateFiles
@@ -3514,8 +3530,8 @@ onReviewPanelDragEnd(): void {
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
-      migrateAttachments: this.isSalesforceToSalesforce ? this.migrateAttachments : false,
-      migrateFiles: this.isSalesforceToSalesforce ? this.migrateFiles : false,
+      migrateAttachments: this.fileMigrationSupported ? this.migrateAttachments : false,
+      migrateFiles: this.fileMigrationSupported && !this.isSourceZoho ? this.migrateFiles : false,
       migrationTimeFilter: this.migrationTimeFilter,
 
       authToken: localStorage.getItem('supabase_token') || ''

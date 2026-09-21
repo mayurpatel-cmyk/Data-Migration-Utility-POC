@@ -1143,15 +1143,17 @@
             </div>
           </div>
 
-          @if (isSalesforceToSalesforce) {
+          @if (fileMigrationSupported) {
           <div class="d-flex flex-wrap gap-3 mt-2 pt-2 border-top border-primary-subtle">
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateAttachmentsCheck"
                 [(ngModel)]="migrateAttachments" (ngModelChange)="onFileMigrationCheckboxToggle()">
               <label class="form-check-label fw-bold cursor-pointer small" for="migrateAttachmentsCheck">
-                <i class="feather icon-paperclip me-1"></i> Migrate Attachments (legacy)
-              </label>
+                <i class="feather icon-paperclip me-1"></i>
+          {{ isSourceZoho ? 'Migrate Attachments' : 'Migrate Attachments (legacy)' }}
+      </label>
             </div>
+            @if (!isSourceZoho) {
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateFilesCheck"
                 [(ngModel)]="migrateFiles" (ngModelChange)="onFileMigrationCheckboxToggle()">
@@ -1159,7 +1161,16 @@
                 <i class="feather icon-file me-1"></i> Migrate Files
               </label>
             </div>
+          }
           </div>
+
+          @if ((migrateAttachments || migrateFiles) && (isSourceZoho || targetCrmId?.toLowerCase() === 'zoho')) {
+  <div class="small text-muted mt-1">
+     <i class="feather icon-info"></i>
+     @if (targetCrmId?.toLowerCase() === 'zoho') { Zoho accepts attachments up to 20 MB per file; larger files are reported as errors. }
+     @if (isSourceZoho && targetCrmId?.toLowerCase() === 'salesforce') { Zoho attachments are created as Salesforce Files. }
+   </div>
+ }
 
           @if (migrateAttachments || migrateFiles) {
             <div class="mt-2">
