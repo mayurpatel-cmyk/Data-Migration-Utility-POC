@@ -261,12 +261,12 @@
                 <i class="feather icon-upload-cloud me-1"></i> Migrations ({{ migrationLogs().length }})
               </a>
             </li>
-            <li class="nav-item">
+            <!-- <li class="nav-item">
               <a class="nav-link" [class.active]="activeTab() === 'validations'" (click)="setTab('validations')"
                 role="button">
                 <i class="feather icon-check-square me-1"></i> Validations ({{ validationLogs().length }})
               </a>
-            </li>
+            </li> -->
           </ul>
         </div>
 
@@ -442,7 +442,7 @@
 
           <!-- ===================== VALIDATIONS TAB ===================== -->
           } @else {
-          @if (validationLogs().length === 0) {
+          <!-- @if (validationLogs().length === 0) {
           <div class="text-center p-5 bg-light rounded m-4 border border-dashed">
             <div class="d-inline-flex align-items-center justify-content-center bg-white text-muted rounded-circle mb-3 shadow-sm"
               style="width: 70px; height: 70px;">
@@ -570,7 +570,7 @@
               </tbody>
             </table>
           </div>
-          }
+          } -->
           }
         </div>
       </div>
