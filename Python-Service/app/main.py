@@ -54,7 +54,7 @@ app = FastAPI(title="Migration Engine", lifespan=lifespan)
 # =========================================================
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:4200").split(",")
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://sureshift-demo:4200").split(",")
     if origin.strip()
 ]
 
