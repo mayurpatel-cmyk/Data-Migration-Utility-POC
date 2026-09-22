@@ -944,96 +944,96 @@
             </span>
             }
           </div>
+        </div>
+        }
 
-          @if (!restrictMappingToQueryFields && isEligibleForTimeFilter) {
-          <div class="position-relative" (click)="$event.stopPropagation()" style="width: fit-content;">
-            <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
-              [class.btn-outline-primary]="!isMigrationFilterActive" [class.btn-primary]="isMigrationFilterActive"
-              style="border-radius: 8px;" (click)="toggleMigrationFilterDropdown($event)">
-              <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
-              <span class="fw-bold">Migration Filter:</span>
-              <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
-              <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen"
-                [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
-            </button>
+        @if (isEligibleForTimeFilter) {
+        <div class="position-relative mt-1" (click)="$event.stopPropagation()" style="width: fit-content;">
+          <button type="button" class="btn btn-sm d-flex align-items-center gap-2"
+            [class.btn-outline-primary]="!isMigrationFilterActive" [class.btn-primary]="isMigrationFilterActive"
+            style="border-radius: 8px;" (click)="toggleMigrationFilterDropdown($event)">
+            <i class="feather icon-calendar" style="font-size: 0.8rem;"></i>
+            <span class="fw-bold">Migration Filter:</span>
+            <span [class.opacity-75]="!isMigrationFilterActive">{{ migrationFilterSummary }}</span>
+            <i class="feather" [class.icon-chevron-down]="!isMigrationFilterOpen"
+              [class.icon-chevron-up]="isMigrationFilterOpen" style="font-size: 0.8rem;"></i>
+          </button>
 
-            @if (isMigrationFilterOpen) {
-            <div
-              class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
-              style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+          @if (isMigrationFilterOpen) {
+          <div
+            class="dropdown-menu show p-3 shadow-lg position-absolute start-0 mt-1 animate__animated animate__fadeIn"
+            style="width: 360px; max-height: 400px; overflow-y: auto; z-index: 1060; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;">
+
+            <div class="d-flex flex-column gap-2">
+
+              <div class="d-flex align-items-center gap-2">
+                <label class="small text-muted text-nowrap mb-0">Field</label>
+                <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
+                  [(ngModel)]="migrationTimeFilter.field" (change)="triggerLivePreview()">
+                  @for (opt of timeFilterFieldOptions; track opt.value) {
+                  <option [value]="opt.value">{{ opt.label }}</option>
+                  }
+                </select>
+              </div>
+
+              <hr class="my-1">
 
               <div class="d-flex flex-column gap-2">
-
-                <div class="d-flex align-items-center gap-2">
-                  <label class="small text-muted text-nowrap mb-0">Field</label>
-                  <select class="form-select form-select-sm border-secondary-subtle shadow-sm"
-                    [(ngModel)]="migrationTimeFilter.field" (change)="triggerLivePreview()">
-                    @for (opt of timeFilterFieldOptions; track opt.value) {
-                    <option [value]="opt.value">{{ opt.label }}</option>
-                    }
-                  </select>
-                </div>
-
-                <hr class="my-1">
-
-                <div class="d-flex flex-column gap-2">
-                  <div class="d-flex align-items-start gap-2">
-                    <div class="flex-grow-1">
-                      <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
-                      <input type="date" id="migrationFilterStartDate"
-                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
-                        [(ngModel)]="migrationTimeFilter.startDate" [max]="migrationTimeFilter.endDate || todayIsoDate"
-                        (change)="onDateRangeChange()">
-                    </div>
-                    <div class="flex-grow-1">
-                      <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
-                      <input type="date" id="migrationFilterEndDate"
-                        class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
-                        [(ngModel)]="migrationTimeFilter.endDate" [min]="migrationTimeFilter.startDate"
-                        [max]="todayIsoDate" placeholder="Defaults to today" title="Leave blank to filter through today"
-                        (change)="onDateRangeChange()">
-                    </div>
-                    @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
-                    <div class="flex-shrink-0 migration-filter-clear-wrap">
-                      <label class="small text-muted mb-0 migration-filter-clear-spacer"
-                        aria-hidden="true">&nbsp;</label>
-                      <div class="migration-filter-clear-row">
-                        <button type="button" class="btn btn-sm migration-filter-clear-btn" (click)="clearDateRange()"
-                          title="Clear date range">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                        </button>
-                      </div>
-                    </div>
-                    }
+                <div class="d-flex align-items-start gap-2">
+                  <div class="flex-grow-1">
+                    <label class="small text-muted mb-0" for="migrationFilterStartDate">From</label>
+                    <input type="date" id="migrationFilterStartDate"
+                      class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                      [(ngModel)]="migrationTimeFilter.startDate" [max]="migrationTimeFilter.endDate || todayIsoDate"
+                      (change)="onDateRangeChange()">
                   </div>
-
-                  @if (migrationTimeFilter.startDate && !migrationTimeFilter.endDate) {
-                  <div class="small text-muted d-flex align-items-center gap-1">
-                    <i class="feather icon-info" style="font-size: 0.75rem;"></i>
-                    Filtering from {{ migrationTimeFilter.startDate }} through today.
+                  <div class="flex-grow-1">
+                    <label class="small text-muted mb-0" for="migrationFilterEndDate">To</label>
+                    <input type="date" id="migrationFilterEndDate"
+                      class="form-control form-control-sm border-secondary-subtle shadow-sm w-100"
+                      [(ngModel)]="migrationTimeFilter.endDate" [min]="migrationTimeFilter.startDate"
+                      [max]="todayIsoDate" placeholder="Defaults to today" title="Leave blank to filter through today"
+                      (change)="onDateRangeChange()">
                   </div>
-                  }
-
-                  <div class="d-flex align-items-center gap-1 flex-wrap">
-                    @for (preset of quickRangePresets; track preset.key) {
-                    <button type="button" class="btn btn-sm" [class.btn-primary]="activeQuickRangePreset === preset.key"
-                      [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
-                      (click)="applyQuickRange(preset.key)">
-                      {{ preset.label }}
-                    </button>
-                    }
-                  </div>
-
-                  @if (dateRangeError) {
-                  <div class="small migration-filter-error d-flex align-items-center gap-1">
-                    <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
-                    {{ dateRangeError }}
+                  @if (migrationTimeFilter.startDate || migrationTimeFilter.endDate) {
+                  <div class="flex-shrink-0 migration-filter-clear-wrap">
+                    <label class="small text-muted mb-0 migration-filter-clear-spacer"
+                      aria-hidden="true">&nbsp;</label>
+                    <div class="migration-filter-clear-row">
+                      <button type="button" class="btn btn-sm migration-filter-clear-btn" (click)="clearDateRange()"
+                        title="Clear date range">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                      </button>
+                    </div>
                   </div>
                   }
                 </div>
+
+                @if (migrationTimeFilter.startDate && !migrationTimeFilter.endDate) {
+                <div class="small text-muted d-flex align-items-center gap-1">
+                  <i class="feather icon-info" style="font-size: 0.75rem;"></i>
+                  Filtering from {{ migrationTimeFilter.startDate }} through today.
+                </div>
+                }
+
+                <div class="d-flex align-items-center gap-1 flex-wrap">
+                  @for (preset of quickRangePresets; track preset.key) {
+                  <button type="button" class="btn btn-sm" [class.btn-primary]="activeQuickRangePreset === preset.key"
+                    [class.btn-outline-secondary]="activeQuickRangePreset !== preset.key"
+                    (click)="applyQuickRange(preset.key)">
+                    {{ preset.label }}
+                  </button>
+                  }
+                </div>
+
+                @if (dateRangeError) {
+                <div class="small migration-filter-error d-flex align-items-center gap-1">
+                  <i class="feather icon-alert-circle" style="font-size: 0.75rem;"></i>
+                  {{ dateRangeError }}
+                </div>
+                }
               </div>
             </div>
-            }
           </div>
           }
         </div>

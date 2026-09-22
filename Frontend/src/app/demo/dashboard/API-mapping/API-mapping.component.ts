@@ -1923,11 +1923,11 @@ onReviewPanelDragEnd(): void {
         throw new Error(errorData.detail || 'Failed to fetch filtered data.');
       }
 
-      const data = await response.json();
+            const data = await response.json();
       this.previewRecords = data.records || [];
       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery, this.migrationTimeFilter);
       const filterSuffix = this.getFilterSuffix();
-      const executedQuery = data.queryUsed || this.customQuery || 'default query';
+      const executedQuery = data.queryUsed || safeQuery || 'default query';
       this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);

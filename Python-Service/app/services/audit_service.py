@@ -172,9 +172,10 @@ class AuditService:
     # EFFECTIVE QUERY RECONSTRUCTION 
     # ==========================================
     @staticmethod
-    def _build_effective_query(source_crm: str, target_object: str, extraction_query: str, time_filter: dict = None) -> str:
+    def _build_effective_query(source_crm: str, target_object: str, extraction_query: str, time_filter: dict = None, source_object: str = None) -> str:
         query = (extraction_query or "").strip()
         no_query_label = "(no query filter -- CSV export)"
+        queried_object = source_object or target_object
 
         if not time_filter:
             return query or no_query_label
@@ -182,8 +183,8 @@ class AuditService:
         try:
             from app.services.time_filter_service import (
                 build_salesforce_time_clause, build_zoho_time_clause,
-                build_zendesk_time_clause, build_hubspot_time_filters,
-                merge_time_clause,
+                build_zendesk_time_clause, build_zendesk_custom_object_time_filter,
+                build_hubspot_time_filters, merge_time_clause,
             )
 
             crm = (source_crm or "").lower()
@@ -195,7 +196,7 @@ class AuditService:
                 if query.lower().startswith("select "):
                     return merge_time_clause(query, time_clause, where_kw="WHERE", and_kw="AND")
                 where_parts = [p for p in [f"({query})" if query else None, time_clause] if p]
-                return f"SELECT * FROM {target_object} WHERE {' AND '.join(where_parts)}"
+                return f"SELECT * FROM {queried_object} WHERE {' AND '.join(where_parts)}"
 
             elif crm == "zoho":
                 time_clause = build_zoho_time_clause(time_filter)
@@ -204,12 +205,34 @@ class AuditService:
                 if query.lower().startswith("select "):
                     return merge_time_clause(query, time_clause, where_kw="where", and_kw="and")
                 where_parts = [p for p in [f"({query})" if query else None, time_clause] if p]
-                return f"select * from {target_object} where {' and '.join(where_parts)}"
+                return f"select * from {queried_object} where {' and '.join(where_parts)}"
 
             elif crm == "zendesk":
-                time_clause = build_zendesk_time_clause(time_filter)
-                parts = [p for p in [query, time_clause] if p]
-                return " ".join(parts) if parts else no_query_label
+                safe_obj = (queried_object or "").strip().lower()
+                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
+                is_standard = safe_obj in standard_objects or f"{safe_obj}s" in standard_objects
+
+                if is_standard:
+                    time_clause = build_zendesk_time_clause(time_filter)
+                    parts = [p for p in [query, time_clause] if p]
+                    return " ".join(parts) if parts else no_query_label
+
+                custom_filters = build_zendesk_custom_object_time_filter(time_filter)
+                if not custom_filters:
+                    return query or no_query_label
+                try:
+                    base_payload = json.loads(query) if query else {}
+                except json.JSONDecodeError:
+                    base_payload = {}
+                existing = base_payload.get("filter")
+                if isinstance(existing, dict) and isinstance(existing.get("and"), list):
+                    and_list = list(existing["and"]) + custom_filters
+                elif isinstance(existing, dict) and existing:
+                    and_list = [existing] + custom_filters
+                else:
+                    and_list = list(custom_filters)
+                base_payload["filter"] = {"and": and_list}
+                return json.dumps(base_payload, sort_keys=True)
 
             elif crm == "hubspot":
                 time_filters = build_hubspot_time_filters(time_filter)
@@ -218,6 +241,13 @@ class AuditService:
 
             else:
                 return query or no_query_label
+
+        except Exception:
+            logger.warning(
+                "[AUDIT] Could not reconstruct effective query for source_crm=%s -- "
+                "falling back to raw extraction_query.", source_crm, exc_info=True
+            )
+            return query or no_query_label
 
         except Exception:
             logger.warning(
@@ -267,7 +297,7 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, migration_mode: str = None, source_mode: str = None, actual_query_used: str = None):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, migration_mode: str = None, source_mode: str = None, actual_query_used: str = None, source_object: str = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
@@ -278,7 +308,7 @@ class AuditService:
         run_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M:%S %p UTC")
         migration_mode_display = migration_mode or ("CSV / Excel Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
 
-        effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter)
+        effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter, source_object=source_object)
 
         # ==========================================
         # 1. GENERATE & UPLOAD PDF SUMMARY

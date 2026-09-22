@@ -92,39 +92,8 @@ class CrmQueryService:
                 res = await client.get(url, headers=headers)
                 
                 if res.status_code != 200:
-                    raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
-                return {"records": res.json().get("results", []), "queryUsed": full_query}
-                
-            else:
-                explicit_fields = None
-                had_explicit_query = bool(query.strip())
-                json_payload: dict = {}
-
-                if had_explicit_query:
-                    try:
-                        json_payload = json.loads(query)
-                    except json.JSONDecodeError:
-                        raise HTTPException(status_code=400, detail="Invalid JSON payload in Zendesk query.")
-
-                    raw_fields = json_payload.pop("fields", None)
-                    if isinstance(raw_fields, list) and raw_fields:
-                        cleaned = {str(f).strip() for f in raw_fields if str(f).strip()}
-                        if cleaned:
-                            explicit_fields = cleaned
-
-                if custom_time_filters:
-                    json_payload = CrmQueryService._merge_zendesk_custom_filter(json_payload, custom_time_filters)
-
-                if had_explicit_query or custom_time_filters:
-                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
-                    res = await client.post(url, headers=headers, json=json_payload)
-                else:
-                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]={limit}"
-                    res = await client.get(url, headers=headers)
-
-                if res.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Zendesk Custom Object Error: {res.text}")
-                
+
                 flattened_records = []
                 for rec in res.json().get("custom_object_records", []):
                     flat_rec = {}
@@ -133,13 +102,13 @@ class CrmQueryService:
                             for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
                         elif k == "custom_object_fields" and isinstance(v, dict):
                             for cf_key, cf_val in v.items(): flat_rec[cf_key] = cf_val
-                        elif not isinstance(v, (dict, list)): 
+                        elif not isinstance(v, (dict, list)):
                             flat_rec[k] = v
                     if explicit_fields is not None:
                         always_keep = {"id", "name", "external_id"}
                         flat_rec = {k: v for k, v in flat_rec.items() if k in explicit_fields or k in always_keep}
                     flattened_records.append(flat_rec)
-                return {"records": flattened_records}
+                return {"records": flattened_records, "queryUsed": json.dumps(json_payload, sort_keys=True) if (had_explicit_query or custom_time_filters) else None}
 
     @staticmethod
     def _merge_zendesk_custom_filter(payload: dict, extra_clauses: list) -> dict:
@@ -252,7 +221,7 @@ class CrmQueryService:
     async def execute_hubspot_query(creds: dict, obj_name: str, query: str, headers_list: list, limit: int, time_filter: dict = None):
         hs_token = creds.get("access_token")
         domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
-        
+
         headers = {
             "Authorization": f"Bearer {hs_token}",
             "Content-Type": "application/json"
@@ -262,16 +231,16 @@ class CrmQueryService:
             time_filters = build_hubspot_time_filters(time_filter)
         except TimeFilterError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             properties = headers_list[:50] if headers_list else ["hs_object_id", "createdate", "lastmodifieddate"]
             url = f"{domain}/crm/v3/objects/{obj_name}/search"
-            
+
             payload = {
                 "limit": limit,
                 "properties": properties
             }
-            
+
             if query and query.strip():
                 try:
                     query_dict = json.loads(query)
@@ -290,14 +259,16 @@ class CrmQueryService:
 
             if time_filters:
                 payload["filterGroups"] = CrmQueryService._merge_hubspot_time_filters(payload.get("filterGroups"), time_filters)
-            
+
+            effective_query = json.dumps(payload, sort_keys=True)
+
             res = await client.post(url, headers=headers, json=payload)
-            
+
             if res.status_code != 200:
                 raise HTTPException(status_code=400, detail=f"HubSpot rejected search query: {res.text}")
-                
+
             raw_results = res.json().get("results", [])
-            
+
             flattened_records = []
             for r in raw_results:
                 flat_rec = {"id": r.get("id")}
@@ -306,8 +277,8 @@ class CrmQueryService:
                     for k, v in props.items():
                         flat_rec[k] = v
                 flattened_records.append(flat_rec)
-                
-            return {"records": flattened_records}
+
+            return {"records": flattened_records, "queryUsed": effective_query}
 
     @staticmethod
     def _merge_hubspot_time_filters(filter_groups, time_filters: list) -> list:
