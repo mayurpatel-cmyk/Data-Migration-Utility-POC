@@ -2302,9 +2302,16 @@ onReviewPanelDragEnd(): void {
           this.previewRecords = sourceData.sampleRecords || [];
 
           const crmLower = this.sourceCrmId.toLowerCase();
-          if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
-            const fieldList = this.previewHeaders.slice(0, 2).join(', ');
-            this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+          if (this.isDefaultQuery && this.previewHeaders.length > 0) {
+            const defaultFields = this.previewHeaders.slice(0, 2);
+
+            if (crmLower === 'salesforce' || crmLower === 'zoho') {
+              this.customQuery = `SELECT ${defaultFields.join(', ')} FROM ${this.selectedSourceObject}`;
+            } else if (crmLower === 'hubspot') {
+              this.customQuery = JSON.stringify({ properties: defaultFields }, null, 2);
+            } else if (crmLower === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+              this.customQuery = JSON.stringify({ fields: defaultFields }, null, 2);
+            }
           }
 
           this.mappings = this.sourceFields.map((field: FieldMeta) => ({

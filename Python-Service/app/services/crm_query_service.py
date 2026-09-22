@@ -91,6 +91,33 @@ class CrmQueryService:
                 url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page={limit}"
                 res = await client.get(url, headers=headers)
                 
+            else:
+                explicit_fields = None
+                had_explicit_query = bool(query.strip())
+                json_payload: dict = {}
+
+                if had_explicit_query:
+                    try:
+                        json_payload = json.loads(query)
+                    except json.JSONDecodeError:
+                        raise HTTPException(status_code=400, detail="Invalid JSON payload in Zendesk query.")
+
+                    raw_fields = json_payload.pop("fields", None)
+                    if isinstance(raw_fields, list) and raw_fields:
+                        cleaned = {str(f).strip() for f in raw_fields if str(f).strip()}
+                        if cleaned:
+                            explicit_fields = cleaned
+
+                if custom_time_filters:
+                    json_payload = CrmQueryService._merge_zendesk_custom_filter(json_payload, custom_time_filters)
+
+                if json_payload:
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
+                    res = await client.post(url, headers=headers, json=json_payload)
+                else:
+                    url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records?page[size]={limit}"
+                    res = await client.get(url, headers=headers)
+
                 if res.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Zendesk Custom Object Error: {res.text}")
 
@@ -108,7 +135,7 @@ class CrmQueryService:
                         always_keep = {"id", "name", "external_id"}
                         flat_rec = {k: v for k, v in flat_rec.items() if k in explicit_fields or k in always_keep}
                     flattened_records.append(flat_rec)
-                return {"records": flattened_records, "queryUsed": json.dumps(json_payload, sort_keys=True) if (had_explicit_query or custom_time_filters) else None}
+                return {"records": flattened_records, "queryUsed": json.dumps(json_payload, sort_keys=True) if json_payload else None}
 
     @staticmethod
     def _merge_zendesk_custom_filter(payload: dict, extra_clauses: list) -> dict:
