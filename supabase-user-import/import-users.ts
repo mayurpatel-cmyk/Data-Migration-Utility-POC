@@ -37,7 +37,7 @@ async function importUsersFromCsv(csvPath: string): Promise<ImportResult[]> {
   });
 
   const results: ImportResult[] = [];
-  const BATCH_SIZE = 5;
+  const BATCH_SIZE = 10;
   const DELAY_MS = 300;
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
