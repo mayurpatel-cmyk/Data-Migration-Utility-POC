@@ -54,13 +54,13 @@ app = FastAPI(title="Migration Engine", lifespan=lifespan)
 # =========================================================
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:4200").split(",")
+    for origin in os.getenv("ALLOWED_ORIGINS", "vm-sureshift.ecamapps.net").split(",")
     if origin.strip()
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

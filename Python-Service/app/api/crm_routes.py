@@ -18,15 +18,15 @@ ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200"
 
 SF_CLIENT_ID = os.getenv("SF_CLIENT_ID")
 SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET")
-SF_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/salesforce/callback"
+SF_REDIRECT_URI = f"http://vm-sureshift.ecamapps.net/api/crm/auth/salesforce/callback"
 
 ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "").strip()
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "").strip()
-ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zoho/callback"
+ZOHO_REDIRECT_URI = f"http://vm-sureshift.ecamapps.net/api/crm/auth/zoho/callback"
 
 ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
 ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
-ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zendesk/callback"
+ZD_REDIRECT_URI = f"http://vm-sureshift.ecamapps.net/api/crm/auth/zendesk/callback"
 
 ZOHO_REGIONS = {
     "us": "https://accounts.zoho.com",
@@ -78,7 +78,7 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
         decoded_bytes = base64.urlsafe_b64decode(state.encode())
         side, user_id, environment, code_verifier = decoded_bytes.decode().split("::")
     except Exception:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
     domain = "test.salesforce.com" if environment == "sandbox" else "login.salesforce.com"
     token_url = f"https://{domain}/services/oauth2/token"
@@ -95,7 +95,7 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
     async with httpx.AsyncClient() as client:
         response = await client.post(token_url, data=payload)
         if response.status_code != 200:
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+            return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
             
         token_data = response.json()
 
@@ -112,9 +112,9 @@ async def salesforce_callback(code: str = None, state: str = None, error: str = 
             "environment": environment
         }).execute()
     except Exception:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
-    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=salesforce")
+    return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=success&side={side}&crm=salesforce")
 
 # =========================================================
 # 2. ZOHO ROUTING 
@@ -151,7 +151,7 @@ async def zoho_callback(code: str, state: str, request: Request):
     try:
         side, user_id, reg_key = state.split("::") 
     except ValueError:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
     base_accounts_url = ZOHO_REGIONS.get(reg_key.lower(), ZOHO_REGIONS["us"])
     accounts_server = request.query_params.get("accounts-server", base_accounts_url)
@@ -165,7 +165,7 @@ async def zoho_callback(code: str, state: str, request: Request):
             "redirect_uri": ZOHO_REDIRECT_URI
         })
         if response.status_code != 200:
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+            return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
             
         token_data = response.json()
 
@@ -183,9 +183,9 @@ async def zoho_callback(code: str, state: str, request: Request):
             "region": reg_key
         }).execute()
     except Exception:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
-    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zoho")
+    return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=success&side={side}&crm=zoho")
 
 # =========================================================
 # 3. ZENDESK ROUTING
@@ -214,7 +214,7 @@ async def zendesk_callback(code: str, state: str):
     try:
         side, user_id, subdomain = state.split("::")
     except ValueError:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
     async with httpx.AsyncClient() as client:
         response = await client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", json={
@@ -226,7 +226,7 @@ async def zendesk_callback(code: str, state: str):
             "scope": "read write"
         })
         if response.status_code != 200:
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+            return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
             
         token_data = response.json()
 
@@ -241,9 +241,9 @@ async def zendesk_callback(code: str, state: str):
             "subdomain": subdomain
         }).execute()
     except Exception:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
-    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=zendesk")
+    return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=success&side={side}&crm=zendesk")
 # =========================================================
 # HUBSPOT OAUTH FLOW
 # =========================================================
@@ -252,7 +252,7 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     import urllib.parse
 
     HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
-    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"http://vm-sureshift.ecamapps.net/api/crm/auth/hubspot/callback")
 
     custom_state = f"{side}::{current_user.id}"
 
@@ -272,11 +272,11 @@ async def hubspot_callback(code: str, state: str):
     try:
         side, user_id = state.split("::")
     except ValueError:
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
     HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
     HS_CLIENT_SECRET = os.getenv("HS_CLIENT_SECRET", "").strip()
-    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
+    HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"http://vm-sureshift.ecamapps.net/api/crm/auth/hubspot/callback")
 
     async with httpx.AsyncClient() as client:
         response = await client.post("https://api.hubapi.com/oauth/v1/token", data={
@@ -289,7 +289,7 @@ async def hubspot_callback(code: str, state: str):
         if response.status_code != 200:
             errorBody = response.text
             print(f"HubSpot token error ({response.status_code}): {errorBody}")
-            return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+            return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
         token_data = response.json()
 
@@ -306,9 +306,9 @@ async def hubspot_callback(code: str, state: str):
         }).execute()
     except Exception as e:
         print(f"Hubspot DB Insert Error: {e}")
-        return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
+        return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=error")
 
-    return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=success&side={side}&crm=hubspot")
+    return RedirectResponse(url=f"http://vm-sureshift.ecamapps.net/connection?status=success&side={side}&crm=hubspot")
 
 # =========================================================
 # CORE CONNECTIONS MANAGEMENT
