@@ -13,8 +13,8 @@ from app.utils.config import supabase
 
 router = APIRouter()
 
-FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://localhost:8000").rstrip("/")
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200").rstrip("/")
+FASTAPI_BACKEND_URL = os.getenv("FASTAPI_BACKEND_URL", "http://vm-sureshift.ecamapps.net").rstrip("/")
+ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://vm-sureshift.ecamapps.net").rstrip("/")
 
 SF_CLIENT_ID = os.getenv("SF_CLIENT_ID")
 SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET")

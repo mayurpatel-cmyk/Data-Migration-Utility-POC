@@ -9,6 +9,10 @@ from app.services.time_filter_service import (
 from app.services.query_field_utils import ensure_fields_selected
 from app.services.coql_query_builder import build_coql, extract_user_limit, COQL_PAGE_SIZE
 
+def chunk_dataset(data: list, chunk_size: int = 100):
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]
+
 class ZohoMigrator:
 
     async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
