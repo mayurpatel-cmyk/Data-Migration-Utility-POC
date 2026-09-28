@@ -1440,7 +1440,7 @@ export class DefaultComponent implements OnInit {
 
         this.authService.refreshToken().subscribe({
           next: () => {
-            const baseUrl = 'http://localhost:8000';
+            const baseUrl = 'http://vm-sureshift.ecamapps.net';
             const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/migrate';
             const ws = new WebSocket(wsUrl);
 

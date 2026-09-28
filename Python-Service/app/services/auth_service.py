@@ -2,7 +2,7 @@ from app.utils.config import supabase
 from fastapi import HTTPException
 import os
 
-ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://localhost:4200").rstrip("/")
+ANGULAR_FRONTEND_URL = os.getenv("ANGULAR_FRONTEND_URL", "http://vm-sureshift.ecamapps.net").rstrip("/")
 
 class AuthService:
     @staticmethod
