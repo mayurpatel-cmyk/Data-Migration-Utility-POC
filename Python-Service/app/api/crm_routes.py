@@ -247,6 +247,20 @@ async def zendesk_callback(code: str, state: str):
 # =========================================================
 # HUBSPOT OAUTH FLOW
 # =========================================================
+
+HUBSPOT_SCOPES = [
+    "oauth",
+    "crm.objects.contacts.read",
+    "crm.objects.contacts.write",
+    "crm.objects.companies.read",
+    "crm.objects.companies.write",
+    "crm.objects.deals.read",
+    "crm.objects.deals.write",
+    "tickets",
+    "files.read",
+    "files.write",
+    "files.ui_hidden.read",
+]
 @router.get("/auth/hubspot/login")
 def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     import urllib.parse
@@ -254,16 +268,12 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     HS_CLIENT_ID = os.getenv("HS_CLIENT_ID", "").strip()
     HS_REDIRECT_URI = os.getenv("HS_REDIRECT_URI", f"{FASTAPI_BACKEND_URL}/api/crm/auth/hubspot/callback")
 
-    custom_state = f"{side}::{current_user.id}"
-
-    scopes = "crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write tickets"
     params = {
         "client_id": HS_CLIENT_ID,
         "redirect_uri": HS_REDIRECT_URI,
-        "scope": scopes,
-        "state": custom_state
+        "scope": " ".join(HUBSPOT_SCOPES),
+        "state": f"{side}::{current_user.id}",
     }
-
     auth_url = f"https://app.hubspot.com/oauth/authorize?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
 

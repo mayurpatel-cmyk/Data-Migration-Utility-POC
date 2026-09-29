@@ -49,6 +49,7 @@ class FileAdapter(ABC):
     sample_size: int = 2000        # records sampled by the estimator before extrapolating
     max_concurrency: int = 6
     files_are_attachments: bool = False  # True if the CRM has one file type (UI "Files" == "Attachments")
+    requires_object_names: bool = False  # True if listing/uploading needs the source/target object (module) name
 
     # ---------- source side ----------
     @abstractmethod

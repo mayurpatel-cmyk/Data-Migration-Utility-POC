@@ -22,6 +22,7 @@ from app.services.audit_service import AuditService
 from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
 from app.services.migrators.cross_crm_file_migrator import CrossCrmFileMigrator
+from app.services.file_adapters.registry import supported_crms
 
 import uuid
 import sqlite3
@@ -49,8 +50,8 @@ MIGRATORS = {
     "hubspot": HubspotMigrator()
 }
 
-# Files/Attachments migration is Salesforce -> Salesforce only
-FILE_MIGRATION_CRMS = {"salesforce", "zoho"}
+# Files/Attachments migration works between any CRMs that have a registered file adapter
+FILE_MIGRATION_CRMS = supported_crms()
 FILE_MIGRATOR = CrossCrmFileMigrator()
 FILE_MIGRATION_ESTIMATOR = FileMigrationEstimator()
 FILE_MIGRATION_DEFAULT_SAFETY_THRESHOLD = 0.90
@@ -420,7 +421,7 @@ async def websocket_migration(websocket: WebSocket):
                     if job.get("isPass3Patch", False):
                         await send_log(f"[{target_object}] File migration skipped for this pass (reference patch pass, not the primary sync).")
                     elif source_crm not in FILE_MIGRATION_CRMS or target_crm not in FILE_MIGRATION_CRMS:
-                        await send_log(f"[{target_object}] File migration skipped: {source_crm} -> {target_crm} isn't supported yet (supported: Salesforce, Zoho).")
+                        await send_log(f"[{target_object}] File migration skipped: {source_crm} -> {target_crm} isn't supported yet (supported: {', '.join(c.capitalize() for c in sorted(FILE_MIGRATION_CRMS))}).")
                     elif not job_id_map:
                         await send_log(
                             f"[{target_object}] File migration skipped: no source Id was found on synced records. "

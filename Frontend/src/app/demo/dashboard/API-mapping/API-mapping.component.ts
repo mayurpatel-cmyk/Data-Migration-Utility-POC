@@ -265,7 +265,8 @@ isProfileDropdownOpen = false;
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
   }
 
-  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho'];
+  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot'];
+  private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
 
 get fileMigrationSupported(): boolean {
   const s = this.sourceCrmId?.toLowerCase();
@@ -275,6 +276,21 @@ get fileMigrationSupported(): boolean {
 
 get isSourceZoho(): boolean {
   return this.sourceCrmId?.toLowerCase() === 'zoho';
+}
+
+get isSourceSingleFileType(): boolean {
+  return this.SINGLE_FILE_TYPE_CRMS.includes(this.sourceCrmId?.toLowerCase());
+}
+
+get fileMigrationNotes(): string[] {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  const notes: string[] = [];
+  if (t === 'zoho') notes.push('Zoho accepts attachments up to 20 MB per file; larger files are reported as errors.');
+  if (t === 'hubspot') notes.push('HubSpot files are uploaded to the Files tool and linked to the record through a Note (max 300 MB per file).');
+  if (s === 'zoho' && t === 'salesforce') notes.push('Zoho attachments are created as Salesforce Files.');
+  if (s === 'hubspot') notes.push('Only files attached to a record\'s Notes are migrated from HubSpot.');
+  return notes;
 }
 
   recentQueries: string[] = [];
@@ -3538,7 +3554,7 @@ onReviewPanelDragEnd(): void {
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
       migrateAttachments: this.fileMigrationSupported ? this.migrateAttachments : false,
-      migrateFiles: this.fileMigrationSupported && !this.isSourceZoho ? this.migrateFiles : false,
+      migrateFiles: this.fileMigrationSupported && !this.isSourceSingleFileType ? this.migrateFiles : false,
       migrationTimeFilter: this.migrationTimeFilter,
 
       authToken: localStorage.getItem('supabase_token') || ''

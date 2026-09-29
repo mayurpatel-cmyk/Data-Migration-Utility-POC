@@ -67,8 +67,8 @@ class FileMigrationEstimateResponse(BaseModel):
 
 @router.post("/api/migration/files/estimate", response_model=FileMigrationEstimateResponse)
 async def estimate_file_migration(payload: FileMigrationEstimateRequest, current_user=Depends(get_current_user)):
-    if payload.sourceCrm.lower() == "zoho" and not payload.sourceObject:
-        raise HTTPException(status_code=400, detail="sourceObject is required when the source CRM is Zoho.")
+    if get_adapter(payload.sourceCrm).requires_object_names and not payload.sourceObject:
+        raise HTTPException(status_code=400, detail=f"sourceObject is required when the source CRM is {payload.sourceCrm.capitalize()}.")
 
     source_creds, target_creds = _load_creds(current_user.id, payload.sourceCrm, payload.targetCrm)
 
@@ -208,10 +208,10 @@ async def run_file_migration(payload: RunFileMigrationRequest, current_user=Depe
 
     if payload.scope == "limited" and not payload.safeRecordCount:
         raise HTTPException(status_code=400, detail="safeRecordCount is required when scope is 'limited'.")
-    if payload.sourceCrm.lower() == "zoho" and not payload.sourceObject:
-        raise HTTPException(status_code=400, detail="sourceObject is required when the source CRM is Zoho.")
-    if payload.targetCrm.lower() == "zoho" and not payload.targetObject:
-        raise HTTPException(status_code=400, detail="targetObject is required when the target CRM is Zoho.")
+    if get_adapter(payload.sourceCrm).requires_object_names and not payload.sourceObject:
+        raise HTTPException(status_code=400, detail=f"sourceObject is required when the source CRM is {payload.sourceCrm.capitalize()}.")
+    if get_adapter(payload.targetCrm).requires_object_names and not payload.targetObject:
+        raise HTTPException(status_code=400, detail=f"targetObject is required when the target CRM is {payload.targetCrm.capitalize()}.")
 
     all_old_ids = list(payload.idMap.keys())
     if payload.scope == "limited":

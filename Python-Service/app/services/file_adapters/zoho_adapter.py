@@ -34,6 +34,7 @@ class ZohoFileAdapter(FileAdapter):
     sample_size = 200            # listing is 1 API call PER RECORD in Zoho, so sample small
     max_concurrency = 5          # Zoho's per-org concurrent-request ceiling is low
     files_are_attachments = True
+    requires_object_names = True
 
     MAX_UPLOAD_BYTES = 20 * 1024 * 1024   # Zoho attachment upload limit per file
     PAGE_SIZE = 200

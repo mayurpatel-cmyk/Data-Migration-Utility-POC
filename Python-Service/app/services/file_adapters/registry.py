@@ -1,15 +1,20 @@
 from fastapi import HTTPException
 
 from app.services.file_adapters.base import FileAdapter
+from app.services.file_adapters.hubspot_adapter import HubspotFileAdapter
 from app.services.file_adapters.salesforce_adapter import SalesforceFileAdapter
 from app.services.file_adapters.zoho_adapter import ZohoFileAdapter
 
 _ADAPTERS = {
     "salesforce": SalesforceFileAdapter,
     "zoho": ZohoFileAdapter,
-    # "hubspot": HubspotFileAdapter,   # add one adapter class per CRM, nothing else changes
+    "hubspot": HubspotFileAdapter,   # add one adapter class per CRM, nothing else changes
     # "zendesk": ZendeskFileAdapter,
 }
+
+
+def supported_crms() -> set:
+    return set(_ADAPTERS)
 
 
 def get_adapter(crm: str) -> FileAdapter:
