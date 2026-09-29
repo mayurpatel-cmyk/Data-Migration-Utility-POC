@@ -107,7 +107,7 @@ class CrossCrmFileMigrator:
                         limit_error = e
                         return
                     except Exception as e:
-                        ok, info = False, str(e)
+                        ok, info = False, f"{type(e).__name__}: {e}"
                     finally:
                         if path and os.path.exists(path):
                             try:
@@ -121,6 +121,8 @@ class CrossCrmFileMigrator:
                     else:
                         bucket["error"] += 1
                         bucket["errors"].append({"name": f.name, "parentId": f.parent_id, "error": info})
+                        await send_log(f"[Files] FAILED '{f.name}' ({f.source_id}) -> {target_crm} "
+                                       f"{target_object}/{new_parent}: {info}")
 
                     processed += 1
                     if processed % 25 == 0:

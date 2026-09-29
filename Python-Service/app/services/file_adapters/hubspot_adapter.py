@@ -58,9 +58,8 @@ class HubspotFileAdapter(FileAdapter):
     files_are_attachments = True    # one file type: UI "Files" == "Attachments"
     requires_object_names = True    # association + folder path need the object names
 
-    # Engagement objects whose attachments are treated as record files. Add
-    # "emails", "calls", "meetings", "tasks" here to widen the scope; nothing else changes.
-    ENGAGEMENT_OBJECTS: Tuple[str, ...] = ("notes",)
+
+    ENGAGEMENT_OBJECTS: Tuple[str, ...] = ("notes", "emails", "calls", "meetings", "tasks")
 
     MAX_UPLOAD_BYTES = 300 * 1024 * 1024   # Files API per-file upload limit
     MAX_RETRIES = 5
@@ -172,16 +171,36 @@ class HubspotFileAdapter(FileAdapter):
         sem = asyncio.Semaphore(self.max_concurrency)
         parent_ids = [str(p) for p in parent_ids]
         rows: List[Tuple[str, str, dict]] = []
+        seen: set = set()   # (parent_id, file_id): same file can hang off several engagements
 
         for eng in self.ENGAGEMENT_OBJECTS:
+            optional = eng != "notes"
+            skipped_reason: List[str] = []
+
+            async def guarded(role_call):
+                """Runs an HTTP step; for optional engagement types converts access errors into a skip."""
+                try:
+                    res = await role_call()
+                except RuntimeError as e:
+                    if not optional:
+                        raise
+                    skipped_reason.append(str(e)[:200])
+                    return None
+                if optional and res.status_code in (400, 403, 404):
+                    skipped_reason.append(f"HTTP {res.status_code}: {res.text[:150]}")
+                    return None
+                return res
+
             # 1) record -> engagement associations
             eng_to_parents: Dict[str, List[str]] = {}
 
             async def assoc_chunk(chunk):
                 async with sem:
-                    res = await self._call("source", creds, user_id, send_log, lambda h: client.post(
+                    res = await guarded(lambda: self._call("source", creds, user_id, send_log, lambda h: client.post(
                         f"{base}/crm/v4/associations/{obj}/{eng}/batch/read", headers=h,
-                        json={"inputs": [{"id": p} for p in chunk]}))
+                        json={"inputs": [{"id": p} for p in chunk]})))
+                    if res is None:
+                        return
                     if res.status_code not in (200, 207):
                         raise RuntimeError(f"HubSpot association read failed ({res.status_code}): {res.text[:300]}")
                     for r in res.json().get("results", []):
@@ -190,6 +209,9 @@ class HubspotFileAdapter(FileAdapter):
                             eng_to_parents.setdefault(str(t["toObjectId"]), []).append(pid)
 
             await asyncio.gather(*[assoc_chunk(c) for c in _chunks(parent_ids, _ID_CHUNK_ASSOC)])
+            if skipped_reason:
+                await send_log(f"[HubSpot Files] Skipping {eng}: {skipped_reason[0]}")
+                continue
             await send_log(f"[HubSpot Files] {len(eng_to_parents)} {eng[:-1]}(s) associated with "
                            f"{len(parent_ids)} {obj} record(s).")
             if not eng_to_parents:
@@ -200,9 +222,11 @@ class HubspotFileAdapter(FileAdapter):
 
             async def eng_chunk(chunk):
                 async with sem:
-                    res = await self._call("source", creds, user_id, send_log, lambda h: client.post(
+                    res = await guarded(lambda: self._call("source", creds, user_id, send_log, lambda h: client.post(
                         f"{base}/crm/v3/objects/{eng}/batch/read", headers=h,
-                        json={"properties": ["hs_attachment_ids"], "inputs": [{"id": e} for e in chunk]}))
+                        json={"properties": ["hs_attachment_ids"], "inputs": [{"id": e} for e in chunk]})))
+                    if res is None:
+                        return
                     if res.status_code not in (200, 207):
                         raise RuntimeError(f"HubSpot {eng} read failed ({res.status_code}): {res.text[:300]}")
                     for r in res.json().get("results", []):
@@ -212,6 +236,9 @@ class HubspotFileAdapter(FileAdapter):
                             eng_to_files[str(r["id"])] = fids
 
             await asyncio.gather(*[eng_chunk(c) for c in _chunks(list(eng_to_parents), _ID_CHUNK_BATCH)])
+            if skipped_reason:
+                await send_log(f"[HubSpot Files] Skipping {eng}: {skipped_reason[0]}")
+                continue
 
             # 3) file ids -> file metadata
             all_fids = sorted({f for fids in eng_to_files.values() for f in fids})
@@ -233,13 +260,31 @@ class HubspotFileAdapter(FileAdapter):
 
             missing = [f for f in all_fids if f not in meta]
             if missing:
-                await send_log(f"[HubSpot Files] {len(missing)} attachment file(s) not returned by the Files API "
-                               f"(deleted, or hidden without the files.ui_hidden.read scope): {missing[:5]}")
+                await send_log(f"[HubSpot Files] Search returned {len(all_fids) - len(missing)}/{len(all_fids)} "
+                               f"file(s); resolving {len(missing)} hidden/unlisted file(s) by id...")
+
+                async def meta_one(fid):
+                    async with sem:
+                        res = await self._call("source", creds, user_id, send_log, lambda h: client.get(
+                            f"{base}/files/v3/files/{fid}", headers=h))
+                        if res.status_code == 200:
+                            meta[fid] = res.json()
+                        elif res.status_code != 404:   # 404 == genuinely deleted
+                            raise RuntimeError(f"HubSpot file {fid} lookup failed ({res.status_code}): {res.text[:300]}")
+
+                await asyncio.gather(*[meta_one(f) for f in missing])
+                gone = [f for f in all_fids if f not in meta]
+                if gone:
+                    await send_log(f"[HubSpot Files] {len(gone)} attachment file(s) no longer exist in HubSpot: {gone[:5]}")
+
             for eng_id, fids in eng_to_files.items():
                 for fid in fids:
-                    if fid not in meta:      # file deleted in HubSpot
+                    if fid not in meta:
                         continue
                     for pid in eng_to_parents[eng_id]:
+                        if (pid, fid) in seen:
+                            continue
+                        seen.add((pid, fid))
                         rows.append((pid, eng_id, meta[fid]))
         return obj, rows
 

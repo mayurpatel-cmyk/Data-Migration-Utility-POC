@@ -127,6 +127,8 @@ def get_zoho_url(side: str, region: str = "IN", current_user = Depends(get_curre
     scopes = [
         "ZohoCRM.modules.ALL", 
         "ZohoCRM.bulk.READ", 
+        "ZohoCRM.modules.attachments.ALL",   # read/upload/delete record attachments
+        "ZohoCRM.files.ALL", 
         "ZohoCRM.settings.FIELDS.READ",
         "ZohoCRM.settings.modules.READ",
         "ZohoCRM.settings.ALL",
