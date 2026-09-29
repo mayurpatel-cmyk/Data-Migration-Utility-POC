@@ -405,7 +405,8 @@ async def websocket_migration(websocket: WebSocket):
                 job_id_map = {
                     (rec.get("Id") or rec.get("id")): rec.get("Target_Id")
                     for rec in job_success_records
-                    if (rec.get("Id") or rec.get("id")) and rec.get("Target_Id")
+                    if (rec.get("Id") or rec.get("id"))
+                    and rec.get("Target_Id") not in (None, "", "Success")   # "Success" == target returned no record id
                 }
                 if job_id_map:
                     saved_count = IdMappingService.save_mappings(
@@ -415,7 +416,7 @@ async def websocket_migration(websocket: WebSocket):
                     await send_log(f"[{target_object}] Saved {saved_count} source->target Id mapping(s) for future reference lookups.")
 
                 # ==========================================
-                # FILES & ATTACHMENTS PASS (Salesforce -> Salesforce only)
+                # FILES & ATTACHMENTS PASS (any pair of registered file adapters)
                 # ==========================================
                 if migrate_attachments or migrate_files:
                     if job.get("isPass3Patch", False):

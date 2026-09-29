@@ -24,26 +24,19 @@ from typing import Dict, List, Tuple
 from app.services.crm_service import CrmService
 from app.services.file_adapters.base import FileAdapter, FileTypeEstimate, OrgBudget, SourceFile
 from app.services.file_adapters.zoho_adapter import CrmRateLimitError
-from app.services.migrators.hubspot_migrator import _merge_hubspot_time_filters
+from app.services.migrators.hubspot_migrator import (
+    _merge_hubspot_time_filters, hubspot_search_all, normalize_hubspot_object,
+)
 from app.services.time_filter_service import build_hubspot_time_filters, TimeFilterError
 
 UNVERIFIED_BUDGET = 10_000_000
 _SINGULAR_TO_OBJECT = {
     "contact": "contacts", "company": "companies", "deal": "deals", "ticket": "tickets",
 }
-# HUBSPOT_DEFINED association type ids for Note -> <object>. Any other object
-# (custom objects, products, ...) falls back to the v4 "default association" endpoint.
+
 _NOTE_ASSOC_TYPE_IDS = {"contacts": 202, "companies": 190, "deals": 214, "tickets": 228}
 _ID_CHUNK_ASSOC = 1000     # v4 associations batch-read limit
 _ID_CHUNK_BATCH = 100      # v3 objects batch-read / Files search limit
-_SEARCH_MAX_RESULTS = 10_000
-
-
-def normalize_hubspot_object(name: str) -> str:
-    """API name of an object. Maps common singular labels; custom objects
-    (`p123_thing` / `2-12345` objectTypeId) pass through untouched."""
-    n = (name or "").strip()
-    return _SINGULAR_TO_OBJECT.get(n.lower(), n if re.match(r"^\d+-\d+$", n) else n.lower())
 
 
 def _chunks(items: list, size: int):
@@ -58,17 +51,14 @@ class HubspotFileAdapter(FileAdapter):
     files_are_attachments = True    # one file type: UI "Files" == "Attachments"
     requires_object_names = True    # association + folder path need the object names
 
-
     ENGAGEMENT_OBJECTS: Tuple[str, ...] = ("notes", "emails", "calls", "meetings", "tasks")
 
     MAX_UPLOAD_BYTES = 300 * 1024 * 1024   # Files API per-file upload limit
     MAX_RETRIES = 5
-    # Files API read/write, plus hidden files (attachments added to Notes are stored as hidden files).
     REQUIRED_SCOPES = ("files.read", "files.write", "files.ui_hidden.read")
     UPLOAD_ROOT_FOLDER = "/crm-migration"
-    CALLS_PER_UPLOAD = 3                   # file upload + note create + association (worst case)
+    CALLS_PER_UPLOAD = 3
 
-    # ------------------------------------------------------------------ http
     @staticmethod
     def _domain(creds: dict) -> str:
         d = (creds.get("api_domain") or "https://api.hubapi.com").rstrip("/")
@@ -125,7 +115,7 @@ class HubspotFileAdapter(FileAdapter):
             return res
         raise CrmRateLimitError("hubspot", f"HubSpot {role} API kept returning 429 after {self.MAX_RETRIES} retries.")
 
-    # --------------------------------------------------------------- source
+    
     async def fetch_record_ids(self, client, creds, user_id, obj_name, query, time_filter, send_log) -> List[str]:
         try:
             time_filters = build_hubspot_time_filters(time_filter)
@@ -147,21 +137,13 @@ class HubspotFileAdapter(FileAdapter):
         if time_filters:
             payload["filterGroups"] = _merge_hubspot_time_filters(payload.get("filterGroups"), time_filters)
 
+        async def post(p: dict):
+            return await self._call("source", creds, user_id, send_log,
+                                    lambda h: client.post(url, headers=h, json=p))
+
         ids: List[str] = []
-        while True:
-            res = await self._call("source", creds, user_id, send_log,
-                                   lambda h: client.post(url, headers=h, json=payload))
-            if res.status_code != 200:
-                raise RuntimeError(f"HubSpot search failed ({res.status_code}): {res.text[:300]}")
-            body = res.json()
-            ids.extend(str(r["id"]) for r in body.get("results", []) if r.get("id"))
-            after = (body.get("paging") or {}).get("next", {}).get("after")
-            if not after or not body.get("results"):
-                break
-            if len(ids) >= _SEARCH_MAX_RESULTS:
-                await send_log(f"[HubSpot Files] Search API caps results at {_SEARCH_MAX_RESULTS:,}; pre-check is truncated.")
-                break
-            payload["after"] = after
+        async for page in hubspot_search_all(post, payload, send_log):
+            ids.extend(str(r["id"]) for r in page if r.get("id"))
         return ids
 
     async def _gather_files(self, client, creds, user_id, parent_ids, source_object, send_log):
@@ -171,9 +153,10 @@ class HubspotFileAdapter(FileAdapter):
         sem = asyncio.Semaphore(self.max_concurrency)
         parent_ids = [str(p) for p in parent_ids]
         rows: List[Tuple[str, str, dict]] = []
-        seen: set = set()   # (parent_id, file_id): same file can hang off several engagements
+        seen: set = set()   
 
         for eng in self.ENGAGEMENT_OBJECTS:
+
             optional = eng != "notes"
             skipped_reason: List[str] = []
 
@@ -341,7 +324,6 @@ class HubspotFileAdapter(FileAdapter):
                     written += len(chunk)
         return path, written
 
-    # --------------------------------------------------------------- target
     async def _delete_quietly(self, client, creds, user_id, send_log, url):
         try:
             await self._call("target", creds, user_id, send_log, lambda h: client.delete(url, headers=h))

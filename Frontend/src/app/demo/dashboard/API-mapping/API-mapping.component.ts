@@ -800,21 +800,28 @@ toggleProfileDropdown(event: Event): void {
     return this.validationResults.invalidRecords.some((rec: any) => rec._editedFields && Object.keys(rec._editedFields).length > 0);
   }
 
+  private static readonly NUMERIC_TYPES = ['number', 'integer', 'double', 'currency', 'percent', 'float'];
+  private static readonly DATE_TYPES = ['date', 'datetime'];
+  private static readonly TEXT_TARGET_TYPES = ['string', 'text', 'textarea', 'picklist', 'reference'];
+
+  areTypesCompatible(srcTypeRaw: string | undefined, tgtTypeRaw: string | undefined): boolean {
+    const srcType = (srcTypeRaw || 'string').toLowerCase();
+    const tgtType = (tgtTypeRaw || 'string').toLowerCase();
+
+    if (srcType === 'id' || tgtType === 'id') return true;
+    if (srcType === tgtType) return true;
+    if (srcType.includes('string') && ApiMappingComponent.TEXT_TARGET_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.NUMERIC_TYPES.includes(srcType) && ApiMappingComponent.NUMERIC_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.DATE_TYPES.includes(srcType) && ApiMappingComponent.DATE_TYPES.includes(tgtType)) return true;
+    return false;
+  }
+
   isTypeMismatch(mapping: any): boolean {
     if (!mapping.targetField) return false;
-    const srcType = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase() || 'string';
-    const tgtType = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase() || 'string';
-
-    if (srcType === 'id' || tgtType === 'id') return false;
-
-    if (srcType === tgtType) return false;
-
-    if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
-  
-    if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType))
-      return false;
-
-    return true;
+    return !this.areTypesCompatible(
+      this.getFieldMeta(mapping.sourceField, 'source')?.type,
+      this.getFieldMeta(mapping.targetField, 'target')?.type
+    );
   }
 
   onEditorInit(editor: any) {
@@ -1151,7 +1158,6 @@ toggleProfileDropdown(event: Event): void {
     });
 
     if (confirmResult.isConfirmed) {
-      // Explicit "Yes, Keep My Mapped Fields" click -- switch mode, keep mappings.
       this.lastOperationMode = newMode;
       if (newMode === 'delete') {
         this.externalIdField = '';
@@ -1637,19 +1643,16 @@ onReviewPanelDragEnd(): void {
       });
   }
 
-  /** All object types a given mapping row's reference field can point at (usually 1; more for polymorphic fields). */
   getReferenceParentCandidates(mapping: MappingRow): string[] {
     const fieldMeta = this.targetFields.find((f) => f.name === mapping.targetField);
     return fieldMeta?.referenceTo || [];
   }
 
-  /** The parent object currently in effect for this mapping row -- the user's explicit pick, or the field's first/only referenceTo. */
   getReferenceParentObjectName(mapping: MappingRow): string | undefined {
     const candidates = this.getReferenceParentCandidates(mapping);
     return mapping.parentObjectName || candidates[0];
   }
 
-  /** External-ID-eligible fields on the PARENT object, for the "Match By" dropdown. */
   getParentExternalIdFields(mapping: MappingRow): FieldMeta[] {
     const parentName = this.getReferenceParentObjectName(mapping);
     if (!parentName) return [];
@@ -2460,14 +2463,10 @@ onReviewPanelDragEnd(): void {
         }
 
         const isExactTypeMatch = srcType === tgtType;
-        const isForgivingTypeMatch =
-          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) &&
-            ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+        const isCompatible = this.areTypesCompatible(srcType, tgtType);
+        const isForgivingTypeMatch = isCompatible && !isExactTypeMatch;
 
-        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
-
-        if (this.isStrictMapping && !isCompatible) return;
+        if (!isCompatible) return;
 
         if (tgtApiExact === srcApiExact) score += 100;
         else if (tgtApiClean === srcApiClean) score += 90;
@@ -2596,8 +2595,11 @@ onReviewPanelDragEnd(): void {
                   ? this.targetFields.find((f) => f.name === backendMap.targetField)
                   : undefined;
                 const isWritable = this.isFieldWritable(suggestedFieldMeta);
+                const sourceFieldMeta = this.sourceFields.find((sf) => sf.name === backendMap.sourceField);
+                const typeCompatible =
+                  !suggestedFieldMeta || !sourceFieldMeta || this.areTypesCompatible(sourceFieldMeta.type, suggestedFieldMeta.type);
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable && typeCompatible) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -2609,7 +2611,7 @@ onReviewPanelDragEnd(): void {
                   aiMatchCount++;
                 } else if (
                   localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed &&
-                  !isWritable && suggestedFieldMeta
+                  !isWritable && typeCompatible && suggestedFieldMeta
                 ) {
                   localRow._blockedTargetField = suggestedFieldMeta.name;
                   localRow._blockedTargetLabel = suggestedFieldMeta.label;

@@ -36,7 +36,7 @@ class ZohoMigrator:
         try:
             if raw_query or time_clause:
                 await send_log("Extracting data from Zoho using COQL...")
-                user_limit = extract_user_limit(raw_query)  # honour an explicit `limit N` typed in the editor
+                user_limit = extract_user_limit(raw_query)
                 data, offset, actual_query_used = [], 0, ""
 
                 while True:
@@ -113,7 +113,7 @@ class ZohoMigrator:
         
         total_success, total_error, total_skipped = 0, 0, 0
         all_success_data, all_error_data, all_skipped_data = [], [], []
-        ids_to_revert = []  # records Zoho inserted that "update" mode must not keep
+        ids_to_revert = []  
 
         normalized_obj = target_object.strip()
         if not normalized_obj.endswith('s') and normalized_obj.lower() != 'data':

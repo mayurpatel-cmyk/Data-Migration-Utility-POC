@@ -15,12 +15,12 @@ from typing import List, Optional, Tuple
 @dataclass
 class SourceFile:
     source_id: str
-    parent_id: str                      # id of the SOURCE record this file hangs off
+    parent_id: str                      
     name: str
     size: int
-    kind: str                           # "attachment" | "file" (checkpoint bucket)
+    kind: str                           
     content_type: Optional[str] = None
-    skip_reason: Optional[str] = None   # set when the file can't be transferred (e.g. link-only)
+    skip_reason: Optional[str] = None   
     meta: dict = field(default_factory=dict)
 
 
@@ -36,21 +36,20 @@ class FileTypeEstimate:
 
 @dataclass
 class OrgBudget:
-    role: str  # 'source' or 'target'
+    role: str  
     daily_limit: int
     used: int
     remaining: int
     available_calls: int
-    verified: bool = True  # False when the CRM doesn't expose its daily quota via API
+    verified: bool = True  
 
 
 class FileAdapter(ABC):
     crm: str = ""
-    sample_size: int = 2000        # records sampled by the estimator before extrapolating
+    sample_size: int = 2000        
     max_concurrency: int = 6
-    files_are_attachments: bool = False  # True if the CRM has one file type (UI "Files" == "Attachments")
-    requires_object_names: bool = False  # True if listing/uploading needs the source/target object (module) name
-
+    files_are_attachments: bool = False  
+    requires_object_names: bool = False  
     # ---------- source side ----------
     @abstractmethod
     async def fetch_record_ids(self, client, creds, user_id, obj_name, query, time_filter, send_log) -> List[str]: ...
