@@ -287,9 +287,8 @@ get fileMigrationNotes(): string[] {
   const t = this.targetCrmId?.toLowerCase();
   const notes: string[] = [];
   if (t === 'zoho') notes.push('Zoho accepts attachments up to 20 MB per file; larger files are reported as errors.');
-  if (t === 'hubspot') notes.push('HubSpot files are uploaded to the Files tool and linked to the record through a Note (max 300 MB per file).');
+  if (s === 'hubspot') notes.push('Files attached to a record\'s Notes, Calls, Meetings and Tasks are migrated from HubSpot (files in the standalone Files tool are not).');
   if (s === 'zoho' && t === 'salesforce') notes.push('Zoho attachments are created as Salesforce Files.');
-  if (s === 'hubspot') notes.push('Only files attached to a record\'s Notes are migrated from HubSpot.');
   return notes;
 }
 
