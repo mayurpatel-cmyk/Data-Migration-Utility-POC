@@ -579,6 +579,8 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.close()
             return
         user_id = user_res.user.id
+        user_email = getattr(user_res.user, "email", None)
+        user_name = (getattr(user_res.user, "user_metadata", None) or {}).get("full_name")
 
         is_revalidation = payload.get("isRevalidation", False)
         session_id = payload.get("sessionId", "")
@@ -660,6 +662,9 @@ async def websocket_validate_stream(websocket: WebSocket):
                     stats=validation_stats,
                     invalid_records=full_invalid_records,
                     auth_token=auth_token,
+                    staging_db_path=db_path,
+                    user_email=user_email,
+                    user_name=user_name,
                 )
             except Exception as e:
                 logger.exception("Failed to persist re-validation history for session %s", session_id)
@@ -781,6 +786,9 @@ async def websocket_validate_stream(websocket: WebSocket):
                 stats=aggregate_stats,
                 invalid_records=full_invalid_records,
                 auth_token=auth_token,
+                staging_db_path=db_path,
+                user_email=user_email,
+                user_name=user_name,
             )
         except Exception as e:
             logger.exception("Failed to persist validation history for session %s", session_id)

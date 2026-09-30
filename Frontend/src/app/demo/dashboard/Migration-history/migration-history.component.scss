@@ -143,25 +143,52 @@
 // ==========================================
 // TABS
 // ==========================================
-.nav-tabs .nav-link {
-  cursor: pointer;
-  color: #6c757d;
-  border: none;
-  border-bottom: 2px solid transparent;
-  font-weight: 600;
-  font-size: 0.9rem;
-  transition: color 0.15s ease, border-color 0.15s ease;
+.history-tabs-header {
+  position: relative;
+  z-index: 2;
 }
 
-.nav-tabs .nav-link.active {
-  color: var(--bs-primary, #0d6efd);
-  border-bottom-color: var(--bs-primary, #0d6efd);
-  background: transparent;
+.history-body {
+  position: relative;
+  z-index: 1;
 }
 
-.nav-tabs .nav-link:hover:not(.active) {
-  color: #495057;
-  border-bottom-color: #dee2e6;
+.history-tabs {
+  flex-wrap: nowrap;
+  margin: 0;
+  border-bottom: 1px solid #dee2e6;
+
+  .nav-item {
+    margin-bottom: -1px; // let the active underline sit on the border
+  }
+
+  .nav-link {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    padding: 0.6rem 1rem;
+    color: #6c757d;
+    opacity: 1;
+    visibility: visible;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: color 0.15s ease, border-color 0.15s ease;
+
+    &:hover:not(.active) {
+      color: #495057;
+      border-bottom-color: #dee2e6;
+    }
+
+    &.active {
+      color: var(--bs-primary, #0d6efd);
+      border-bottom-color: var(--bs-primary, #0d6efd);
+      background: transparent;
+    }
+  }
 }
 
 // ==========================================
@@ -389,5 +416,24 @@
   &:hover {
     background-color: rgba(13, 110, 253, 0.16);
     color: #0a58ca;
+  }
+}
+
+// ==========================================
+// PAGINATION
+// ==========================================
+.history-pager {
+  .pager-size {
+    width: auto;
+    min-width: 64px;
+  }
+
+  .page-link {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .page-item.disabled .page-link {
+    pointer-events: none;
   }
 }

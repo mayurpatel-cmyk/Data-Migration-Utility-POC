@@ -253,24 +253,24 @@
   <div class="row">
     <div class="col-sm-12">
       <div class="card shadow-sm border-0 rounded-3">
-        <div class="card-header bg-white border-0 pt-3 px-3 pb-0">
-          <ul class="nav nav-tabs card-header-tabs">
+        <div class="card-header history-tabs-header bg-white border-0 pt-3 px-3 pb-0">
+          <ul class="nav nav-tabs history-tabs" role="tablist">
             <li class="nav-item">
               <a class="nav-link" [class.active]="activeTab() === 'migrations'" (click)="setTab('migrations')"
-                role="button">
+                role="tab" [attr.aria-selected]="activeTab() === 'migrations'">
                 <i class="feather icon-upload-cloud me-1"></i> Migrations ({{ migrationLogs().length }})
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link" [class.active]="activeTab() === 'validations'" (click)="setTab('validations')"
-                role="button">
+                role="tab" [attr.aria-selected]="activeTab() === 'validations'">
                 <i class="feather icon-check-square me-1"></i> Validations ({{ validationLogs().length }})
               </a>
             </li>
           </ul>
         </div>
 
-        <div class="card-body p-0">
+        <div class="card-body history-body p-3">
 
           @if (isLoading()) {
           <div class="d-flex flex-column align-items-center justify-content-center p-5 text-muted">
@@ -278,7 +278,7 @@
             <h5 class="fw-bold">Fetching Records...</h5>
           </div>
           } @else if (errorMessage(); as error) {
-          <div class="alert alert-danger m-4 d-flex align-items-center shadow-sm">
+          <div class="alert alert-danger m-0 d-flex align-items-center shadow-sm">
             <i class="feather icon-alert-triangle fs-4 me-3"></i>
             <div>
               <h6 class="fw-bold mb-0">Error</h6>
@@ -289,7 +289,7 @@
           <!-- ===================== MIGRATIONS TAB ===================== -->
           } @else if (activeTab() === 'migrations') {
           @if (migrationLogs().length === 0) {
-          <div class="text-center p-5 bg-light rounded m-4 border border-dashed">
+          <div class="text-center p-5 bg-light rounded m-0 border border-dashed">
             <div class="d-inline-flex align-items-center justify-content-center bg-white text-muted rounded-circle mb-3 shadow-sm"
               style="width: 70px; height: 70px;">
               <i class="feather icon-clock fs-1"></i>
@@ -313,7 +313,7 @@
                 </tr>
               </thead>
               <tbody>
-                @for (log of migrationLogs(); track log.id) {
+                @for (log of pagedMigrations(); track log.id) {
                 <tr>
                   <td class="ps-4">
                     <div class="fw-bold text-dark">{{ log.created_at | date:'MMM dd, yyyy' }}</div>
@@ -443,7 +443,7 @@
           <!-- ===================== VALIDATIONS TAB ===================== -->
           } @else {
           @if (validationLogs().length === 0) {
-          <div class="text-center p-5 bg-light rounded m-4 border border-dashed">
+          <div class="text-center p-5 bg-light rounded m-0 border border-dashed">
             <div class="d-inline-flex align-items-center justify-content-center bg-white text-muted rounded-circle mb-3 shadow-sm"
               style="width: 70px; height: 70px;">
               <i class="feather icon-check-square fs-1"></i>
@@ -467,7 +467,7 @@
                 </tr>
               </thead>
               <tbody>
-                @for (log of validationLogs(); track log.id) {
+                @for (log of pagedValidations(); track log.id) {
                 <tr>
                   <td class="ps-4">
                     <div class="fw-bold text-dark">{{ log.created_at | date:'MMM dd, yyyy' }}</div>
@@ -571,6 +571,38 @@
             </table>
           </div>
           }
+          }
+
+          <!-- ===================== PAGINATION ===================== -->
+          @if (!isLoading() && !errorMessage() && currentTotal() > 0) {
+          <div class="history-pager d-flex flex-wrap justify-content-between align-items-center gap-2 pt-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 text-muted small">
+              <label for="historyPageSize" class="mb-0">Rows per page</label>
+              <select id="historyPageSize" class="form-select form-select-sm pager-size" [ngModel]="pageSize()"
+                (ngModelChange)="setPageSize($event)">
+                @for (n of pageSizeOptions; track n) {
+                <option [ngValue]="n">{{ n }}</option>
+                }
+              </select>
+              <span>Showing {{ pageStart() }}&ndash;{{ pageEnd() }} of {{ currentTotal() }}</span>
+            </div>
+
+            <nav aria-label="History pagination">
+              <ul class="pagination pagination-sm mb-0">
+                <li class="page-item" [class.disabled]="currentPage() === 1">
+                  <a class="page-link" role="button" (click)="prevPage()">Previous</a>
+                </li>
+                @for (p of visiblePages(); track p) {
+                <li class="page-item" [class.active]="p === currentPage()">
+                  <a class="page-link" role="button" (click)="goToPage(p)">{{ p }}</a>
+                </li>
+                }
+                <li class="page-item" [class.disabled]="currentPage() === totalPages()">
+                  <a class="page-link" role="button" (click)="nextPage()">Next</a>
+                </li>
+              </ul>
+            </nav>
+          </div>
           }
         </div>
       </div>

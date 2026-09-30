@@ -2,9 +2,11 @@ import os
 import json
 import tempfile
 import csv
+import sqlite3
 import logging
 from datetime import datetime, timezone
 from collections import Counter
+from typing import Callable, Iterable, Iterator, Optional
 from fpdf import FPDF
 from supabase import create_client
 from app.utils.config import supabase, SUPABASE_URL, SUPABASE_KEY
@@ -279,19 +281,81 @@ class AuditService:
         filename = os.path.basename(storage_path)
         tmp_path = os.path.join(tempfile.gettempdir(), filename)
 
-        with open(tmp_path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
-            writer.writeheader()
-            writer.writerows(rows)
+        try:
+            with open(tmp_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
+                writer.writeheader()
+                writer.writerows(rows)
 
-        url = AuditService._upload_file(
-            tmp_path, storage_path,
-            content_type="text/csv; charset=utf-8",
-            disposition="attachment",
-            bucket=bucket,
-        )
-        os.remove(tmp_path)
-        return url
+            return AuditService._upload_file(
+                tmp_path, storage_path,
+                content_type="text/csv; charset=utf-8",
+                disposition="attachment",
+                bucket=bucket,
+            )
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    @staticmethod
+    def _upload_csv_from_iter(
+        rows_factory: Callable[[], Iterable[dict]],
+        storage_path: str,
+        leading_fields: tuple = (),
+        bucket: str = "migration_reports",
+    ) -> Optional[str]:
+        """Streams rows to a temp CSV without holding the dataset in memory.
+
+        `rows_factory` is called twice: pass 1 builds the header as the ordered
+        UNION of keys across every row (a header taken from the first row alone makes
+        csv.DictWriter raise ValueError as soon as a later row has an extra key),
+        pass 2 writes the rows. Returns None when there are no rows."""
+        fieldnames: dict = {name: None for name in leading_fields}
+        row_count = 0
+        for row in rows_factory():
+            row_count += 1
+            for key in row.keys():
+                fieldnames.setdefault(key, None)
+        if row_count == 0:
+            return None
+
+        filename = os.path.basename(storage_path)
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
+        try:
+            with open(tmp_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=list(fieldnames), quoting=csv.QUOTE_MINIMAL)
+                writer.writeheader()
+                for row in rows_factory():
+                    writer.writerow(row)
+
+            return AuditService._upload_file(
+                tmp_path, storage_path,
+                content_type="text/csv; charset=utf-8",
+                disposition="attachment",
+                bucket=bucket,
+            )
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    @staticmethod
+    def _iter_staged_records(staging_db_path: str, is_valid: bool) -> Iterator[dict]:
+        """Yields one flat dict per staged record (valid or invalid) straight from
+        the session's SQLite staging DB, so full-size reports never sit in memory."""
+        conn = sqlite3.connect(staging_db_path)
+        try:
+            cursor = conn.execute(
+                "SELECT data, errors FROM records WHERE is_valid = ? ORDER BY id",
+                (1 if is_valid else 0,),
+            )
+            for data, errors in cursor:
+                record = json.loads(data)
+                record.pop("_db_id", None)
+                if not is_valid:
+                    record["Validation_Errors"] = errors or ""
+                yield record
+        finally:
+            conn.close()
 
     # ==========================================
     # MIGRATION REPORTS
@@ -468,6 +532,91 @@ class AuditService:
     # VALIDATION REPORTS
     # ==========================================
     @staticmethod
+    def _build_validation_pdf(
+        session_id: str,
+        user_id: str,
+        source_crm: str,
+        target_crm: str,
+        target_object: str,
+        stats: dict,
+        error_summary: list,
+        user_email: str = None,
+        user_name: str = None,
+    ) -> str:
+        s = AuditService._sanitize_pdf_text
+        total = stats.get("total", 0)
+        valid = stats.get("valid", 0)
+        invalid = stats.get("invalid", 0)
+        duplicates = stats.get("duplicates", 0)
+        pass_rate = round((valid / total) * 100, 1) if total else 0.0
+        run_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M:%S %p UTC")
+
+        pdf = SureShiftPDF()
+        pdf.report_title = "Validation Audit Report"
+        pdf.alias_nb_pages()
+        pdf.set_auto_page_break(auto=True, margin=22)
+        pdf.add_page()
+
+        pdf.set_font("Arial", "B", 40)
+        pdf.set_text_color(240, 240, 240)
+        pdf.text(25, 165, s("SureShift Validation"))
+        pdf.set_text_color(0, 0, 0)
+
+        pdf.set_fill_color(245, 245, 245)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, txt=s(" Validation Run Details"), ln=True, fill=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(95, 7, txt=s(f"  User Name: {user_name or 'N/A'}"))
+        pdf.cell(95, 7, txt=s(f"  User Email: {user_email or 'N/A'}"), ln=True)
+        pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"), ln=True)
+        pdf.ln(5)
+
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, txt=s(" Validation Scope"), ln=True, fill=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(95, 7, txt=s(f"  Source: {(source_crm or '').capitalize()}"))
+        pdf.cell(95, 7, txt=s(f"  Target: {(target_crm or '').capitalize()}"), ln=True)
+        pdf.cell(95, 7, txt=s(f"  Object: {target_object}"), ln=True)
+        pdf.ln(5)
+
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, txt=s(" Validation Results"), ln=True, fill=True)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(60, 7, txt=s(f"  Total Records: {total}"))
+        pdf.set_text_color(39, 174, 96)
+        pdf.cell(60, 7, txt=s(f"  Valid: {valid}"))
+        pdf.set_text_color(192, 57, 43)
+        pdf.cell(60, 7, txt=s(f"  Invalid: {invalid}"), ln=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(60, 7, txt=s(f"  Duplicates: {duplicates}"))
+        pdf.cell(60, 7, txt=s(f"  Pass Rate: {pass_rate}%"), ln=True)
+        pdf.ln(5)
+
+        if error_summary:
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, txt=s(" Top Error Categories"), ln=True, fill=True)
+            pdf.set_font("Arial", "B", 10)
+            pdf.set_fill_color(220, 220, 220)
+            pdf.cell(140, 7, txt=s("Error Category"), border=1, fill=True)
+            pdf.cell(50, 7, txt=s("Count"), border=1, ln=True, align="C", fill=True)
+            pdf.set_font("Arial", "", 10)
+            for item in error_summary:
+                pdf.cell(140, 7, txt=s(item["category"]), border=1)
+                pdf.cell(50, 7, txt=s(str(item["count"])), border=1, ln=True, align="C")
+
+        temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}_validation_report.pdf")
+        try:
+            pdf.output(temp_pdf)
+            return AuditService._upload_file(
+                temp_pdf, f"{user_id}/{session_id}_validation_report.pdf",
+                content_type="application/pdf",
+                disposition="inline",
+            )
+        finally:
+            if os.path.exists(temp_pdf):
+                os.remove(temp_pdf)
+
+    @staticmethod
     def generate_and_save_validation_report(
         user_id: str,
         session_id: str,
@@ -477,25 +626,55 @@ class AuditService:
         stats: dict,
         invalid_records: list,
         auth_token: str,
+        staging_db_path: str = None,
+        user_email: str = None,
+        user_name: str = None,
     ):
         invalid_csv_url = None
         valid_csv_url = None
+        pdf_url = None
         error_like = [{"record": rec.get("originalRow", {}), "error": rec.get("errors", "")} for rec in invalid_records]
         error_summary = AuditService.build_error_summary(error_like)
 
+        # 1. PDF summary (generated for every run, including 100% valid ones)
+        try:
+            pdf_url = AuditService._build_validation_pdf(
+                session_id, user_id, source_crm, target_crm, target_object,
+                stats, error_summary, user_email=user_email, user_name=user_name,
+            )
+        except Exception:
+            logger.exception(
+                "[AUDIT] Validation PDF generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
+            )
+
+        # 2. Valid-records CSV (streamed from the staging DB)
+        try:
+            if stats.get("valid", 0) > 0 and staging_db_path:
+                valid_csv_url = AuditService._upload_csv_from_iter(
+                    lambda: AuditService._iter_staged_records(staging_db_path, is_valid=True),
+                    f"{user_id}/{session_id}_validation_valid.csv",
+                )
+        except Exception:
+            logger.exception(
+                "[AUDIT] Valid-records CSV generation/upload failed for session %s -- "
+                "continuing without it so the history row still gets saved.", session_id
+            )
+
+        # 3. Invalid-records CSV
         try:
             if invalid_records:
-                flat_rows = []
-                for rec in invalid_records:
-                    flat_rec = dict(rec.get("originalRow", {}))
-                    flat_rec.pop("_db_id", None)
-                    flat_rec["Validation_Errors"] = rec.get("errors", "")
-                    flat_rows.append(flat_rec)
+                def _invalid_rows() -> Iterator[dict]:
+                    for rec in invalid_records:
+                        flat_rec = dict(rec.get("originalRow", {}))
+                        flat_rec.pop("_db_id", None)
+                        flat_rec["Validation_Errors"] = rec.get("errors", "")
+                        yield flat_rec
 
-                fieldnames = ["Validation_Errors"] + [k for k in flat_rows[0].keys() if k != "Validation_Errors"]
-                invalid_csv_url = AuditService._upload_csv(
-                    flat_rows, fieldnames, f"{user_id}/{session_id}_validation_invalid.csv",
-                    bucket="migration_reports",
+                invalid_csv_url = AuditService._upload_csv_from_iter(
+                    _invalid_rows,
+                    f"{user_id}/{session_id}_validation_invalid.csv",
+                    leading_fields=("Validation_Errors",),
                 )
         except Exception:
             logger.exception(
@@ -518,12 +697,29 @@ class AuditService:
             "duplicate_count": stats.get("duplicates", 0),
             "invalid_csv_url": invalid_csv_url,
             "valid_csv_url": valid_csv_url,
+            "pdf_url": pdf_url,
             "error_summary": error_summary,
         }
 
-        AuditService._save_validation_row(scoped_client, session_id, row)
+        try:
+            AuditService._save_validation_row(scoped_client, session_id, row)
+        except Exception as e:
+            if "pdf_url" not in str(e):
+                raise
+            logger.warning(
+                "[AUDIT] validation_history has no pdf_url column -- saving session %s without it. Run "
+                "`ALTER TABLE validation_history ADD COLUMN pdf_url text;` to persist the PDF link.",
+                session_id,
+            )
+            row.pop("pdf_url")
+            AuditService._save_validation_row(scoped_client, session_id, row)
 
-        return {"invalid_csv_url": invalid_csv_url,"valid_csv_url": valid_csv_url, "error_summary": error_summary}
+        return {
+            "invalid_csv_url": invalid_csv_url,
+            "valid_csv_url": valid_csv_url,
+            "pdf_url": pdf_url,
+            "error_summary": error_summary,
+        }
 
     @staticmethod
     def _save_validation_row(scoped_client, session_id: str, row: dict) -> None:

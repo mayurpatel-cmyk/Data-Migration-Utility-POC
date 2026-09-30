@@ -65,6 +65,51 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
   analyticsErrorMessage = signal<string | null>(null);
   lastUpdated = signal<Date | null>(null);
 
+  // ==========================================
+  // PAGINATION (client-side, per tab)
+  // ==========================================
+  readonly pageSizeOptions: readonly number[] = [5, 10];
+  pageSize = signal<number>(10);
+  private pages = signal<Record<HistoryTab, number>>({ migrations: 1, validations: 1 });
+
+  readonly currentTotal = computed<number>(() =>
+    this.activeTab() === 'migrations' ? this.migrationLogs().length : this.validationLogs().length
+  );
+
+  readonly totalPages = computed<number>(() =>
+    Math.max(1, Math.ceil(this.currentTotal() / this.pageSize()))
+  );
+
+  readonly currentPage = computed<number>(() => this.clampPage(this.activeTab(), this.currentTotal()));
+
+  readonly pagedMigrations = computed<MigrationHistoryRecord[]>(() => {
+    const size = this.pageSize();
+    const page = this.clampPage('migrations', this.migrationLogs().length);
+    return this.migrationLogs().slice((page - 1) * size, page * size);
+  });
+
+  readonly pagedValidations = computed<ValidationHistoryRecord[]>(() => {
+    const size = this.pageSize();
+    const page = this.clampPage('validations', this.validationLogs().length);
+    return this.validationLogs().slice((page - 1) * size, page * size);
+  });
+
+  readonly pageStart = computed<number>(() =>
+    this.currentTotal() === 0 ? 0 : (this.currentPage() - 1) * this.pageSize() + 1
+  );
+
+  readonly pageEnd = computed<number>(() =>
+    Math.min(this.currentPage() * this.pageSize(), this.currentTotal())
+  );
+
+  readonly visiblePages = computed<number[]>(() => {
+    const total = this.totalPages();
+    const current = this.currentPage();
+    const windowSize = Math.min(5, total);
+    const start = Math.max(1, Math.min(current - Math.floor(windowSize / 2), total - windowSize + 1));
+    return Array.from({ length: windowSize }, (_, i) => start + i);
+  });
+
   readonly kpiCards = computed<KpiCard[]>(() => {
     const analytics = this.analytics();
     if (!analytics) return [];
@@ -175,6 +220,7 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
       next: ({ migrations, validations }) => {
         this.migrationLogs.set(migrations.history || []);
         this.validationLogs.set(validations.history || []);
+        this.pages.set({ migrations: 1, validations: 1 });
         this.isLoading.set(false);
         this.lastUpdated.set(new Date());
         this.reinitIcons();
@@ -228,6 +274,38 @@ export class MigrationHistoryComponent implements OnInit, OnDestroy {
 
   setTab(tab: HistoryTab): void {
     this.activeTab.set(tab);
+    this.reinitIcons();
+  }
+
+  // ==========================================
+  // PAGINATION ACTIONS
+  // ==========================================
+  private clampPage(tab: HistoryTab, total: number): number {
+    const totalPages = Math.max(1, Math.ceil(total / this.pageSize()));
+    return Math.min(Math.max(1, this.pages()[tab]), totalPages);
+  }
+
+  goToPage(page: number): void {
+    const target = Math.min(Math.max(1, page), this.totalPages());
+    if (target === this.currentPage()) return;
+    const tab = this.activeTab();
+    this.pages.update(p => ({ ...p, [tab]: target }));
+    this.reinitIcons();
+  }
+
+  prevPage(): void {
+    this.goToPage(this.currentPage() - 1);
+  }
+
+  nextPage(): void {
+    this.goToPage(this.currentPage() + 1);
+  }
+
+  setPageSize(size: number): void {
+    const next = Number(size);
+    if (!this.pageSizeOptions.includes(next) || next === this.pageSize()) return;
+    this.pageSize.set(next);
+    this.pages.set({ migrations: 1, validations: 1 });
     this.reinitIcons();
   }
 
