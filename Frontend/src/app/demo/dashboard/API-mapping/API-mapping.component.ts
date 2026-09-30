@@ -109,6 +109,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   private mappingCancel$ = new Subject<void>();
 
+  private allSourceFields: FieldMeta[] = [];
+
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
     'url',
@@ -2180,32 +2182,41 @@ onReviewPanelDragEnd(): void {
         }
       }
 
-      // Deep Field & Type Validation
-      const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
-      let match;
-      const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
 
-      while ((match = sqlRegex.exec(this.customQuery)) !== null) {
-        const fieldName = match[1].toLowerCase();
-        if (reservedWords.includes(fieldName)) continue;
+      const sqlRegex = /\b([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)(?:\s*(?:<>|!=|<=|>=|=|<|>)|\s+(?:like|is(?:\s+not)?))\s*('(?:[^'\\]|\\.)*'|[^\s()',]+)/gi;
+      const reservedWords = new Set(['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not']);
+      const numericTypes = new Set(['number', 'currency', 'double', 'int', 'integer', 'percent']);
 
-        const schemaField = this.sourceFields.find((f) => f.name.toLowerCase() === fieldName);
+      // Skip until describe metadata has loaded, otherwise every field would be flagged invalid.
+      if (this.allSourceFields.length > 0) {
+        let match: RegExpExecArray | null;
 
-        if (!schemaField) {
-          return applySquiggle(`Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`, match[1]);
-        }
+        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+          const rawPath = match[1];
+          if (reservedWords.has(rawPath.toLowerCase())) continue;
 
-        const val = match[2].replace(/'/g, '').trim();
-        const type = schemaField.type?.toLowerCase() || 'string';
+          // Relationship traversal (RecordType.Name, Owner.Profile.Name) cannot be validated
+          // against this object's describe; the CRM validates it server-side.
+          if (rawPath.includes('.')) continue;
 
-        if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+          const schemaField = this.allSourceFields.find((f) => f.name.toLowerCase() === rawPath.toLowerCase());
 
-        if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`, match[2]);
-        }
+          if (!schemaField) {
+            return applySquiggle(`Invalid Field: '${rawPath}' does not exist on ${this.selectedSourceObject}.`, rawPath);
+          }
 
-        if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Boolean. You entered '${val}'.`, match[2]);
+          const val = match[2].replace(/^'|'$/g, '').trim();
+          const type = schemaField.type?.toLowerCase() || 'string';
+
+          if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+
+          if (numericTypes.has(type) && isNaN(Number(val))) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Number, but you entered text ('${val}').`, match[2]);
+          }
+
+          if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Boolean. You entered '${val}'.`, match[2]);
+          }
         }
       }
     }
@@ -2311,7 +2322,8 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = (sourceData.fields || []).filter(
+          this.allSourceFields = sourceData.fields || [];
+          this.sourceFields = this.allSourceFields.filter(
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
           this.prefetchParentFieldMetadata();
