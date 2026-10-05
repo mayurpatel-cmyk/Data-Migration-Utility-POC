@@ -45,6 +45,7 @@ interface MappingRow {
   _mappedBy?: 'rule' | 'ai';
   _blockedTargetField?: string;
   _blockedTargetLabel?: string;
+  syncPicklistValues?: boolean;
 }
 
 interface CrmEntity {
@@ -111,6 +112,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
 
   /** Unfiltered source describe result. Used only for query validation; `sourceFields` is the writable subset used for mapping. */
   private allSourceFields: FieldMeta[] = [];
+  private readonly PICKLIST_TYPES = ['picklist', 'multipicklist'];
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -270,6 +272,13 @@ isProfileDropdownOpen = false;
 
   private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot'];
   private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
+
+  canSyncPicklist(mapping: MappingRow): boolean {
+    if (!this.isSalesforceToSalesforce || !mapping.sourceField || !mapping.targetField) return false;
+    const s = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase();
+    const t = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase();
+    return !!s && !!t && this.PICKLIST_TYPES.includes(s) && this.PICKLIST_TYPES.includes(t);
+  }
 
 get fileMigrationSupported(): boolean {
   const s = this.sourceCrmId?.toLowerCase();
@@ -1388,6 +1397,11 @@ onReviewPanelDragEnd(): void {
     return this.isLookupFieldMeta(this.getFieldMeta(fieldName, side));
   }
 
+  toggleSyncPicklist(mapping: MappingRow): void {
+    if (!this.canSyncPicklist(mapping)) return;
+    mapping.syncPicklistValues = !mapping.syncPicklistValues;
+  }
+
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
     if (!this.targetFields || this.targetFields.length === 0) return [];
@@ -1463,6 +1477,7 @@ onReviewPanelDragEnd(): void {
     }
 
     mapping.targetField = fieldName;
+     mapping.syncPicklistValues = false;
     mapping.isDropdownOpen = false;
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -2399,6 +2414,7 @@ onReviewPanelDragEnd(): void {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
+     mapping.syncPicklistValues = false;
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -2413,6 +2429,7 @@ onReviewPanelDragEnd(): void {
 
   resetAllMappings() {
     this.mappings.forEach((m) => {
+      m.syncPicklistValues = false;
       m.targetField = '';
       m.relationalExtIdField = '';
       delete m._mappedBy;
@@ -2851,7 +2868,8 @@ onReviewPanelDragEnd(): void {
           sourceField: m.sourceField,
           targetField: m.targetField,
           type: targetMeta?.type || 'string',
-          isRequired: targetMeta?.isRequired || targetMeta?.required || false
+          isRequired: targetMeta?.isRequired || targetMeta?.required || false,
+          syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues
         };
       });
 
@@ -3525,6 +3543,7 @@ onReviewPanelDragEnd(): void {
         sourceField: m.sourceField,
         targetField: m.targetField,
         type: isRef ? 'reference' : fieldMeta?.type,
+        syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues,
         referenceTo: fieldMeta?.referenceTo,
         relationshipName: fieldMeta?.relationshipName,
         relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined),
