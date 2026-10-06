@@ -23,6 +23,7 @@ from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
 from app.services.migrators.cross_crm_file_migrator import CrossCrmFileMigrator
 from app.services.file_adapters.registry import supported_crms
+from app.services.picklist_sync_service import PicklistSyncService
 
 import uuid
 import sqlite3
@@ -50,7 +51,7 @@ MIGRATORS = {
     "hubspot": HubspotMigrator()
 }
 
-# Files/Attachments migration works between any CRMs that have a registered file adapter
+# Files/Attachments migration
 FILE_MIGRATION_CRMS = supported_crms()
 FILE_MIGRATOR = CrossCrmFileMigrator()
 FILE_MIGRATION_ESTIMATOR = FileMigrationEstimator()
@@ -132,7 +133,7 @@ async def resolve_file_migration_scope(
     job_id_map: dict, target_object: str, job_index: int,
     migrate_attachments: bool, migrate_files: bool, send_log,
     source_crm: str = "salesforce", target_crm: str = "salesforce", source_object: str = "",
-  ) -> dict:
+) -> dict:
     """
     Runs the pre-flight API budget estimate for this job's file/attachment pass and,
     if it doesn't fit the current daily allocation on either org, pauses the websocket
@@ -297,6 +298,14 @@ async def websocket_migration(websocket: WebSocket):
                     await websocket.close()
                     return
 
+                if source_crm == "salesforce" and target_crm == "salesforce":
+                    picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
+                    if picklist_sync_mappings:
+                        await PicklistSyncService.sync(
+                            client, source_creds, target_creds, user_id,
+                            source_object, target_object, picklist_sync_mappings, send_log
+                        )
+
                 source_records = []
                 actual_query_used = None
 
@@ -416,7 +425,7 @@ async def websocket_migration(websocket: WebSocket):
                     await send_log(f"[{target_object}] Saved {saved_count} source->target Id mapping(s) for future reference lookups.")
 
                 # ==========================================
-                # FILES & ATTACHMENTS PASS (any pair of registered file adapters)
+                # FILES & ATTACHMENTS PASS
                 # ==========================================
                 if migrate_attachments or migrate_files:
                     if job.get("isPass3Patch", False):

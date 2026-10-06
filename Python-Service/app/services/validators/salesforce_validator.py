@@ -33,14 +33,12 @@ class SalesforceValidator:
             if hasattr(c, 'common_name') and c.common_name:
                 c_map[c.common_name.lower()] = c.alpha_2
 
-   
         c_map.update({
             'usa': 'US', 'u.s.a': 'US', 'u.s.a.': 'US', 'u.s': 'US',
             'uk': 'GB', 'u.k': 'GB', 'great britain': 'GB',
             'uae': 'AE', 'south korea': 'KR', 'north korea': 'KP',
         })
 
-  
         state_map = defaultdict(dict)
         name_map = defaultdict(dict)
         for s in pycountry.subdivisions:
@@ -83,9 +81,9 @@ class SalesforceValidator:
         else:
             row_numbers = [(i + 2) for i in df.index]
 
-        is_duplicate = df.duplicated(keep='first') 
+        is_duplicate = df.duplicated(keep='first')
         duplicates_removed = int(is_duplicate.sum())
-        
+
         if duplicates_removed > 0:
             df.loc[is_duplicate, '_errors'] += "[Row: Duplicate Record. This exact row appears multiple times in the file.] "
             valid_mask &= ~is_duplicate
@@ -97,18 +95,18 @@ class SalesforceValidator:
 
         for mapping in mappings:
             csv_col = mapping.get('csvField')
-            sf_field = mapping.get('sfField', mapping.get('targetField')) # Adapted for new mappings schema
-            
+            sf_field = mapping.get('sfField', mapping.get('targetField'))  # Adapted for new mappings schema
+
             if csv_col not in df.columns or not sf_field:
                 continue
             if mapping.get('skipValidation'):
                 continue
-             
+
             df[csv_col] = df[csv_col].astype(object)
-                
+
             field_rules = sf_rules.get(sf_field, {})
             sf_type = field_rules.get('type', mapping.get('type', 'string'))
-            
+
             str_col = df[csv_col].astype(str).str.strip().str.lower()
             is_empty = df[csv_col].isna() | (str_col == '') | (str_col == '<na>') | (str_col == 'nat')
 
@@ -119,11 +117,11 @@ class SalesforceValidator:
 
             is_unique = field_rules.get('unique', False)
             is_external_id = field_rules.get('externalId', False)
-            
+
             if is_unique or is_external_id:
                 is_col_duplicate = str_col.duplicated(keep=False)
                 invalid_duplicates = is_col_duplicate & ~is_empty
-                
+
                 if invalid_duplicates.any():
                     df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Duplicate value found inside the CSV. This field must be Unique.] "
                     valid_mask &= ~invalid_duplicates
@@ -135,14 +133,14 @@ class SalesforceValidator:
 
             if is_calculated or is_autonumber or (not is_createable and not is_updateable):
                 df.loc[~is_empty, '_errors'] += f"[{csv_col}: This field is strictly Read-Only in Salesforce (e.g., Formula). You cannot map data to it.] "
-                valid_mask &= is_empty 
+                valid_mask &= is_empty
 
             elif sf_type in ['string', 'textarea', 'phone', 'url']:
                 raw_len = mapping.get('maxLength')
                 if not raw_len: raw_len = field_rules.get('length')
-                
+
                 if not raw_len: max_len = 32768 if sf_type == 'textarea' else 255
-                else: max_len = int(float(raw_len)) 
+                else: max_len = int(float(raw_len))
 
                 field_lower = sf_field.lower()
                 is_country_code_field = field_lower.endswith('countrycode')
@@ -167,32 +165,33 @@ class SalesforceValidator:
                         df[csv_col], df[country_col] if country_col else None,
                         to_code=is_state_code_field
                     )
-                    
+
                 str_lengths = df[csv_col].astype(str).str.len()
                 is_too_long = (str_lengths > max_len) & ~is_empty
-                
+
                 if is_too_long.any():
                     df.loc[is_too_long, '_errors'] += f"[{csv_col}: Text is too long. Maximum allowed is {max_len} characters.] "
                     valid_mask &= ~is_too_long
-                
+
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str)
-                
+
                 if sf_type == 'url':
                     needs_http = ~df[csv_col].astype(str).str.startswith('http', na=False) & ~is_empty
                     df.loc[needs_http, csv_col] = 'https://' + df.loc[needs_http, csv_col].astype(str)
-                    
+
                     url_regex = r'^https?://(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,63}(?:/[^\s]*)?$'
                     is_invalid_url = ~df[csv_col].astype(str).str.match(url_regex) & ~is_empty
-                    
+
                     if is_invalid_url.any():
                         df.loc[is_invalid_url, '_errors'] += f"[{csv_col}: Invalid URL format.] "
                         valid_mask &= ~is_invalid_url
 
             elif sf_type == 'picklist':
                 valid_values = field_rules.get('picklistValues', [])
-                is_restricted = field_rules.get('restrictedPicklist', True) 
-                
-                if valid_values and is_restricted:
+                is_restricted = field_rules.get('restrictedPicklist', True)
+
+                # Values flagged for picklist sync will be created in the target org, so skip the check
+                if valid_values and is_restricted and not mapping.get('syncPicklistValues'):
                     is_invalid_picklist = ~df[csv_col].astype(str).str.lower().str.strip().isin(valid_values) & ~is_empty
                     df.loc[is_invalid_picklist, '_errors'] += f"[{csv_col}: Invalid Picklist Value. This field is restricted.] "
                     valid_mask &= ~is_invalid_picklist
@@ -200,16 +199,16 @@ class SalesforceValidator:
                 if field_rules.get('controllerName') and field_rules.get('dependentValues'):
                     controller_sf_name = field_rules.get('controllerName')
                     controller_csv_col = next((m.get('csvField') for m in mappings if m.get('sfField') == controller_sf_name), None)
-                    
+
                     if controller_csv_col and controller_csv_col in df.columns:
                         dep_map = field_rules.get('dependentValues')
-                        
+
                         def is_valid_dependency(row):
                             dep_val = str(row[csv_col]).strip().lower()
                             if pd.isna(row[csv_col]) or dep_val in ['none', 'nan', '', '<na>']: return True
                             ctrl_val = str(row[controller_csv_col]).strip().lower()
                             return dep_val in dep_map.get(ctrl_val, [])
-                        
+
                         is_invalid_dep = ~df.apply(is_valid_dependency, axis=1) & ~is_empty
                         df.loc[is_invalid_dep, '_errors'] += f"[{csv_col}: Invalid dependent picklist value.] "
                         valid_mask &= ~is_invalid_dep
@@ -220,9 +219,9 @@ class SalesforceValidator:
                 if has_junk.any():
                     df.loc[has_junk, '_errors'] += f"[{csv_col}: Contains invalid special characters.] "
                     valid_mask &= ~has_junk
-                
+
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
-                if valid_values:
+                if valid_values and not mapping.get('syncPicklistValues'):
                     def is_valid_multipicklist(val):
                         if pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'none': return True
                         items = [i.strip().lower() for i in str(val).split(';')]
@@ -232,7 +231,7 @@ class SalesforceValidator:
                     if is_invalid_multi.any():
                         df.loc[is_invalid_multi, '_errors'] += f"[{csv_col}: Invalid Multi-Select value.] "
                         valid_mask &= ~is_invalid_multi
-                
+
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s*;\s*', ';', regex=True)
 
             elif sf_type == 'email':
@@ -240,7 +239,7 @@ class SalesforceValidator:
                 is_invalid_email = pd.Series(False, index=df.index)
                 if (~is_empty).any():
                     is_invalid_email[~is_empty] = ~df.loc[~is_empty, csv_col].apply(is_valid_email)
-                
+
                 df.loc[is_invalid_email, '_errors'] += f"[{csv_col}: Invalid Email format.] "
                 valid_mask &= ~is_invalid_email
 
@@ -249,11 +248,11 @@ class SalesforceValidator:
                 is_true = lower_col.isin(['true', '1', 'yes', 'y'])
                 is_false = lower_col.isin(['false', '0', 'no', 'n'])
                 valid_bools = is_true | is_false | is_empty
-                
+
                 df[csv_col] = df[csv_col].astype(object)
                 df.loc[is_true, csv_col] = True
                 df.loc[is_false, csv_col] = False
-                df.loc[is_empty, csv_col] = False 
+                df.loc[is_empty, csv_col] = False
 
                 df.loc[~valid_bools, '_errors'] += f"[{csv_col}: Must be TRUE/FALSE/Yes/No.] "
                 valid_mask &= valid_bools
@@ -262,7 +261,7 @@ class SalesforceValidator:
                 cleaned_nums = df[csv_col].astype(str).str.replace(r'[^\d\.-]', '', regex=True)
                 numeric_col = pd.to_numeric(cleaned_nums, errors='coerce')
                 is_invalid = numeric_col.isna() & ~is_empty
-                
+
                 precision = field_rules.get('precision', 18)
                 scale = field_rules.get('scale', 0)
                 max_int_digits = precision - scale
@@ -276,7 +275,7 @@ class SalesforceValidator:
 
                 df[csv_col] = df[csv_col].astype(object)
                 df.loc[~is_invalid & ~is_empty, csv_col] = numeric_col[~is_invalid & ~is_empty]
-                
+
                 df.loc[is_invalid, '_errors'] += f"[{csv_col}: Invalid Number.] "
                 valid_mask &= ~is_invalid
 
@@ -290,7 +289,7 @@ class SalesforceValidator:
             elif sf_type in ['date', 'datetime']:
                 parsed_dates = pd.to_datetime(df[csv_col], errors='coerce')
                 numeric_str = pd.to_numeric(df[csv_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True), errors='coerce')
-                
+
                 is_serial_date = numeric_str.notna() & (numeric_str > 0) & (numeric_str < 3000000) & ~is_empty
                 if is_serial_date.any():
                     parsed_dates.update(pd.to_datetime(numeric_str[is_serial_date], unit='D', origin='1899-12-30', errors='coerce'))
@@ -326,7 +325,7 @@ class SalesforceValidator:
                 invalid_records_output.append({
                     "originalRow": invalid_row_dicts[i],
                     "errors": str(invalid_errors[i]).strip(),
-                    "rowNumber": row_numbers[invalid_indices[i]] 
+                    "rowNumber": row_numbers[invalid_indices[i]]
                 })
 
         return {
