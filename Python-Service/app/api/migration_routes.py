@@ -23,7 +23,7 @@ from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
 from app.services.migrators.cross_crm_file_migrator import CrossCrmFileMigrator
 from app.services.file_adapters.registry import supported_crms
-from app.services.picklist_sync_service import PicklistSyncService
+from app.services.crm_picklist_sync_service import MultiCrmPicklistSyncService
 
 import uuid
 import sqlite3
@@ -298,11 +298,11 @@ async def websocket_migration(websocket: WebSocket):
                     await websocket.close()
                     return
 
-                if source_crm == "salesforce" and target_crm == "salesforce":
+                if source_crm in MultiCrmPicklistSyncService.SUPPORTED_CRMS and target_crm in MultiCrmPicklistSyncService.SUPPORTED_CRMS:
                     picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
                     if picklist_sync_mappings:
-                        await PicklistSyncService.sync(
-                            client, source_creds, target_creds, user_id,
+                        await MultiCrmPicklistSyncService.sync(
+                            client, source_crm, target_crm, source_creds, target_creds, user_id,
                             source_object, target_object, picklist_sync_mappings, send_log
                         )
 

@@ -111,7 +111,12 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private mappingCancel$ = new Subject<void>();
 
   private allSourceFields: FieldMeta[] = [];
-  private readonly PICKLIST_TYPES = ['picklist', 'multipicklist'];
+  private readonly PICKLIST_TYPES_BY_CRM: Record<string, string[]> = {
+    salesforce: ['picklist', 'multipicklist'],
+    hubspot: ['picklist'],
+    zoho: ['picklist'],
+    zendesk: ['tagger', 'dropdown', 'multiselect'],
+  };
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -273,10 +278,18 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
 
   canSyncPicklist(mapping: MappingRow): boolean {
-    if (!this.isSalesforceToSalesforce || !mapping.sourceField || !mapping.targetField) return false;
+    if (!this.isPicklistSyncSupported || !mapping.sourceField || !mapping.targetField) return false;
+    const sourceTypes = this.PICKLIST_TYPES_BY_CRM[this.sourceCrmId.toLowerCase()];
+    const targetTypes = this.PICKLIST_TYPES_BY_CRM[this.targetCrmId.toLowerCase()];
     const s = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase();
     const t = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase();
-    return !!s && !!t && this.PICKLIST_TYPES.includes(s) && this.PICKLIST_TYPES.includes(t);
+    return !!s && !!t && sourceTypes.includes(s) && targetTypes.includes(t);
+  }
+
+   get isPicklistSyncSupported(): boolean {
+    const s = this.sourceCrmId?.toLowerCase();
+    const t = this.targetCrmId?.toLowerCase();
+    return !!s && !!t && !!this.PICKLIST_TYPES_BY_CRM[s] && !!this.PICKLIST_TYPES_BY_CRM[t];
   }
 
   get fileMigrationSupported(): boolean {
