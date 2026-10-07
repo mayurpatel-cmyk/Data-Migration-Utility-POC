@@ -45,6 +45,7 @@ interface MappingRow {
   _mappedBy?: 'rule' | 'ai';
   _blockedTargetField?: string;
   _blockedTargetLabel?: string;
+  syncPicklistValues?: boolean;
 }
 
 interface CrmEntity {
@@ -85,6 +86,8 @@ interface FileMigrationBudgetPreview {
   message: string;
   attachmentFileCount: number;
   contentFileCount: number;
+  sourceBudgetVerified?: boolean;
+  targetBudgetVerified?: boolean;
 }
 
 @Component({
@@ -106,6 +109,10 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private http = inject(HttpClient);
 
   private mappingCancel$ = new Subject<void>();
+
+  /** Unfiltered source describe result. Used only for query validation; `sourceFields` is the writable subset used for mapping. */
+  private allSourceFields: FieldMeta[] = [];
+  private readonly PICKLIST_TYPES = ['picklist', 'multipicklist'];
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -262,6 +269,40 @@ isProfileDropdownOpen = false;
   get isSalesforceToSalesforce(): boolean {
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
   }
+
+  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot'];
+  private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
+
+  canSyncPicklist(mapping: MappingRow): boolean {
+    if (!this.isSalesforceToSalesforce || !mapping.sourceField || !mapping.targetField) return false;
+    const s = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase();
+    const t = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase();
+    return !!s && !!t && this.PICKLIST_TYPES.includes(s) && this.PICKLIST_TYPES.includes(t);
+  }
+
+get fileMigrationSupported(): boolean {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  return !!s && !!t && this.FILE_MIGRATION_CRMS.includes(s) && this.FILE_MIGRATION_CRMS.includes(t);
+}
+
+get isSourceZoho(): boolean {
+  return this.sourceCrmId?.toLowerCase() === 'zoho';
+}
+
+get isSourceSingleFileType(): boolean {
+  return this.SINGLE_FILE_TYPE_CRMS.includes(this.sourceCrmId?.toLowerCase());
+}
+
+get fileMigrationNotes(): string[] {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  const notes: string[] = [];
+  if (t === 'zoho') notes.push('Zoho accepts attachments up to 20 MB per file; larger files are reported as errors.');
+  if (s === 'hubspot') notes.push('Files attached to a record\'s Notes, Calls, Meetings and Tasks are migrated from HubSpot (files in the standalone Files tool are not).');
+  if (s === 'zoho' && t === 'salesforce') notes.push('Zoho attachments are created as Salesforce Files.');
+  return notes;
+}
 
   recentQueries: string[] = [];
   // --- MONACO EDITOR CONFIGURATION ---
@@ -770,21 +811,28 @@ toggleProfileDropdown(event: Event): void {
     return this.validationResults.invalidRecords.some((rec: any) => rec._editedFields && Object.keys(rec._editedFields).length > 0);
   }
 
+  private static readonly NUMERIC_TYPES = ['number', 'integer', 'double', 'currency', 'percent', 'float'];
+  private static readonly DATE_TYPES = ['date', 'datetime'];
+  private static readonly TEXT_TARGET_TYPES = ['string', 'text', 'textarea', 'picklist', 'reference'];
+
+  areTypesCompatible(srcTypeRaw: string | undefined, tgtTypeRaw: string | undefined): boolean {
+    const srcType = (srcTypeRaw || 'string').toLowerCase();
+    const tgtType = (tgtTypeRaw || 'string').toLowerCase();
+
+    if (srcType === 'id' || tgtType === 'id') return true;
+    if (srcType === tgtType) return true;
+    if (srcType.includes('string') && ApiMappingComponent.TEXT_TARGET_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.NUMERIC_TYPES.includes(srcType) && ApiMappingComponent.NUMERIC_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.DATE_TYPES.includes(srcType) && ApiMappingComponent.DATE_TYPES.includes(tgtType)) return true;
+    return false;
+  }
+
   isTypeMismatch(mapping: any): boolean {
     if (!mapping.targetField) return false;
-    const srcType = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase() || 'string';
-    const tgtType = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase() || 'string';
-
-    if (srcType === 'id' || tgtType === 'id') return false;
-
-    if (srcType === tgtType) return false;
-
-    if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
-  
-    if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType))
-      return false;
-
-    return true;
+    return !this.areTypesCompatible(
+      this.getFieldMeta(mapping.sourceField, 'source')?.type,
+      this.getFieldMeta(mapping.targetField, 'target')?.type
+    );
   }
 
   onEditorInit(editor: any) {
@@ -1121,7 +1169,6 @@ toggleProfileDropdown(event: Event): void {
     });
 
     if (confirmResult.isConfirmed) {
-      // Explicit "Yes, Keep My Mapped Fields" click -- switch mode, keep mappings.
       this.lastOperationMode = newMode;
       if (newMode === 'delete') {
         this.externalIdField = '';
@@ -1350,6 +1397,11 @@ onReviewPanelDragEnd(): void {
     return this.isLookupFieldMeta(this.getFieldMeta(fieldName, side));
   }
 
+  toggleSyncPicklist(mapping: MappingRow): void {
+    if (!this.canSyncPicklist(mapping)) return;
+    mapping.syncPicklistValues = !mapping.syncPicklistValues;
+  }
+
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
     if (!this.targetFields || this.targetFields.length === 0) return [];
@@ -1425,6 +1477,7 @@ onReviewPanelDragEnd(): void {
     }
 
     mapping.targetField = fieldName;
+     mapping.syncPicklistValues = false;
     mapping.isDropdownOpen = false;
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -1607,19 +1660,16 @@ onReviewPanelDragEnd(): void {
       });
   }
 
-  /** All object types a given mapping row's reference field can point at (usually 1; more for polymorphic fields). */
   getReferenceParentCandidates(mapping: MappingRow): string[] {
     const fieldMeta = this.targetFields.find((f) => f.name === mapping.targetField);
     return fieldMeta?.referenceTo || [];
   }
 
-  /** The parent object currently in effect for this mapping row -- the user's explicit pick, or the field's first/only referenceTo. */
   getReferenceParentObjectName(mapping: MappingRow): string | undefined {
     const candidates = this.getReferenceParentCandidates(mapping);
     return mapping.parentObjectName || candidates[0];
   }
 
-  /** External-ID-eligible fields on the PARENT object, for the "Match By" dropdown. */
   getParentExternalIdFields(mapping: MappingRow): FieldMeta[] {
     const parentName = this.getReferenceParentObjectName(mapping);
     if (!parentName) return [];
@@ -1909,11 +1959,11 @@ onReviewPanelDragEnd(): void {
         throw new Error(errorData.detail || 'Failed to fetch filtered data.');
       }
 
-      const data = await response.json();
+            const data = await response.json();
       this.previewRecords = data.records || [];
       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery, this.migrationTimeFilter);
       const filterSuffix = this.getFilterSuffix();
-      const executedQuery = data.queryUsed || this.customQuery || 'default query';
+      const executedQuery = data.queryUsed || safeQuery || 'default query';
       this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
@@ -2149,31 +2199,44 @@ onReviewPanelDragEnd(): void {
       }
 
       // Deep Field & Type Validation
-      const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
-      let match;
-      const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
+      // Group 1: field (or dotted relationship path). Group 2: operator. Group 3: exactly ONE value token
+      // (a quoted literal, or an unquoted token that stops at whitespace/parens/commas), so trailing
+      // clauses like "0 and Type" can never be swallowed into the value.
+      // Word operators (like / is [not]) require leading whitespace so "Dislike" isn't parsed as "Dis" + "like".
+      const sqlRegex = /\b([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)(?:\s*(?:<>|!=|<=|>=|=|<|>)|\s+(?:like|is(?:\s+not)?))\s*('(?:[^'\\]|\\.)*'|[^\s()',]+)/gi;
+      const reservedWords = new Set(['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not']);
+      const numericTypes = new Set(['number', 'currency', 'double', 'int', 'integer', 'percent']);
 
-      while ((match = sqlRegex.exec(this.customQuery)) !== null) {
-        const fieldName = match[1].toLowerCase();
-        if (reservedWords.includes(fieldName)) continue;
+      // Skip until describe metadata has loaded, otherwise every field would be flagged invalid.
+      if (this.allSourceFields.length > 0) {
+        let match: RegExpExecArray | null;
 
-        const schemaField = this.sourceFields.find((f) => f.name.toLowerCase() === fieldName);
+        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+          const rawPath = match[1];
+          if (reservedWords.has(rawPath.toLowerCase())) continue;
 
-        if (!schemaField) {
-          return applySquiggle(`Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`, match[1]);
-        }
+          // Relationship traversal (RecordType.Name, Owner.Profile.Name) cannot be validated
+          // against this object's describe; the CRM validates it server-side.
+          if (rawPath.includes('.')) continue;
 
-        const val = match[2].replace(/'/g, '').trim();
-        const type = schemaField.type?.toLowerCase() || 'string';
+          const schemaField = this.allSourceFields.find((f) => f.name.toLowerCase() === rawPath.toLowerCase());
 
-        if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+          if (!schemaField) {
+            return applySquiggle(`Invalid Field: '${rawPath}' does not exist on ${this.selectedSourceObject}.`, rawPath);
+          }
 
-        if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`, match[2]);
-        }
+          const val = match[2].replace(/^'|'$/g, '').trim();
+          const type = schemaField.type?.toLowerCase() || 'string';
 
-        if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Boolean. You entered '${val}'.`, match[2]);
+          if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+
+          if (numericTypes.has(type) && isNaN(Number(val))) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Number, but you entered text ('${val}').`, match[2]);
+          }
+
+          if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Boolean. You entered '${val}'.`, match[2]);
+          }
         }
       }
     }
@@ -2279,7 +2342,8 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = (sourceData.fields || []).filter(
+          this.allSourceFields = sourceData.fields || [];
+          this.sourceFields = this.allSourceFields.filter(
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
           this.prefetchParentFieldMetadata();
@@ -2288,9 +2352,16 @@ onReviewPanelDragEnd(): void {
           this.previewRecords = sourceData.sampleRecords || [];
 
           const crmLower = this.sourceCrmId.toLowerCase();
-          if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
-            const fieldList = this.previewHeaders.slice(0, 2).join(', ');
-            this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+          if (this.isDefaultQuery && this.previewHeaders.length > 0) {
+            const defaultFields = this.previewHeaders.slice(0, 2);
+
+            if (crmLower === 'salesforce' || crmLower === 'zoho') {
+              this.customQuery = `SELECT ${defaultFields.join(', ')} FROM ${this.selectedSourceObject}`;
+            } else if (crmLower === 'hubspot') {
+              this.customQuery = JSON.stringify({ properties: defaultFields }, null, 2);
+            } else if (crmLower === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+              this.customQuery = JSON.stringify({ fields: defaultFields }, null, 2);
+            }
           }
 
           this.mappings = this.sourceFields.map((field: FieldMeta) => ({
@@ -2343,6 +2414,7 @@ onReviewPanelDragEnd(): void {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
+     mapping.syncPicklistValues = false;
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -2357,6 +2429,7 @@ onReviewPanelDragEnd(): void {
 
   resetAllMappings() {
     this.mappings.forEach((m) => {
+      m.syncPicklistValues = false;
       m.targetField = '';
       m.relationalExtIdField = '';
       delete m._mappedBy;
@@ -2423,14 +2496,10 @@ onReviewPanelDragEnd(): void {
         }
 
         const isExactTypeMatch = srcType === tgtType;
-        const isForgivingTypeMatch =
-          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) &&
-            ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+        const isCompatible = this.areTypesCompatible(srcType, tgtType);
+        const isForgivingTypeMatch = isCompatible && !isExactTypeMatch;
 
-        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
-
-        if (this.isStrictMapping && !isCompatible) return;
+        if (!isCompatible) return;
 
         if (tgtApiExact === srcApiExact) score += 100;
         else if (tgtApiClean === srcApiClean) score += 90;
@@ -2559,8 +2628,11 @@ onReviewPanelDragEnd(): void {
                   ? this.targetFields.find((f) => f.name === backendMap.targetField)
                   : undefined;
                 const isWritable = this.isFieldWritable(suggestedFieldMeta);
+                const sourceFieldMeta = this.sourceFields.find((sf) => sf.name === backendMap.sourceField);
+                const typeCompatible =
+                  !suggestedFieldMeta || !sourceFieldMeta || this.areTypesCompatible(sourceFieldMeta.type, suggestedFieldMeta.type);
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable && typeCompatible) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -2572,7 +2644,7 @@ onReviewPanelDragEnd(): void {
                   aiMatchCount++;
                 } else if (
                   localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed &&
-                  !isWritable && suggestedFieldMeta
+                  !isWritable && typeCompatible && suggestedFieldMeta
                 ) {
                   localRow._blockedTargetField = suggestedFieldMeta.name;
                   localRow._blockedTargetLabel = suggestedFieldMeta.label;
@@ -2796,7 +2868,8 @@ onReviewPanelDragEnd(): void {
           sourceField: m.sourceField,
           targetField: m.targetField,
           type: targetMeta?.type || 'string',
-          isRequired: targetMeta?.isRequired || targetMeta?.required || false
+          isRequired: targetMeta?.isRequired || targetMeta?.required || false,
+          syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues
         };
       });
 
@@ -3200,7 +3273,7 @@ onReviewPanelDragEnd(): void {
   }
 
   private show_confirmation_modal(activeMappings: any[]) {
-    const filesInScope = this.isSalesforceToSalesforce && (this.migrateAttachments || this.migrateFiles);
+    const filesInScope = this.fileMigrationSupported && (this.migrateAttachments || this.migrateFiles);
     const preview = this.fileMigrationBudgetPreview;
 
     let fileBudgetHtml = '';
@@ -3289,7 +3362,7 @@ onReviewPanelDragEnd(): void {
       clearTimeout(this.fileMigrationBudgetPreviewDebounce);
     }
 
-    if (!this.isSalesforceToSalesforce || (!this.migrateAttachments && !this.migrateFiles)) {
+    if (!this.fileMigrationSupported || (!this.migrateAttachments && !this.migrateFiles)) {
       this.fileMigrationBudgetPreview = null;
       this.fileMigrationBudgetPreviewError = null;
       this.isCheckingFileMigrationBudget = false;
@@ -3316,6 +3389,8 @@ onReviewPanelDragEnd(): void {
     const body = {
       sourceObject: this.selectedSourceObject,
       query: this.customQuery?.trim() || '',
+      sourceCrm: this.sourceCrmId.toLowerCase(),
+      targetCrm: this.targetCrmId.toLowerCase(),
       migrationTimeFilter: this.migrationTimeFilter,
       migrateAttachments: this.migrateAttachments,
       migrateFiles: this.migrateFiles
@@ -3468,6 +3543,7 @@ onReviewPanelDragEnd(): void {
         sourceField: m.sourceField,
         targetField: m.targetField,
         type: isRef ? 'reference' : fieldMeta?.type,
+        syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues,
         referenceTo: fieldMeta?.referenceTo,
         relationshipName: fieldMeta?.relationshipName,
         relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined),
@@ -3514,8 +3590,8 @@ onReviewPanelDragEnd(): void {
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
-      migrateAttachments: this.isSalesforceToSalesforce ? this.migrateAttachments : false,
-      migrateFiles: this.isSalesforceToSalesforce ? this.migrateFiles : false,
+      migrateAttachments: this.fileMigrationSupported ? this.migrateAttachments : false,
+      migrateFiles: this.fileMigrationSupported && !this.isSourceSingleFileType ? this.migrateFiles : false,
       migrationTimeFilter: this.migrationTimeFilter,
 
       authToken: localStorage.getItem('supabase_token') || ''

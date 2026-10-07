@@ -21,6 +21,7 @@ from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
 from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
+from app.services.picklist_sync_service import PicklistSyncService
 
 import uuid
 import sqlite3
@@ -291,6 +292,14 @@ async def websocket_migration(websocket: WebSocket):
                     })
                     await websocket.close()
                     return
+
+                if source_crm == "salesforce" and target_crm == "salesforce":
+                    picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
+                    if picklist_sync_mappings:
+                        await PicklistSyncService.sync(
+                            client, source_creds, target_creds, user_id,
+                            source_object, target_object, picklist_sync_mappings, send_log
+                        )
 
                 source_records = []
                 actual_query_used = None
