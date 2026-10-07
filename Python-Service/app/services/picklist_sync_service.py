@@ -153,7 +153,9 @@ class PicklistSyncService:
     @staticmethod
     def _missing_values(source_field: Dict[str, Any], target_field: Dict[str, Any]) -> List[Dict[str, str]]:
         existing = {
-            str(v.get("value", "")).strip().lower() for v in (target_field.get("picklistValues") or [])
+            str(v.get("value", "")).strip().lower()
+            for v in (target_field.get("picklistValues") or [])
+            if v.get("active", True)
         }
         missing, seen = [], set()
         for v in source_field.get("picklistValues") or []:
@@ -169,10 +171,15 @@ class PicklistSyncService:
 
     @staticmethod
     def _append_entries(entries: List[Dict[str, Any]], missing: List[Dict[str, str]]) -> List[str]:
-        present = {str(e.get("valueName", "")).strip().lower() for e in entries}
+        index = {str(e.get("valueName", "")).strip().lower(): e for e in entries}
         added = []
         for m in missing:
-            if m["value"].strip().lower() in present:
+            key = m["value"].strip().lower()
+            existing = index.get(key)
+            if existing is not None:
+                if existing.get("isActive") is False:
+                    existing["isActive"] = True
+                    added.append(m["value"])
                 continue
             entries.append({
                 "label": m["label"],
