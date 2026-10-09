@@ -434,8 +434,18 @@ get fileMigrationNotes(): string[] {
     this.validationSocket = null;
     this.migrationSocket = null;
 
-    if (this.monacoEditorInstance) {
-      this.monacoEditorInstance.dispose();
+    if (this.completionProvider) {
+      this.completionProvider.dispose();
+      this.completionProvider = null;
+    }
+    this.monacoEditorInstance = null;
+  }
+
+  @HostListener('window:unhandledrejection', ['$event'])
+  onUnhandledRejection(event: PromiseRejectionEvent): void {
+    const reason: any = event.reason;
+    if (reason && reason.name === 'Canceled' && reason.message === 'Canceled') {
+      event.preventDefault();
     }
   }
 
