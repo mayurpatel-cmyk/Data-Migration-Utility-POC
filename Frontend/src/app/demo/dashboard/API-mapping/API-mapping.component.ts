@@ -2,8 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { forkJoin, Subject } from 'rxjs';
-import { takeUntil } from 'rxjs/operators';
+import { forkJoin, of, Subject } from 'rxjs';
+import { takeUntil, catchError } from 'rxjs/operators';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
@@ -11,6 +11,8 @@ import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
 import { HttpClient } from '@angular/common/http';
 import { AuthService } from 'src/app/demo/Services/auth.service';
+import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
+import { isAuthExpiredError, isConnectionExpired, isSocketAuthExpired } from 'src/app/services/crm-session.util';
 declare const monaco: any;
 interface FieldMeta {
   name: string;
@@ -104,6 +106,8 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
   private authService = inject(AuthService);
+  private crmAuthService = inject(CrmAuthService);
+  private isRedirectingToLogin = false;
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
   private http = inject(HttpClient);
@@ -316,8 +320,19 @@ get fileMigrationNotes(): string[] {
     renderLineHighlight: 'none',
     fontSize: 13,
     padding: { top: 10, bottom: 10 },
-    suggestOnTriggerCharacters: true
+    suggestOnTriggerCharacters: true,
+    automaticLayout: true // re-fits the editor when its container is resized/expanded
   };
+
+  // --- EXPANDABLE QUERY EDITOR ---
+  isQueryEditorExpanded = false;
+  queryEditorHeight = 120; // px; also changes when the user drags the resize handle
+
+  toggleQueryEditorSize(): void {
+    this.isQueryEditorExpanded = !this.isQueryEditorExpanded;
+    this.queryEditorHeight = this.isQueryEditorExpanded ? 350 : 120;
+    setTimeout(() => this.monacoEditorInstance?.layout(), 0);
+  }
 
   monacoEditorInstance: any;
   completionProvider: any;
@@ -349,9 +364,59 @@ get fileMigrationNotes(): string[] {
 
     this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
-    this.fetchRecoverableSessions();
+    // Verify both CRM tokens are still valid before loading anything; expired => straight back to login.
+    this.verifyCrmSessions(() => {
+      this.fetchRecoverableSessions();
+      this.preloadEntirePage();
+    });
+  }
 
-    this.preloadEntirePage();
+  // ==========================================
+  //  CRM SESSION EXPIRY
+  // ==========================================
+  private verifyCrmSessions(onValid: () => void): void {
+    this.crmAuthService.getUserConnections().subscribe({
+      next: (connections: any[]) => {
+        const isLive = (role: 'source' | 'target') =>
+          connections.some((c) => c.connection_role === role && !isConnectionExpired(c));
+
+        const expiredSides = (['source', 'target'] as const).filter((role) => !isLive(role));
+        if (expiredSides.length) {
+          this.handleSessionExpired(expiredSides);
+          return;
+        }
+        onValid();
+      },
+      error: (err) => {
+        if (isAuthExpiredError(err)) {
+          this.handleSessionExpired();
+        } else {
+          onValid(); // network hiccup etc. -- don't block the page
+        }
+      }
+    });
+  }
+
+  /** Stop all work and send the user to the Source/Target connection page to log in again. */
+  handleSessionExpired(sides: Array<'source' | 'target'> = ['source', 'target']): void {
+    if (this.isRedirectingToLogin) return;
+    this.isRedirectingToLogin = true;
+
+    this.mappingCancel$.next();
+    this.closeSocket(this.validationSocket);
+    this.closeSocket(this.migrationSocket);
+    this.validationSocket = null;
+    this.migrationSocket = null;
+    this.isLoading = false;
+    this.isGlobalLoading = false;
+    this.isValidating = false;
+
+    window.dispatchEvent(new Event('connections-updated'));
+
+    // The connection page clears these sides and shows the "session expired" message.
+    this.zone.run(() => {
+      this.router.navigate(['/connection'], { state: { expiredSides: sides } });
+    });
   }
 
   ngOnDestroy() {
@@ -1648,6 +1713,7 @@ onReviewPanelDragEnd(): void {
           this.cdr.detectChanges();
         },
         error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(); return; }
           console.error('Failed to load parent object metadata for External ID matching:', err);
           this.isLoadingParentFields = false;
           this.toastr.warning(
@@ -1956,6 +2022,10 @@ onReviewPanelDragEnd(): void {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown Server Error' }));
+        if (isAuthExpiredError({ status: response.status, error: errorData })) {
+          this.handleSessionExpired();
+          return;
+        }
         throw new Error(errorData.detail || 'Failed to fetch filtered data.');
       }
 
@@ -2001,6 +2071,10 @@ onReviewPanelDragEnd(): void {
         { headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` } }
       );
 
+      if (response.status === 401) {
+        this.handleSessionExpired();
+        return;
+      }
       if (!response.ok) throw new Error('Failed to fetch object count.');
 
       const data = await response.json();
@@ -2303,6 +2377,7 @@ onReviewPanelDragEnd(): void {
         this.cdr.detectChanges();
       },
       error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(); return; }
         console.error('Failed to preload base entity dropdowns:', err);
         this.logMessages.unshift(`Configuration Error: Could not fetch core CRM schemas.`);
         this.isLoading = false;
@@ -2395,6 +2470,7 @@ onReviewPanelDragEnd(): void {
           }
         },
         error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(); return; }
           console.error('Metadata payload extraction failed:', err);
           this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics from ${this.sourceSystem}.`);
           this.isLoading = false;
@@ -2667,6 +2743,7 @@ onReviewPanelDragEnd(): void {
             processNextChunk();
           },
           error: (error: any) => {
+        if (isAuthExpiredError(error)) { this.handleSessionExpired(); return; }
             console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
             this.isAutoMapping = false;
 
@@ -2927,6 +3004,11 @@ onReviewPanelDragEnd(): void {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
 
+        if (isSocketAuthExpired(data)) {
+          this.handleSessionExpired();
+          return;
+        }
+
         if (data.log) {
           this.logMessages.push(data.log);
           if (this.logMessages.length > 50) this.logMessages.shift();
@@ -3090,11 +3172,19 @@ onReviewPanelDragEnd(): void {
         }
 
 
-        localStorage.removeItem('source_crm_slot');
-        localStorage.removeItem('target_crm_slot');
+        // Remove saved CRM connections on the server BEFORE logging out (the app token is still valid here),
+        // so nothing shows as "Connected" the next time someone logs in.
+        forkJoin([
+          this.crmAuthService.disconnectCrm('source').pipe(catchError(() => of(null))),
+          this.crmAuthService.disconnectCrm('target').pipe(catchError(() => of(null)))
+        ]).subscribe(() => {
+          localStorage.removeItem('source_crm_slot');
+          localStorage.removeItem('target_crm_slot');
+          window.dispatchEvent(new Event('connections-updated'));
 
-        this.toastr.success('You have been securely logged out.', 'Goodbye!');
-        this.authService.logout();
+          this.toastr.success('You have been securely logged out.', 'Goodbye!');
+          this.authService.logout();
+        });
       }
     });
   }
@@ -3407,6 +3497,7 @@ onReviewPanelDragEnd(): void {
         this.cdr.detectChanges();
       },
       error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(); return; }
         this.fileMigrationBudgetPreview = null;
         this.fileMigrationBudgetPreviewError =
           err?.error?.detail || 'Could not check the API Limit for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
@@ -3611,6 +3702,11 @@ onReviewPanelDragEnd(): void {
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
+
+        if (isSocketAuthExpired(data)) {
+          this.handleSessionExpired();
+          return;
+        }
 
         if (data.log) {
           this.logMessages = [...this.logMessages, data.log];

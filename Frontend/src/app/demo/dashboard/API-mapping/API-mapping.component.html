@@ -819,9 +819,19 @@
           </div>
         </div>
 
-        <div class="border rounded shadow-sm overflow-hidden"
+        <div class="d-flex justify-content-end mb-1">
+          <button type="button" class="btn btn-sm btn-link text-muted p-0 text-decoration-none"
+            style="font-size: 0.75rem;" (click)="toggleQueryEditorSize()"
+            [title]="isQueryEditorExpanded ? 'Collapse editor' : 'Expand editor'">
+            <i class="feather" [ngClass]="isQueryEditorExpanded ? 'icon-minimize-2' : 'icon-maximize-2'"></i>
+            {{ isQueryEditorExpanded ? 'Collapse' : 'Expand' }}
+          </button>
+        </div>
+
+        <div class="border rounded shadow-sm"
           [style.border-color]="queryError ? '#dc3545' : 'var(--line)'"
-          style="height: 120px; border-width: 2px !important;">
+          [style.height.px]="queryEditorHeight"
+          style="min-height: 80px; max-height: 80vh; border-width: 2px !important; resize: vertical; overflow: hidden;">
           <ngx-monaco-editor [options]="editorOptions" [(ngModel)]="customQuery" (ngModelChange)="onQueryEdited()"
             (onInit)="onEditorInit($event)" style="height: 100%; width: 100%;">
           </ngx-monaco-editor>

@@ -456,8 +456,9 @@ class PicklistSyncService:
         target_object: str,
         mappings: List[Dict[str, Any]],
         send_log,
-    ) -> Dict[str, List[str]]:
+    ) -> Dict[str, Dict[str, Any]]:
         created: Dict[str, List[str]] = {}
+        failed: Dict[str, str] = {}
         try:
             source = _SalesforceSession(client, source_creds, user_id, "source")
             target = _SalesforceSession(client, target_creds, user_id, "target")
@@ -465,7 +466,7 @@ class PicklistSyncService:
             target_fields = await target.describe_fields(target_object)
         except PicklistSyncError as e:
             await send_log(f"[{target_object}] Picklist Sync skipped: {e}")
-            return created
+            return {"created": created, "failed": {"*": str(e)}}
 
         for m in mappings:
             src_name = m.get("sourceField") or m.get("csvField")
@@ -500,6 +501,7 @@ class PicklistSyncService:
                 }
                 not_active = [v for v in added if live.get(v.strip().lower()) is not True]
                 if not_active:
+                    failed[tgt_name] = f"not active after write: {', '.join(not_active)}"
                     await send_log(
                         f"[{target_object}] Picklist Sync WARNING: {tgt_name} values not active after write: "
                         f"{', '.join(not_active)}"
@@ -507,7 +509,8 @@ class PicklistSyncService:
                 else:
                     await send_log(f"[{target_object}] Picklist Sync: verified {tgt_name} values are active.")
             except (PicklistSyncError, httpx.HTTPError) as e:
+                failed[tgt_name] = str(e)
                 logger.warning("Picklist sync failed for %s.%s: %s", target_object, tgt_name, e)
                 await send_log(f"[{target_object}] Picklist Sync failed for {tgt_name}: {e}")
 
-        return created
+        return {"created": created, "failed": failed}

@@ -296,10 +296,18 @@ async def websocket_migration(websocket: WebSocket):
                 if source_crm == "salesforce" and target_crm == "salesforce":
                     picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
                     if picklist_sync_mappings:
-                        await PicklistSyncService.sync(
+                        sync_result = await PicklistSyncService.sync(
                             client, source_creds, target_creds, user_id,
                             source_object, target_object, picklist_sync_mappings, send_log
                         )
+                        if sync_result["failed"]:
+                            await websocket.send_json({
+                                "log": f"[{target_object}] FATAL: picklist sync failed for "
+                                       f"{', '.join(sync_result['failed'])}. Aborting before data load.",
+                                "status": "Failed",
+                            })
+                            await websocket.close()
+                            return
 
                 source_records = []
                 actual_query_used = None
