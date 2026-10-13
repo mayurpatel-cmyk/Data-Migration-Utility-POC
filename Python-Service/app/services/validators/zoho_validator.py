@@ -88,7 +88,7 @@ class ZohoValidator:
 
             elif zoho_type == 'picklist':
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
-                if valid_values:
+                if valid_values and not mapping.get('syncPicklistValues'):
                     is_invalid_picklist = ~str_col.isin([v.lower() for v in valid_values]) & ~is_empty
                     if is_invalid_picklist.any():
                         df.loc[is_invalid_picklist, '_errors'] += f"[{csv_col}: Invalid Picklist Value. Must match a valid Zoho dropdown option.] "
@@ -98,7 +98,7 @@ class ZohoValidator:
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
                 
-                if valid_values:
+                if valid_values and not mapping.get('syncPicklistValues'):
                     valid_lower = [v.lower() for v in valid_values]
                     def is_valid_multipicklist(val):
                         if pd.isna(val) or str(val).strip() == '': return True

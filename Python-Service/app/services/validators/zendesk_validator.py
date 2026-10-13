@@ -105,8 +105,8 @@ class ZendeskValidator:
 
             elif zd_type in ['tagger', 'dropdown', 'picklist']:
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
-                
-                if valid_values:
+
+                if valid_values and not mapping.get('syncPicklistValues'):
                     is_invalid_dropdown = ~str_col.isin(valid_values) & ~is_empty
                     if is_invalid_dropdown.any():
                         df.loc[is_invalid_dropdown, '_errors'] += f"[{csv_col}: Invalid Dropdown value. Must match a Zendesk field Tag.] "
@@ -116,7 +116,7 @@ class ZendeskValidator:
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
                 
-                if valid_values:
+                if valid_values and not mapping.get('syncPicklistValues'):
                     def is_valid_multiselect(val):
                         if pd.isna(val) or str(val).strip() == '': return True
                         items = [i.strip().lower() for i in str(val).split(';')]

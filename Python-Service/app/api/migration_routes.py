@@ -1,11 +1,12 @@
 import asyncio
 import httpx
 import traceback
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from app.api.dependencies.auth import get_current_user
 from app.services.validator_service import process_validation_batch
 from app.utils.config import supabase
-from app.services.crm_service import CrmService
+from app.services.crm_service import CrmService, is_crm_session_expired, crm_session_expired
 from app.services.crm_query_service import CrmQueryService
 import math
 import csv
@@ -20,6 +21,7 @@ from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
 from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
+from app.services.picklist_sync_service import PicklistSyncService
 
 import uuid
 import sqlite3
@@ -34,6 +36,8 @@ from fastapi.responses import StreamingResponse
 import re
 
 from app.services.staging_cleanup_service import cleanup_stale_staging_databases, DEFAULT_MAX_AGE_HOURS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 BASE_STAGING_DIR = os.path.join(os.getcwd(), "SureShift_staging_databases")
@@ -57,14 +61,60 @@ def _require_valid_session_id(session_id: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid session ID.")
     return session_id
 
+# ==========================================
+# CRM SESSION EXPIRY (shared by both websockets)
+# ==========================================
+def _session_expired_payload(sides, failed_status: str, log: str = None) -> dict:
+    """The frontend (isSocketAuthExpired) redirects to the Source/Target connection page on this."""
+    return {
+        "log": log or "Your CRM session has expired. Please log in again.",
+        "status": "SessionExpired",
+        "authExpired": True,
+        "sessionExpired": True,
+        "errorCode": "SESSION_EXPIRED",
+        "expiredSides": list(sides),
+        "failedStatus": failed_status,
+    }
+
+
+async def _resolve_live_credentials(websocket, user_id, pairs, failed_status: str):
+    """
+    pairs = [("source", "salesforce"), ("target", "zoho")]. Returns {side: creds} with live tokens,
+    or None after telling the client which side(s) must log in again (socket is closed).
+    """
+    creds, expired_sides = {}, []
+    for side, crm in pairs:
+        try:
+            creds[side] = await CrmService.ensure_valid_credentials(user_id, crm, side)
+        except HTTPException as e:
+            if is_crm_session_expired(e):
+                expired_sides.append(side)
+            else:
+                raise
+    if expired_sides:
+        await websocket.send_json(_session_expired_payload(expired_sides, failed_status))
+        await websocket.close()
+        return None
+    return creds
+
+
 def get_db_path(session_id: str):
     session_id = _require_valid_session_id(session_id)
-    parts = session_id.split('_')
-    crm_folder = parts[0] if len(parts) > 0 else "uncategorized"
-    obj_folder = parts[1] if len(parts) > 1 else "unknown_object"
+    crm_folder, obj_folder = _parse_session_id(session_id)
     target_dir = os.path.join(BASE_STAGING_DIR, crm_folder, obj_folder)
     os.makedirs(target_dir, exist_ok=True)
     return os.path.join(target_dir, f"{session_id}.db")
+
+def _parse_session_id(session_id: str):
+    """session_id is minted as f"{source_crm}_{safe_obj}_{timestamp}_{uuid}"
+    (see the validation route below). Re-validation requests only carry the
+    session_id, not the original source_crm/object name, so this recovers
+    them from the id itself -- the same convention get_db_path already
+    relies on for its staging folder layout."""
+    parts = session_id.split('_')
+    crm = parts[0] if len(parts) > 0 else "uncategorized"
+    obj = parts[1] if len(parts) > 1 else "unknown_object"
+    return crm, obj
 
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
@@ -222,17 +272,19 @@ async def websocket_migration(websocket: WebSocket):
             return
             
         user_id = user_res.user.id
+        user_email = getattr(user_res.user, "email", None)
+        user_name = (getattr(user_res.user, "user_metadata", None) or {}).get("full_name")
         source_crm = raw_queue[0].get("sourceCrmId", "zendesk").lower() 
         target_crm = raw_queue[0].get("targetCrmId", "salesforce").lower() 
         
-        if source_crm != "csv":
-            source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
-            source_migrator = MIGRATORS.get(source_crm)
-        else:
-            source_creds = None
-            source_migrator = None
+        pairs = ([("source", source_crm)] if source_crm != "csv" else []) + [("target", target_crm)]
+        live = await _resolve_live_credentials(websocket, user_id, pairs, "Failed")
+        if live is None:
+            return  # client was told to log in again
 
-        target_creds = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
+        source_creds = live.get("source")
+        source_migrator = MIGRATORS.get(source_crm) if source_crm != "csv" else None
+        target_creds = live["target"]
         target_migrator = MIGRATORS.get(target_crm)
 
         async def send_log(msg: str, status: str = "Running"):
@@ -278,11 +330,29 @@ async def websocket_migration(websocket: WebSocket):
                     await websocket.close()
                     return
 
+                if source_crm == "salesforce" and target_crm == "salesforce":
+                    picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
+                    if picklist_sync_mappings:
+                        sync_result = await PicklistSyncService.sync(
+                            client, source_creds, target_creds, user_id,
+                            source_object, target_object, picklist_sync_mappings, send_log
+                        )
+                        if sync_result["failed"]:
+                            await websocket.send_json({
+                                "log": f"[{target_object}] FATAL: picklist sync failed for "
+                                       f"{', '.join(sync_result['failed'])}. Aborting before data load.",
+                                "status": "Failed",
+                            })
+                            await websocket.close()
+                            return
+
                 source_records = []
+                actual_query_used = None
 
                 session_id = job.get("sessionId")
                 if source_crm == "csv":
                     source_records = job.get("sourceRecords", [])
+                    source_mode = "CSV Upload"
                     await send_log(f"[{target_object}] Loaded {len(source_records)} records from CSV payload.")
                     
                 elif session_id:
@@ -291,12 +361,26 @@ async def websocket_migration(websocket: WebSocket):
                     cursor = conn.cursor()
                     cursor.execute("SELECT data FROM records WHERE is_valid = 1")
                     source_records = [json.loads(row[0]) for row in cursor.fetchall()]
+                    try:
+                        cursor.execute("SELECT value FROM session_meta WHERE key = 'query_used'")
+                        meta_row = cursor.fetchone()
+                        if meta_row:
+                            actual_query_used = meta_row[0]
+                    except sqlite3.OperationalError:
+                        pass
                     conn.close()
+                    source_mode = "Staged (Pre-Validated) Records"
                     await send_log(f"[{target_object}] Loaded {len(source_records)} valid records from staging.")
                     
                 else:
+                    source_mode = "Direct API Sync"
                     await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
-                    source_records = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+                    extract_result = await source_migrator.extract(client, source_creds, source_object, extraction_query, mappings, send_log, time_filter)
+
+                    if isinstance(extract_result, tuple):
+                        source_records, actual_query_used = extract_result
+                    else:
+                        source_records = extract_result
 
                 source_instance = (source_creds or {}).get("instance_url") or (source_creds or {}).get("api_domain") or (source_creds or {}).get("subdomain")
                 target_instance = target_creds.get("instance_url") or target_creds.get("api_domain") or target_creds.get("subdomain")
@@ -485,12 +569,19 @@ async def websocket_migration(websocket: WebSocket):
                 source_crm=source_crm,
                 target_crm=target_crm,
                 target_object=target_object,
+                op_mode=op_mode,
                 auth_token=auth_token,
                 success_data=safe_success_data, 
-                error_data=formatted_errors     
+                error_data=formatted_errors,
+                extraction_query=extraction_query,
+                time_filter=time_filter,
+                user_email=user_email,
+                user_name=user_name,
+                source_mode=source_mode,
+                actual_query_used=actual_query_used,
             )
         except Exception as e:
-            print(f"Failed to generate reports: {e}")
+            logger.exception("Failed to generate/persist migration reports for session %s", session_id)
             report_urls = {}
 
         
@@ -509,6 +600,16 @@ async def websocket_migration(websocket: WebSocket):
         
     except WebSocketDisconnect:
         pass
+    except HTTPException as e:
+        try:
+            if is_crm_session_expired(e):
+                side = (e.detail or {}).get("side")
+                await websocket.send_json(_session_expired_payload([side] if side else ["source", "target"], "Failed"))
+            else:
+                await websocket.send_json({"log": f"SYSTEM CRASH: {e.detail}", "status": "Failed"})
+            await websocket.close()
+        except Exception:
+            pass
     except Exception as e:
         traceback.print_exc()
         try:
@@ -594,12 +695,34 @@ async def websocket_validate_stream(websocket: WebSocket):
 
             cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
             all_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]
+
+            # Full (uncapped) invalid set for the permanent report/CSV -- the
+            # 500-row query above is just the UI preview.
+            cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0")
+            full_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]
             conn.close()
+
+            validation_stats = {"total": total_count, "valid": valid_count, "invalid": invalid_count, "duplicates": chunk_result["stats"].get("duplicates", 0)}
+
+            try:
+                parsed_source_crm, parsed_object = _parse_session_id(session_id)
+                AuditService.generate_and_save_validation_report(
+                    user_id=user_id,
+                    session_id=session_id,
+                    source_crm=parsed_source_crm,
+                    target_crm=target_crm,
+                    target_object=parsed_object,
+                    stats=validation_stats,
+                    invalid_records=full_invalid_records,
+                    auth_token=auth_token,
+                )
+            except Exception as e:
+                logger.exception("Failed to persist re-validation history for session %s", session_id)
 
             await websocket.send_json({
                 "log": f"Re-validation Complete: Fixed {len(valid_inserts)} records.",
                 "status": "Validation Passed" if invalid_count == 0 else "Validation Warning",
-                "stats": {"total": total_count, "valid": valid_count, "invalid": invalid_count, "duplicates": chunk_result["stats"].get("duplicates", 0)},
+                "stats": validation_stats,
                 "invalidRecords": all_invalid_records,
                 "sessionId": session_id
             })
@@ -628,7 +751,10 @@ async def websocket_validate_stream(websocket: WebSocket):
             await websocket.close()
             return
 
-        source_creds = CrmService.get_active_crm_credentials(user_id, source_crm, "source")
+        live = await _resolve_live_credentials(websocket, user_id, [("source", source_crm)], "Validation Failed")
+        if live is None:
+            return  # client was told to log in again
+        source_creds = live["source"]
         source_migrator = MIGRATORS.get(source_crm)
 
         async def send_log(msg: str, status: str = "Running"):
@@ -640,6 +766,7 @@ async def websocket_validate_stream(websocket: WebSocket):
         db_path = get_db_path(session_id)
         conn = sqlite3.connect(db_path)
         conn.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY AUTOINCREMENT, is_valid BOOLEAN, data TEXT, errors TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT)")
         
         aggregate_stats = {"total": 0, "valid": 0, "invalid": 0, "duplicates": 0}
         await send_log(f"System: Initializing Streaming Validation...", "Connecting")
@@ -647,9 +774,21 @@ async def websocket_validate_stream(websocket: WebSocket):
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
-                raw_records = await source_migrator.extract(
+                extract_result = await source_migrator.extract(
                     client, source_creds, obj_name, query, mappings, send_log, time_filter
                 )
+
+                if isinstance(extract_result, tuple):
+                    raw_records, validation_query_used = extract_result
+                else:
+                    raw_records, validation_query_used = extract_result, None
+
+                if validation_query_used:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO session_meta (key, value) VALUES ('query_used', ?)",
+                        (validation_query_used,),
+                    )
+                    conn.commit()
                 
                 if not raw_records:
                     await send_log("No records found matching criteria.", "Validation Passed")
@@ -684,7 +823,25 @@ async def websocket_validate_stream(websocket: WebSocket):
         cursor = conn.cursor()
         cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0 LIMIT 500")
         all_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]
+
+
+        cursor.execute("SELECT id, data, errors FROM records WHERE is_valid = 0")
+        full_invalid_records = [{"originalRow": dict(json.loads(row[1]), _db_id=row[0]), "errors": row[2]} for row in cursor.fetchall()]
         conn.close()
+
+        try:
+            AuditService.generate_and_save_validation_report(
+                user_id=user_id,
+                session_id=session_id,
+                source_crm=source_crm,
+                target_crm=target_crm,
+                target_object=obj_name,
+                stats=aggregate_stats,
+                invalid_records=full_invalid_records,
+                auth_token=auth_token,
+            )
+        except Exception as e:
+            logger.exception("Failed to persist validation history for session %s", session_id)
 
         await websocket.send_json({
             "log": f"Stream Validation Complete: {aggregate_stats['total']} total records.",
@@ -697,6 +854,16 @@ async def websocket_validate_stream(websocket: WebSocket):
         
     except WebSocketDisconnect:
         pass
+    except HTTPException as e:
+        try:
+            if is_crm_session_expired(e):
+                side = (e.detail or {}).get("side")
+                await websocket.send_json(_session_expired_payload([side] if side else ["source"], "Validation Failed"))
+            else:
+                await websocket.send_json({"log": f"Stream Crash: {e.detail}", "status": "Validation Failed"})
+            await websocket.close()
+        except Exception:
+            pass
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -786,7 +953,12 @@ async def get_crm_object_count(
         return {"count": count}
     except HTTPException as e:
         if e.status_code == 401:
-            new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
+            try:
+                new_token = await CrmService.refresh_crm_token(current_user.id, crm_lower, role)
+            except HTTPException as refresh_err:
+                if refresh_err.status_code == 401:
+                    raise crm_session_expired(crm_lower, role)
+                raise
             count = await _fetch(new_token)
             return {"count": count}
         raise e

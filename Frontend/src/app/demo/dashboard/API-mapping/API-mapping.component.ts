@@ -2,8 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject, ChangeDetectorRef, NgZone, HostListener, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { forkJoin, Subject } from 'rxjs';
-import { takeUntil } from 'rxjs/operators';
+import { forkJoin, of, Subject } from 'rxjs';
+import { takeUntil, catchError } from 'rxjs/operators';
 import { MappingApiService } from 'src/app/services/mapping-api.service';
 import { ToastrService } from 'ngx-toastr';
 import Swal from 'sweetalert2';
@@ -11,6 +11,15 @@ import { EditorComponent } from 'ngx-monaco-editor-v2';
 import { environment } from 'src/environments/environment';
 import { HttpClient } from '@angular/common/http';
 import { AuthService } from 'src/app/demo/Services/auth.service';
+import { CrmAuthService } from 'src/app/services/CrmAuthService.service';
+import {
+  CrmSide,
+  getExpiredSidesFromError,
+  getSocketExpiredSides,
+  isAuthExpiredError,
+  isConnectionExpired,
+  isSocketAuthExpired
+} from 'src/app/services/crm-session.util';
 declare const monaco: any;
 interface FieldMeta {
   name: string;
@@ -45,6 +54,7 @@ interface MappingRow {
   _mappedBy?: 'rule' | 'ai';
   _blockedTargetField?: string;
   _blockedTargetLabel?: string;
+  syncPicklistValues?: boolean;
 }
 
 interface CrmEntity {
@@ -85,6 +95,8 @@ interface FileMigrationBudgetPreview {
   message: string;
   attachmentFileCount: number;
   contentFileCount: number;
+  sourceBudgetVerified?: boolean;
+  targetBudgetVerified?: boolean;
 }
 
 @Component({
@@ -101,11 +113,16 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private zone = inject(NgZone);
   private toastr = inject(ToastrService);
   private authService = inject(AuthService);
+  private crmAuthService = inject(CrmAuthService);
+  private isRedirectingToLogin = false;
   private validationSocket: WebSocket | null = null;
   private migrationSocket: WebSocket | null = null;
   private http = inject(HttpClient);
 
   private mappingCancel$ = new Subject<void>();
+
+  private allSourceFields: FieldMeta[] = [];
+  private readonly PICKLIST_TYPES = ['picklist', 'multipicklist'];
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -263,6 +280,40 @@ isProfileDropdownOpen = false;
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
   }
 
+  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot'];
+  private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
+
+  canSyncPicklist(mapping: MappingRow): boolean {
+    if (!this.isSalesforceToSalesforce || !mapping.sourceField || !mapping.targetField) return false;
+    const s = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase();
+    const t = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase();
+    return !!s && !!t && this.PICKLIST_TYPES.includes(s) && this.PICKLIST_TYPES.includes(t);
+  }
+
+get fileMigrationSupported(): boolean {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  return !!s && !!t && this.FILE_MIGRATION_CRMS.includes(s) && this.FILE_MIGRATION_CRMS.includes(t);
+}
+
+get isSourceZoho(): boolean {
+  return this.sourceCrmId?.toLowerCase() === 'zoho';
+}
+
+get isSourceSingleFileType(): boolean {
+  return this.SINGLE_FILE_TYPE_CRMS.includes(this.sourceCrmId?.toLowerCase());
+}
+
+get fileMigrationNotes(): string[] {
+  const s = this.sourceCrmId?.toLowerCase();
+  const t = this.targetCrmId?.toLowerCase();
+  const notes: string[] = [];
+  if (t === 'zoho') notes.push('Zoho accepts attachments up to 20 MB per file; larger files are reported as errors.');
+  if (s === 'hubspot') notes.push('Files attached to a record\'s Notes, Calls, Meetings and Tasks are migrated from HubSpot (files in the standalone Files tool are not).');
+  if (s === 'zoho' && t === 'salesforce') notes.push('Zoho attachments are created as Salesforce Files.');
+  return notes;
+}
+
   recentQueries: string[] = [];
   // --- MONACO EDITOR CONFIGURATION ---
   editorOptions = {
@@ -275,49 +326,118 @@ isProfileDropdownOpen = false;
     renderLineHighlight: 'none',
     fontSize: 13,
     padding: { top: 10, bottom: 10 },
-    suggestOnTriggerCharacters: true
+    suggestOnTriggerCharacters: true,
+    automaticLayout: true // re-fits the editor when its container is resized/expanded
   };
+
+  // --- EXPANDABLE QUERY EDITOR ---
+  isQueryEditorExpanded = false;
+  queryEditorHeight = 120; // px; also changes when the user drags the resize handle
+
+  toggleQueryEditorSize(): void {
+    this.isQueryEditorExpanded = !this.isQueryEditorExpanded;
+    this.queryEditorHeight = this.isQueryEditorExpanded ? 350 : 120;
+    setTimeout(() => this.monacoEditorInstance?.layout(), 0);
+  }
 
   monacoEditorInstance: any;
   completionProvider: any;
+  hoverProvider: any;
 
   recoverableSessions: any[] = [];
   isSessionsLoading = false;
 
   ngOnInit(): void {
-    this.getUserData();
-// this.fetchRecoverableSessions();
-// this.preloadEntirePage();
-    const navState = history.state;
-    this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
-    this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
+  this.getUserData();
 
-    if (!this.sourceCrmId || !this.targetCrmId) {
-      this.toastr.warning('Please connect your Source and Target systems first.', 'Connections Required');
-      this.router.navigate(['/connection']);
-      return;
-    }
+  const navState = history.state;
+  this.sourceCrmId = navState?.sourceCrm || localStorage.getItem('source_crm_slot');
+  this.targetCrmId = navState?.targetCrm || localStorage.getItem('target_crm_slot');
 
-    this.sourceSystem = this.sourceCrmId;
-    this.targetSystem = this.targetCrmId;
-    this.migrationTimeFilter.field = this.timeFilterFieldOptions[0]?.value || '';
-    this.batchSize = this.batchConfig.default;
+  if (!this.sourceCrmId || !this.targetCrmId) {
+    this.toastr.warning('Please connect your Source and Target systems first.', 'Connections Required');
+    this.router.navigate(['/connection']);
+    return;
+  }
 
-    localStorage.setItem('source_crm_slot', this.sourceCrmId);
-    localStorage.setItem('target_crm_slot', this.targetCrmId);
+  this.sourceSystem = this.sourceCrmId;
+  this.targetSystem = this.targetCrmId;
+  this.migrationTimeFilter.field = this.timeFilterFieldOptions[0]?.value || '';
+  this.batchSize = this.batchConfig.default;
 
-    this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
+  localStorage.setItem('source_crm_slot', this.sourceCrmId);
+  localStorage.setItem('target_crm_slot', this.targetCrmId);
 
-    this.fetchRecoverableSessions();
+  this.recentQueries = JSON.parse(localStorage.getItem('crm_query_history') || '[]');
 
-    this.preloadEntirePage();
+  this.showSchemaLoader();
+  this.verifyCrmSessions(() => this.fetchRecoverableSessions());
+  this.preloadEntirePage();
+}
+
+private showSchemaLoader(): void {
+  this.isLoading = true;
+  this.isGlobalLoading = true;
+  this.globalLoadingText = 'Fetching Live Schemas...';
+  this.globalLoadingSubText = 'Please wait while we sync the CRM engines';
+}
+
+  // ==========================================
+  //  CRM SESSION EXPIRY
+  // ==========================================
+  private verifyCrmSessions(onValid: () => void): void {
+    this.crmAuthService.getUserConnections().subscribe({
+      next: (connections: any[]) => {
+        const isLive = (role: 'source' | 'target') =>
+          connections.some((c) => c.connection_role === role && !isConnectionExpired(c));
+
+        const expiredSides = (['source', 'target'] as const).filter((role) => !isLive(role));
+        if (expiredSides.length) {
+          this.handleSessionExpired(expiredSides);
+          return;
+        }
+        onValid();
+      },
+      error: (err) => {
+        if (isAuthExpiredError(err)) {
+          this.handleSessionExpired(getExpiredSidesFromError(err));
+        } else {
+          onValid(); 
+        }
+      }
+    });
+  }
+
+  handleSessionExpired(sides?: CrmSide[]): void {
+    if (this.isRedirectingToLogin) return;
+    this.isRedirectingToLogin = true;
+
+    const expiredSides: CrmSide[] = sides && sides.length ? sides : ['source', 'target'];
+
+    this.mappingCancel$.next();
+    this.closeSocket(this.validationSocket);
+    this.closeSocket(this.migrationSocket);
+    this.validationSocket = null;
+    this.migrationSocket = null;
+    this.isLoading = false;
+    this.isGlobalLoading = false;
+    this.isValidating = false;
+    this.pendingFileMigrationBudget = null;
+
+    Swal.close();
+
+    window.dispatchEvent(new Event('connections-updated'));
+
+    this.zone.run(() => {
+      this.router.navigate(['/connection'], { replaceUrl: true, state: { expiredSides } });
+    });
   }
 
   ngOnDestroy() {
     this.mappingCancel$.next();
     this.mappingCancel$.complete();
 
-    if (this.pendingFileMigrationBudget && this.migrationSocket) {
+    if (this.pendingFileMigrationBudget && this.migrationSocket && this.migrationSocket.readyState === WebSocket.OPEN) {
       this.sendFileMigrationDecision(this.migrationSocket, this.pendingFileMigrationBudget.jobRef, 'skip');
       this.pendingFileMigrationBudget = null;
     }
@@ -328,8 +448,22 @@ isProfileDropdownOpen = false;
     this.validationSocket = null;
     this.migrationSocket = null;
 
-    if (this.monacoEditorInstance) {
-      this.monacoEditorInstance.dispose();
+    if (this.completionProvider) {
+      this.completionProvider.dispose();
+      this.completionProvider = null;
+    }
+    if (this.hoverProvider) {
+      this.hoverProvider.dispose();
+      this.hoverProvider = null;
+    }
+    this.monacoEditorInstance = null;
+  }
+
+  @HostListener('window:unhandledrejection', ['$event'])
+  onUnhandledRejection(event: PromiseRejectionEvent): void {
+    const reason: any = event.reason;
+    if (reason && reason.name === 'Canceled' && reason.message === 'Canceled') {
+      event.preventDefault();
     }
   }
 
@@ -340,17 +474,32 @@ isProfileDropdownOpen = false;
     }
   }
 
-  fetchRecoverableSessions() {
-    this.isSessionsLoading = true;
-    fetch(`${environment.apiUrl}/api/validation/sessions`)
-      .then((res) => res.json())
-      .then((data) => {
-        this.recoverableSessions = data.sessions || [];
-        this.isSessionsLoading = false;
-        this.cdr.detectChanges();
-      })
-      .catch(() => (this.isSessionsLoading = false));
+  async fetchRecoverableSessions(): Promise<void> {
+  this.isSessionsLoading = true;
+  try {
+    const response = await fetch(`${environment.apiUrl}/api/validation/sessions`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      if (isAuthExpiredError({ status: response.status, error: errorData })) {
+        this.handleSessionExpired();
+        return;
+      }
+      throw new Error(errorData.detail || `Failed to load sessions (${response.status})`);
+    }
+
+    const data = await response.json();
+    this.recoverableSessions = data.sessions || [];
+  } catch (error) {
+    console.error('Failed to fetch recoverable sessions:', error);
+    this.recoverableSessions = [];
+  } finally {
+    this.isSessionsLoading = false;
+    this.cdr.detectChanges();
   }
+}
 
   resumeSession(sessionId: string, crm: string, object: string) {
     this.currentSessionId = sessionId;
@@ -770,21 +919,28 @@ toggleProfileDropdown(event: Event): void {
     return this.validationResults.invalidRecords.some((rec: any) => rec._editedFields && Object.keys(rec._editedFields).length > 0);
   }
 
+  private static readonly NUMERIC_TYPES = ['number', 'integer', 'double', 'currency', 'percent', 'float'];
+  private static readonly DATE_TYPES = ['date', 'datetime'];
+  private static readonly TEXT_TARGET_TYPES = ['string', 'text', 'textarea', 'picklist', 'reference'];
+
+  areTypesCompatible(srcTypeRaw: string | undefined, tgtTypeRaw: string | undefined): boolean {
+    const srcType = (srcTypeRaw || 'string').toLowerCase();
+    const tgtType = (tgtTypeRaw || 'string').toLowerCase();
+
+    if (srcType === 'id' || tgtType === 'id') return true;
+    if (srcType === tgtType) return true;
+    if (srcType.includes('string') && ApiMappingComponent.TEXT_TARGET_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.NUMERIC_TYPES.includes(srcType) && ApiMappingComponent.NUMERIC_TYPES.includes(tgtType)) return true;
+    if (ApiMappingComponent.DATE_TYPES.includes(srcType) && ApiMappingComponent.DATE_TYPES.includes(tgtType)) return true;
+    return false;
+  }
+
   isTypeMismatch(mapping: any): boolean {
     if (!mapping.targetField) return false;
-    const srcType = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase() || 'string';
-    const tgtType = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase() || 'string';
-
-    if (srcType === 'id' || tgtType === 'id') return false;
-
-    if (srcType === tgtType) return false;
-
-    if (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) return false;
-  
-    if (['number', 'integer', 'double', 'currency'].includes(srcType) && ['number', 'integer', 'double', 'currency'].includes(tgtType))
-      return false;
-
-    return true;
+    return !this.areTypesCompatible(
+      this.getFieldMeta(mapping.sourceField, 'source')?.type,
+      this.getFieldMeta(mapping.targetField, 'target')?.type
+    );
   }
 
   onEditorInit(editor: any) {
@@ -1004,7 +1160,7 @@ toggleProfileDropdown(event: Event): void {
       // ==========================================
       //  SMART HOVER TOOLTIPS
       // ==========================================
-      monaco.languages.registerHoverProvider('sql', {
+      this.hoverProvider = monaco.languages.registerHoverProvider('sql', {
         provideHover: (model: any, position: any) => {
           const wordInfo = model.getWordAtPosition(position);
           if (!wordInfo) return null;
@@ -1080,7 +1236,6 @@ toggleProfileDropdown(event: Event): void {
 
     const mappedFieldCount = this.mappings.filter((m) => m.targetField !== '').length;
 
-    // Nothing mapped yet -- no decision to make, just switch.
     if (mappedFieldCount === 0) {
       this.lastOperationMode = newMode;
       if (newMode === 'delete') {
@@ -1121,7 +1276,6 @@ toggleProfileDropdown(event: Event): void {
     });
 
     if (confirmResult.isConfirmed) {
-      // Explicit "Yes, Keep My Mapped Fields" click -- switch mode, keep mappings.
       this.lastOperationMode = newMode;
       if (newMode === 'delete') {
         this.externalIdField = '';
@@ -1133,7 +1287,6 @@ toggleProfileDropdown(event: Event): void {
         'Mappings Retained'
       );
     } else if (confirmResult.dismiss === Swal.DismissReason.cancel) {
-      // Explicit "No, Clear Mapped Fields" click -- switch mode, wipe mappings.
       this.lastOperationMode = newMode;
       if (newMode === 'delete') {
         this.externalIdField = '';
@@ -1350,6 +1503,11 @@ onReviewPanelDragEnd(): void {
     return this.isLookupFieldMeta(this.getFieldMeta(fieldName, side));
   }
 
+  toggleSyncPicklist(mapping: MappingRow): void {
+    if (!this.canSyncPicklist(mapping)) return;
+    mapping.syncPicklistValues = !mapping.syncPicklistValues;
+  }
+
   getMissingRequiredFields(): string[] {
     if (this.operationMode === 'delete') return [];
     if (!this.targetFields || this.targetFields.length === 0) return [];
@@ -1425,6 +1583,7 @@ onReviewPanelDragEnd(): void {
     }
 
     mapping.targetField = fieldName;
+     mapping.syncPicklistValues = false;
     mapping.isDropdownOpen = false;
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -1595,6 +1754,7 @@ onReviewPanelDragEnd(): void {
           this.cdr.detectChanges();
         },
         error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(getExpiredSidesFromError(err)); return; }
           console.error('Failed to load parent object metadata for External ID matching:', err);
           this.isLoadingParentFields = false;
           this.toastr.warning(
@@ -1607,19 +1767,16 @@ onReviewPanelDragEnd(): void {
       });
   }
 
-  /** All object types a given mapping row's reference field can point at (usually 1; more for polymorphic fields). */
   getReferenceParentCandidates(mapping: MappingRow): string[] {
     const fieldMeta = this.targetFields.find((f) => f.name === mapping.targetField);
     return fieldMeta?.referenceTo || [];
   }
 
-  /** The parent object currently in effect for this mapping row -- the user's explicit pick, or the field's first/only referenceTo. */
   getReferenceParentObjectName(mapping: MappingRow): string | undefined {
     const candidates = this.getReferenceParentCandidates(mapping);
     return mapping.parentObjectName || candidates[0];
   }
 
-  /** External-ID-eligible fields on the PARENT object, for the "Match By" dropdown. */
   getParentExternalIdFields(mapping: MappingRow): FieldMeta[] {
     const parentName = this.getReferenceParentObjectName(mapping);
     if (!parentName) return [];
@@ -1906,14 +2063,18 @@ onReviewPanelDragEnd(): void {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown Server Error' }));
+        if (isAuthExpiredError({ status: response.status, error: errorData }, true)) {
+          this.handleSessionExpired(getExpiredSidesFromError({ error: errorData }));
+          return;
+        }
         throw new Error(errorData.detail || 'Failed to fetch filtered data.');
       }
 
-      const data = await response.json();
+            const data = await response.json();
       this.previewRecords = data.records || [];
       this.loadSourceObjectCount(this.selectedSourceObject, safeQuery, this.migrationTimeFilter);
       const filterSuffix = this.getFilterSuffix();
-      const executedQuery = data.queryUsed || this.customQuery || 'default query';
+      const executedQuery = data.queryUsed || safeQuery || 'default query';
       this.logMessages = [...this.logMessages, `System: Source preview updated${filterSuffix} -> [${executedQuery}]`];
     } catch (error: any) {
       console.error('Filter Error:', error);
@@ -1951,7 +2112,14 @@ onReviewPanelDragEnd(): void {
         { headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` } }
       );
 
-      if (!response.ok) throw new Error('Failed to fetch object count.');
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        if (isAuthExpiredError({ status: response.status, error: errBody }, true)) {
+          this.handleSessionExpired(getExpiredSidesFromError({ error: errBody }));
+          return;
+        }
+        throw new Error('Failed to fetch object count.');
+      }
 
       const data = await response.json();
       this.selectedSourceObjectCount = typeof data.count === 'number' ? data.count : null;
@@ -2148,32 +2316,38 @@ onReviewPanelDragEnd(): void {
         }
       }
 
-      // Deep Field & Type Validation
-      const sqlRegex = /\b([a-zA-Z0-9_]+)\s*(?:=|!=|<|>|<=|>=|like|is)\s*('?[a-zA-Z0-9_%\s-]+'?|null)/gi;
-      let match;
-      const reservedWords = ['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not'];
+      const sqlRegex = /\b([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)(?:\s*(?:<>|!=|<=|>=|=|<|>)|\s+(?:like|is(?:\s+not)?))\s*('(?:[^'\\]|\\.)*'|[^\s()',]+)/gi;
+      const reservedWords = new Set(['select', 'from', 'where', 'and', 'or', 'null', 'is', 'like', 'not']);
+      const numericTypes = new Set(['number', 'currency', 'double', 'int', 'integer', 'percent']);
 
-      while ((match = sqlRegex.exec(this.customQuery)) !== null) {
-        const fieldName = match[1].toLowerCase();
-        if (reservedWords.includes(fieldName)) continue;
+      // Skip until describe metadata has loaded, otherwise every field would be flagged invalid.
+      if (this.allSourceFields.length > 0) {
+        let match: RegExpExecArray | null;
 
-        const schemaField = this.sourceFields.find((f) => f.name.toLowerCase() === fieldName);
+        while ((match = sqlRegex.exec(this.customQuery)) !== null) {
+          const rawPath = match[1];
+          if (reservedWords.has(rawPath.toLowerCase())) continue;
 
-        if (!schemaField) {
-          return applySquiggle(`Invalid Field: '${match[1]}' does not exist on ${this.selectedSourceObject}.`, match[1]);
-        }
+          if (rawPath.includes('.')) continue;
 
-        const val = match[2].replace(/'/g, '').trim();
-        const type = schemaField.type?.toLowerCase() || 'string';
+          const schemaField = this.allSourceFields.find((f) => f.name.toLowerCase() === rawPath.toLowerCase());
 
-        if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+          if (!schemaField) {
+            return applySquiggle(`Invalid Field: '${rawPath}' does not exist on ${this.selectedSourceObject}.`, rawPath);
+          }
 
-        if (['number', 'currency', 'double', 'int'].includes(type) && isNaN(Number(val))) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Number, but you entered text ('${val}').`, match[2]);
-        }
+          const val = match[2].replace(/^'|'$/g, '').trim();
+          const type = schemaField.type?.toLowerCase() || 'string';
 
-        if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
-          return applySquiggle(`Type Mismatch: '${match[1]}' is a Boolean. You entered '${val}'.`, match[2]);
+          if (val.includes('*') || val.includes('%') || val.toLowerCase() === 'null') continue;
+
+          if (numericTypes.has(type) && isNaN(Number(val))) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Number, but you entered text ('${val}').`, match[2]);
+          }
+
+          if (type === 'boolean' && !['true', 'false', '1', '0'].includes(val.toLowerCase())) {
+            return applySquiggle(`Type Mismatch: '${rawPath}' is a Boolean. You entered '${val}'.`, match[2]);
+          }
         }
       }
     }
@@ -2202,12 +2376,15 @@ onReviewPanelDragEnd(): void {
     this.isGlobalLoading = true;
     this.globalLoadingText = 'Fetching Live Schemas...';
     this.globalLoadingSubText = 'Please wait while we sync the CRM engines';
+    this.showSchemaLoader();
     this.cdr.detectChanges();
 
     forkJoin({
       sourceObjs: this.mappingApi.getObjects(this.sourceCrmId, 'source'),
       targetObjs: this.mappingApi.getObjects(this.targetCrmId, 'target')
-    }).subscribe({
+    })
+    .pipe(takeUntil(this.mappingCancel$))
+    .subscribe({
       next: ({ sourceObjs, targetObjs }) => {
         this.sourceEntities = sourceObjs || [];
         this.targetEntities = targetObjs || [];
@@ -2240,6 +2417,7 @@ onReviewPanelDragEnd(): void {
         this.cdr.detectChanges();
       },
       error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(getExpiredSidesFromError(err)); return; }
         console.error('Failed to preload base entity dropdowns:', err);
         this.logMessages.unshift(`Configuration Error: Could not fetch core CRM schemas.`);
         this.isLoading = false;
@@ -2279,7 +2457,8 @@ onReviewPanelDragEnd(): void {
       .subscribe({
         next: ({ sourceData, targetData }) => {
           this.targetFields = targetData.fields || [];
-          this.sourceFields = (sourceData.fields || []).filter(
+          this.allSourceFields = sourceData.fields || [];
+          this.sourceFields = this.allSourceFields.filter(
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
           this.prefetchParentFieldMetadata();
@@ -2288,9 +2467,16 @@ onReviewPanelDragEnd(): void {
           this.previewRecords = sourceData.sampleRecords || [];
 
           const crmLower = this.sourceCrmId.toLowerCase();
-          if (this.isDefaultQuery && (crmLower === 'salesforce' || crmLower === 'zoho') && this.previewHeaders.length > 0) {
-            const fieldList = this.previewHeaders.slice(0, 2).join(', ');
-            this.customQuery = `SELECT ${fieldList} FROM ${this.selectedSourceObject}`;
+          if (this.isDefaultQuery && this.previewHeaders.length > 0) {
+            const defaultFields = this.previewHeaders.slice(0, 2);
+
+            if (crmLower === 'salesforce' || crmLower === 'zoho') {
+              this.customQuery = `SELECT ${defaultFields.join(', ')} FROM ${this.selectedSourceObject}`;
+            } else if (crmLower === 'hubspot') {
+              this.customQuery = JSON.stringify({ properties: defaultFields }, null, 2);
+            } else if (crmLower === 'zendesk' && !this.isStandardZendeskObject(this.selectedSourceObject)) {
+              this.customQuery = JSON.stringify({ fields: defaultFields }, null, 2);
+            }
           }
 
           this.mappings = this.sourceFields.map((field: FieldMeta) => ({
@@ -2324,6 +2510,7 @@ onReviewPanelDragEnd(): void {
           }
         },
         error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(getExpiredSidesFromError(err)); return; }
           console.error('Metadata payload extraction failed:', err);
           this.logMessages.unshift(`API Error: Unable to fetch live dataset metrics from ${this.sourceSystem}.`);
           this.isLoading = false;
@@ -2343,6 +2530,7 @@ onReviewPanelDragEnd(): void {
 
   clearMapping(mapping: any) {
     mapping.targetField = '';
+     mapping.syncPicklistValues = false;
     mapping.relationalExtIdField = '';
     delete mapping._mappedBy;
     delete mapping._blockedTargetField;
@@ -2357,6 +2545,7 @@ onReviewPanelDragEnd(): void {
 
   resetAllMappings() {
     this.mappings.forEach((m) => {
+      m.syncPicklistValues = false;
       m.targetField = '';
       m.relationalExtIdField = '';
       delete m._mappedBy;
@@ -2423,14 +2612,10 @@ onReviewPanelDragEnd(): void {
         }
 
         const isExactTypeMatch = srcType === tgtType;
-        const isForgivingTypeMatch =
-          (srcType.includes('string') && ['string', 'text', 'textarea', 'picklist', 'reference'].includes(tgtType)) ||
-          (['number', 'integer', 'double', 'currency', 'float'].includes(srcType) &&
-            ['number', 'integer', 'double', 'currency', 'float'].includes(tgtType));
+        const isCompatible = this.areTypesCompatible(srcType, tgtType);
+        const isForgivingTypeMatch = isCompatible && !isExactTypeMatch;
 
-        const isCompatible = isExactTypeMatch || isForgivingTypeMatch;
-
-        if (this.isStrictMapping && !isCompatible) return;
+        if (!isCompatible) return;
 
         if (tgtApiExact === srcApiExact) score += 100;
         else if (tgtApiClean === srcApiClean) score += 90;
@@ -2559,8 +2744,11 @@ onReviewPanelDragEnd(): void {
                   ? this.targetFields.find((f) => f.name === backendMap.targetField)
                   : undefined;
                 const isWritable = this.isFieldWritable(suggestedFieldMeta);
+                const sourceFieldMeta = this.sourceFields.find((sf) => sf.name === backendMap.sourceField);
+                const typeCompatible =
+                  !suggestedFieldMeta || !sourceFieldMeta || this.areTypesCompatible(sourceFieldMeta.type, suggestedFieldMeta.type);
 
-                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable) {
+                if (localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed && isWritable && typeCompatible) {
                   localRow.targetField = backendMap.targetField;
 
                   if (typeof this.isReferenceField === 'function' && this.isReferenceField(backendMap.targetField)) {
@@ -2572,7 +2760,7 @@ onReviewPanelDragEnd(): void {
                   aiMatchCount++;
                 } else if (
                   localRow && !localRow.targetField && isStillValidTarget && !targetAlreadyClaimed &&
-                  !isWritable && suggestedFieldMeta
+                  !isWritable && typeCompatible && suggestedFieldMeta
                 ) {
                   localRow._blockedTargetField = suggestedFieldMeta.name;
                   localRow._blockedTargetLabel = suggestedFieldMeta.label;
@@ -2595,6 +2783,7 @@ onReviewPanelDragEnd(): void {
             processNextChunk();
           },
           error: (error: any) => {
+        if (isAuthExpiredError(error)) { this.handleSessionExpired(getExpiredSidesFromError(error)); return; }
             console.error('[FRONTEND ERROR]: AI Chunk failed:', error);
             this.isAutoMapping = false;
 
@@ -2796,7 +2985,8 @@ onReviewPanelDragEnd(): void {
           sourceField: m.sourceField,
           targetField: m.targetField,
           type: targetMeta?.type || 'string',
-          isRequired: targetMeta?.isRequired || targetMeta?.required || false
+          isRequired: targetMeta?.isRequired || targetMeta?.required || false,
+          syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues
         };
       });
 
@@ -2853,6 +3043,11 @@ onReviewPanelDragEnd(): void {
     ws.onmessage = (event) => {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
+
+        if (isSocketAuthExpired(data)) {
+          this.handleSessionExpired(getSocketExpiredSides(data));
+          return;
+        }
 
         if (data.log) {
           this.logMessages.push(data.log);
@@ -3017,11 +3212,17 @@ onReviewPanelDragEnd(): void {
         }
 
 
-        localStorage.removeItem('source_crm_slot');
-        localStorage.removeItem('target_crm_slot');
+        forkJoin([
+          this.crmAuthService.disconnectCrm('source').pipe(catchError(() => of(null))),
+          this.crmAuthService.disconnectCrm('target').pipe(catchError(() => of(null)))
+        ]).subscribe(() => {
+          localStorage.removeItem('source_crm_slot');
+          localStorage.removeItem('target_crm_slot');
+          window.dispatchEvent(new Event('connections-updated'));
 
-        this.toastr.success('You have been securely logged out.', 'Goodbye!');
-        this.authService.logout();
+          this.toastr.success('You have been securely logged out.', 'Goodbye!');
+          this.authService.logout();
+        });
       }
     });
   }
@@ -3170,13 +3371,13 @@ onReviewPanelDragEnd(): void {
 
     if (warnings.missingFields.length > 0) {
       warningHtml += `<p class="text-danger fw-bold mb-1"><i class="feather icon-alert-triangle"></i> Missing Required Fields:</p>
-                       <ul class="small mb-3 text-muted"><li class="mb-0">${warnings.missingFields.join('</li><li_item>')}</li></ul>`;
+                       <ul class="small mb-3 text-muted"><li class="mb-0">${warnings.missingFields.join('</li><li class="mb-0">')}</li></ul>`;
     }
 
     if (warnings.incompleteRefs.length > 0) {
       warningHtml += `<p class="text-warning text-dark fw-bold mb-1"><i class="feather icon-link"></i> Incomplete Lookups:</p>
                        <p class="small mb-1 text-muted">You mapped these relational fields but left the <strong>Parent Ext ID</strong> blank (Defaults to 'Id'):</p>
-                       <ul class="small mb-0 text-muted"><li class="mb-0">${warnings.incompleteRefs.join('</li><li_item>')}</li></ul>`;
+                       <ul class="small mb-0 text-muted"><li class="mb-0">${warnings.incompleteRefs.join('</li><li class="mb-0">')}</li></ul>`;
     }
     warningHtml += '</div>';
 
@@ -3200,7 +3401,7 @@ onReviewPanelDragEnd(): void {
   }
 
   private show_confirmation_modal(activeMappings: any[]) {
-    const filesInScope = this.isSalesforceToSalesforce && (this.migrateAttachments || this.migrateFiles);
+    const filesInScope = this.fileMigrationSupported && (this.migrateAttachments || this.migrateFiles);
     const preview = this.fileMigrationBudgetPreview;
 
     let fileBudgetHtml = '';
@@ -3215,13 +3416,13 @@ onReviewPanelDragEnd(): void {
     } else if (filesInScope && preview && preview.fitsInBudget) {
       fileBudgetHtml = `
         <div class="alert alert-success text-start small mt-3 mb-0">
-          <i class="feather icon-check-circle"></i> File migration budget check passed —
+          <i class="feather icon-check-circle"></i> File migration limit check passed —
           ~${preview.estimatedTotalCalls.toLocaleString()} API call(s) needed, within today's allowance for Data Migration.
         </div>`;
     } else if (filesInScope && this.isCheckingFileMigrationBudget) {
       fileBudgetHtml = `
         <div class="alert alert-secondary text-start small mt-3 mb-0">
-          Still checking the file migration API budget in the background — this run will still
+          Still checking the file migration API Limit in the background — this run will still
           be guarded live during the file transfer step regardless.
         </div>`;
     }
@@ -3284,27 +3485,19 @@ onReviewPanelDragEnd(): void {
     this.scheduleFileMigrationBudgetRecheck();
   }
 
-  /**
-   * Single funnel for "something that changes what the file migration would
-   * actually touch just changed" -- called on checkbox toggle, query edits,
-   * and time-filter changes (manual dates, clear, quick-range presets, field
-   * switch). Debounced so rapid edits (typing in Monaco, dragging a date)
-   * don't fire a request per keystroke.
-   */
   private scheduleFileMigrationBudgetRecheck(): void {
     if (this.fileMigrationBudgetPreviewDebounce) {
       clearTimeout(this.fileMigrationBudgetPreviewDebounce);
     }
 
-    if (!this.isSalesforceToSalesforce || (!this.migrateAttachments && !this.migrateFiles)) {
+    if (!this.fileMigrationSupported || (!this.migrateAttachments && !this.migrateFiles)) {
       this.fileMigrationBudgetPreview = null;
       this.fileMigrationBudgetPreviewError = null;
       this.isCheckingFileMigrationBudget = false;
       return;
     }
 
-    // Mark stale immediately so the banner doesn't keep showing numbers for
-    // the query/filter state that just changed while the new check runs.
+
     this.fileMigrationBudgetPreview = null;
 
     this.fileMigrationBudgetPreviewDebounce = setTimeout(() => {
@@ -3324,6 +3517,8 @@ onReviewPanelDragEnd(): void {
     const body = {
       sourceObject: this.selectedSourceObject,
       query: this.customQuery?.trim() || '',
+      sourceCrm: this.sourceCrmId.toLowerCase(),
+      targetCrm: this.targetCrmId.toLowerCase(),
       migrationTimeFilter: this.migrationTimeFilter,
       migrateAttachments: this.migrateAttachments,
       migrateFiles: this.migrateFiles
@@ -3340,9 +3535,10 @@ onReviewPanelDragEnd(): void {
         this.cdr.detectChanges();
       },
       error: (err) => {
+        if (isAuthExpiredError(err)) { this.handleSessionExpired(getExpiredSidesFromError(err)); return; }
         this.fileMigrationBudgetPreview = null;
         this.fileMigrationBudgetPreviewError =
-          err?.error?.detail || 'Could not check the API budget for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
+          err?.error?.detail || 'Could not check the API Limit for this migration. You can still proceed -- the live guard during the run will catch this if needed.';
         this.isCheckingFileMigrationBudget = false;
         this.cdr.detectChanges();
       }
@@ -3476,6 +3672,7 @@ onReviewPanelDragEnd(): void {
         sourceField: m.sourceField,
         targetField: m.targetField,
         type: isRef ? 'reference' : fieldMeta?.type,
+        syncPicklistValues: this.canSyncPicklist(m) && !!m.syncPicklistValues,
         referenceTo: fieldMeta?.referenceTo,
         relationshipName: fieldMeta?.relationshipName,
         relationalExtIdField: m.relationalExtIdField || (isRef ? 'Id' : undefined),
@@ -3522,8 +3719,8 @@ onReviewPanelDragEnd(): void {
       operationMode: this.operationMode,
       batchSize: this.batchSize,
       externalIdField: this.externalIdField,
-      migrateAttachments: this.isSalesforceToSalesforce ? this.migrateAttachments : false,
-      migrateFiles: this.isSalesforceToSalesforce ? this.migrateFiles : false,
+      migrateAttachments: this.fileMigrationSupported ? this.migrateAttachments : false,
+      migrateFiles: this.fileMigrationSupported && !this.isSourceSingleFileType ? this.migrateFiles : false,
       migrationTimeFilter: this.migrationTimeFilter,
 
       authToken: localStorage.getItem('supabase_token') || ''
@@ -3544,6 +3741,11 @@ onReviewPanelDragEnd(): void {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
 
+        if (isSocketAuthExpired(data)) {
+          this.handleSessionExpired(getSocketExpiredSides(data));
+          return;
+        }
+
         if (data.log) {
           this.logMessages = [...this.logMessages, data.log];
         }
@@ -3562,7 +3764,7 @@ onReviewPanelDragEnd(): void {
             parts.push(`Files: ${r.filesSuccess} ok / ${r.filesError} failed`);
           }
           if (r.deferredRecordCount > 0) {
-            parts.push(`${r.deferredRecordCount} record(s) deferred (API budget)`);
+            parts.push(`${r.deferredRecordCount} record(s) deferred (API Limit)`);
           }
           if (parts.length) {
             this.logMessages = [...this.logMessages, `[${r.targetObject}] ${parts.join(' \u00b7 ')}`];

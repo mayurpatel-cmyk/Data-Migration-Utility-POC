@@ -1,25 +1,147 @@
-import urllib.parse
-import re
 import asyncio
 import json
+import re
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
+
 from app.services.crm_service import CrmService
+from app.services.time_filter_service import build_hubspot_time_filters, TimeFilterError
+
+DEFAULT_DOMAIN = "https://api.hubapi.com"
+SEARCH_PAGE_SIZE = 100
+SEARCH_RESULT_CAP = 10_000        # Search API refuses paging past 10,000 results per query
+BATCH_SIZE = 100                  # max inputs per batch create/update/upsert/archive call
+MAX_RETRIES = 6
+MAX_PROBES = 5
+BATCH_CONCURRENCY = 3
+SINGLE_CONCURRENCY = 5
+
+_SINGULAR_TO_OBJECT = {"contact": "contacts", "company": "companies", "deal": "deals", "ticket": "tickets"}
+_ID_FIELDS = {"id", "hs_object_id"}
+_READ_ONLY_PROPS = _ID_FIELDS
+
 
 def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
+
+def normalize_hubspot_object(name: str) -> str:
+    """API name of an object. Maps common singular labels; custom objects
+    (`p123_thing` / `2-12345` objectTypeId) pass through untouched."""
+    n = (name or "").strip()
+    return _SINGULAR_TO_OBJECT.get(n.lower(), n if re.match(r"^\d+-\d+$", n) else n.lower())
+
+
+def _merge_hubspot_time_filters(filter_groups, time_filters: list) -> list:
+    """ANDs time_filters into every existing filterGroup (HubSpot ORs across
+    groups, ANDs within one), or creates a single group if none existed.
+    Mirrors CrmQueryService._merge_hubspot_time_filters so live preview and
+    actual extraction apply the identical date range."""
+    if not filter_groups:
+        return [{"filters": list(time_filters)}]
+    return [
+        {**group, "filters": list(group.get("filters", [])) + time_filters}
+        for group in filter_groups
+    ]
+
+
+def _is_daily_limit(res) -> bool:
+    try:
+        return (res.json() or {}).get("policyName") == "DAILY"
+    except Exception:
+        return False
+
+
+async def hubspot_search_all(
+    post: Callable[[dict], Awaitable[Any]], base_payload: dict, send_log,
+) -> AsyncIterator[List[dict]]:
+    """Yields pages of Search API results. Shared by extraction and the file
+    pre-check so both see every record.
+
+    The Search API cannot page past 10,000 results. When no custom sort is
+    requested this sorts by hs_object_id and restarts with `hs_object_id > last`
+    after every 10,000 records (keyset pagination), so there is no ceiling. With a
+    custom sort the cap can't be avoided safely; it stops and says so."""
+    payload = dict(base_payload)
+    payload["limit"] = SEARCH_PAGE_SIZE
+    keyset = not payload.get("sorts")
+    if keyset:
+        payload["sorts"] = [{"propertyName": "hs_object_id", "direction": "ASCENDING"}]
+    groups = base_payload.get("filterGroups")
+    window = 0
+
+    while True:
+        res = await post(payload)
+        if res.status_code != 200:
+            raise RuntimeError(f"HubSpot search failed ({res.status_code}): {res.text[:300]}")
+        body = res.json()
+        results = body.get("results") or []
+        if not results:
+            return
+        yield results
+        window += len(results)
+
+        after = ((body.get("paging") or {}).get("next") or {}).get("after")
+        if not after:
+            return
+        if window >= SEARCH_RESULT_CAP:
+            if not keyset:
+                await send_log(f"[HubSpot] Search API caps a sorted query at {SEARCH_RESULT_CAP:,} records; "
+                               f"remove the custom 'sorts' to fetch everything. Stopping here.")
+                return
+            last_id = str(results[-1]["id"])
+            payload = {**payload, "filterGroups": _merge_hubspot_time_filters(
+                groups, [{"propertyName": "hs_object_id", "operator": "GT", "value": last_id}])}
+            payload.pop("after", None)
+            window = 0
+        else:
+            payload["after"] = after
+
+
 class HubspotMigrator:
 
-    async def extract(self, client, creds, obj_name, query, mappings, send_log):
+    # ------------------------------------------------------------------ http
+    async def _request(self, client, method: str, url: str, headers: dict, user_id, role: str, send_log, **kwargs):
+        """One silent token refresh, Retry-After backoff on 429 / 5xx. `headers`
+        is mutated on refresh so later calls in the same run reuse the new token.
+        Returns the last response; callers decide what a non-2xx means."""
+        refreshed = False
+        res = None
+        for attempt in range(MAX_RETRIES + 1):
+            res = await client.request(method, url, headers=headers, **kwargs)
+            if res.status_code == 401 and not refreshed:
+                await send_log(f"HubSpot {role} token expired. Silently refreshing...")
+                token = await CrmService.refresh_crm_token(user_id, "hubspot", role)
+                headers["Authorization"] = f"Bearer {token}"
+                refreshed = True
+                continue
+            if res.status_code == 429 or res.status_code >= 500:
+                if res.status_code == 429 and _is_daily_limit(res):
+                    return res
+                try:
+                    wait = int(res.headers.get("Retry-After") or 0)
+                except ValueError:
+                    wait = 0
+                wait = min(wait or 2 ** (attempt + 1), 60)
+                await send_log(f" [HubSpot {'Rate Limit' if res.status_code == 429 else 'Server Error'}] "
+                               f"Pausing {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            return res
+        return res
+
+    # ==========================================
+    # EXTRACT (Pull from HubSpot)
+    # ==========================================
+    async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         token = creds.get("access_token")
         user_id = creds.get("user_id")
-        domain = (creds.get("api_domain") or "https://api.hubapi.com").rstrip('/')
+        domain = (creds.get("api_domain") or DEFAULT_DOMAIN).rstrip("/")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        safe_obj = obj_name.lower()
-        source_records = []
-        
-        
+
+        obj = normalize_hubspot_object(obj_name)
+        source_records: List[dict] = []
+
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
@@ -27,276 +149,312 @@ class HubspotMigrator:
                 properties.append(source_field)
 
         try:
-            url = f"{domain}/crm/v3/objects/{safe_obj}/search"
-            payload = {
-                "limit": 100,
-                "properties": properties[:100] 
-            }
-            
+            time_filters = build_hubspot_time_filters(time_filter)
+        except TimeFilterError as e:
+            await send_log(f"[{obj_name}] Invalid migration filter: {e}")
+            raise
+
+        try:
+            url = f"{domain}/crm/v3/objects/{obj}/search"
+            payload: Dict[str, Any] = {"limit": SEARCH_PAGE_SIZE, "properties": properties[:100]}
+
             if query and query.strip():
                 try:
                     query_dict = json.loads(query)
-                    if "filterGroups" in query_dict: payload["filterGroups"] = query_dict["filterGroups"]
-                    if "sorts" in query_dict: payload["sorts"] = query_dict["sorts"]
+                    if "filterGroups" in query_dict:
+                        payload["filterGroups"] = query_dict["filterGroups"]
+                    if "sorts" in query_dict:
+                        payload["sorts"] = query_dict["sorts"]
                 except json.JSONDecodeError:
-                    await send_log(f" [HubSpot Extraction] Invalid query format. Ignoring.")
+                    await send_log(" [HubSpot Extraction] Invalid query format. Ignoring.")
 
-            while True:
-                while True:
-                    res = await client.post(url, headers=headers, json=payload)
-                    
-                    if res.status_code == 401:
-                        await send_log(f" HubSpot token expired. Silently refreshing...")
-                        token = await CrmService.refresh_crm_token(user_id, "hubspot", "source")
-                        headers["Authorization"] = f"Bearer {token}"
-                        continue
+            if time_filters:
+                payload["filterGroups"] = _merge_hubspot_time_filters(payload.get("filterGroups"), time_filters)
 
-                    if res.status_code == 429:
-                        retry_after = int(res.headers.get("Retry-After", 10))
-                        await send_log(f" [HubSpot Rate Limit] Pausing extraction for {retry_after}s...")
-                        await asyncio.sleep(retry_after)
-                        continue
-                        
-                    break 
-                    
-                res.raise_for_status()
-                data = res.json()
-                records = data.get("results", [])
-                
-                if not records: break
-                
-                for rec in records:
+            effective_query = json.dumps({k: v for k, v in payload.items() if k != "after"}, sort_keys=True)
+
+            async def post(p: dict):
+                return await self._request(client, "POST", url, headers, user_id, "source", send_log, json=p)
+
+            next_log = 1000
+            async for page in hubspot_search_all(post, payload, send_log):
+                for rec in page:
                     flat_rec = {"id": rec.get("id")}
-                    props = rec.get("properties", {})
-                    if props:
-                        for k, v in props.items(): 
-                            if isinstance(v, dict):
-                                flat_rec[k] = str(v)
-                            elif isinstance(v, list):
-                                flat_rec[k] = ";".join([str(i) for i in v])
-                            else:
-                                flat_rec[k] = v
+                    for k, v in (rec.get("properties") or {}).items():
+                        if isinstance(v, dict):
+                            flat_rec[k] = str(v)
+                        elif isinstance(v, list):
+                            flat_rec[k] = ";".join(str(i) for i in v)
+                        else:
+                            flat_rec[k] = v
                     source_records.append(flat_rec)
-                
-                if len(source_records) % 1000 == 0:
+                if len(source_records) >= next_log:
                     await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
-                
-                paging = data.get("paging", {}).get("next", {})
-                if "after" in paging:
-                    payload["after"] = paging["after"]
-                else:
-                    break
-                    
+                    next_log = (len(source_records) // 1000 + 1) * 1000
+
             await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
-            return source_records
-            
+            return source_records, effective_query
+
         except Exception as e:
             await send_log(f"[{obj_name}] Extract Failed: {str(e)}")
-            raise e
+            raise
+
+    # ==========================================
+    # UPLOAD (Push to HubSpot)
+    # ==========================================
+    @staticmethod
+    def _clean_properties(rec: dict) -> dict:
+        """Accepts either a flat property dict or HubSpot's {"properties": {...}} shape."""
+        props = rec.get("properties") if isinstance(rec.get("properties"), dict) else rec
+        out: Dict[str, Any] = {}
+        for k, v in props.items():
+            if k in _READ_ONLY_PROPS or v is None or v == "":
+                continue
+            if isinstance(v, bool):
+                v = "true" if v else "false"
+            elif isinstance(v, (list, tuple, set)):
+                v = ";".join(str(i) for i in v)
+            elif isinstance(v, dict):
+                v = json.dumps(v)
+            elif not isinstance(v, (str, int, float)):
+                v = str(v)
+            out[k] = v
+        return out
+
+    @staticmethod
+    def _fmt_error(err: Optional[dict]) -> str:
+        if not err:
+            return "HubSpot returned no result for this record."
+        cat, msg = err.get("category") or "", err.get("message") or json.dumps(err)[:300]
+        return f"[{cat}] {msg}"[:500] if cat else msg[:500]
+
+    def _fmt_http(self, res) -> str:
+        try:
+            body = res.json()
+            errs = body.get("errors")
+            return self._fmt_error(errs[0] if errs else body)
+        except Exception:
+            return f"({res.status_code}) {res.text[:300]}"
 
     async def upload(self, client, payload, op_mode, pass_name, options, send_log):
-        if not payload: return 0, 0, 0, [], [], []
+        """Returns (success, error, skipped, success_rows, error_rows, skipped_rows) -- the
+        same 6-tuple contract as the Salesforce/Zoho migrators. Every success row carries
+        Target_Id (the HubSpot record id) so the file pass can attach files to it."""
+        if not payload:
+            return 0, 0, 0, [], [], []
 
-        target_object = options["targetObject"]
-        token = options["token"]
-        domain = (options.get("api_domain") or "https://api.hubapi.com").rstrip('/')
+        obj = normalize_hubspot_object(options["targetObject"])
+        ext = (options.get("targetExtIdField") or "").strip()
         source_records = options["sourceRecords"]
-        target_ext_id_field = options.get("targetExtIdField") or options.get("dedupeKey")
-
         user_id = options.get("userId")
+        base = (options.get("instance_url") or DEFAULT_DOMAIN).rstrip("/")
+        if not base.startswith("http"):
+            base = f"https://{base}"
+        headers = {"Authorization": f"Bearer {options['token']}", "Content-Type": "application/json"}
+        objects_url = f"{base}/crm/v3/objects/{obj}"
 
-        total_success, total_error, total_skipped = 0, 0, 0
-        all_success_data, all_error_data, all_skipped_data = [], [], []
-        ids_to_revert = []
+        succ: List[dict] = []
+        errs: List[dict] = []
+        skips: List[dict] = []
 
-        await send_log(f"[{target_object}] {pass_name}: Pushing data to HubSpot (Concurrent Mode)...")
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        safe_obj = target_object.lower()
+        def ok(it, hs_id):
+            rec = source_records[it["idx"]]
+            rec["Target_Id"] = str(hs_id)
+            succ.append(rec)
 
-        chunks = list(chunk_dataset(payload, 100))
+        def fail(it, msg):
+            rec = source_records[it["idx"]]
+            rec["Target_Error"] = f"HubSpot Error: {msg}"
+            errs.append(rec)
 
-        is_update_only = (op_mode == "update")
-        wire_op_mode = "upsert" if is_update_only else op_mode
+        def skip(it, msg):
+            rec = source_records[it["idx"]]
+            rec["Target_SkipReason"] = msg
+            skips.append(rec)
 
-        if wire_op_mode == "upsert" and not target_ext_id_field:
-            await send_log(
-                f"[{target_object}] {pass_name}: No unique/external ID field configured -- "
-                f"cannot match existing records for {op_mode.upper()}."
-            )
-            return 0, len(payload), 0, [], [source_records[item["originalIndex"]] for item in payload], []
+        def result():
+            return len(succ), len(errs), len(skips), succ, errs, skips
 
-        dedupe_key = target_ext_id_field
+        needs_match = op_mode in ("update", "upsert")
+        if needs_match and not ext:
+            await send_log(f"[{obj}] {pass_name}: No unique/external ID field configured -- "
+                           f"cannot match existing records for {op_mode.upper()}.")
+            return 0, len(payload), 0, [], [source_records[e["originalIndex"]] for e in payload], []
 
-        if wire_op_mode == "upsert":
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/upsert"
-        else:
-            endpoint = f"{domain}/crm/v3/objects/{safe_obj}/batch/create"
+        await send_log(f"[{obj}] {pass_name}: Initializing {op_mode.upper()} to HubSpot...")
 
-        semaphore = asyncio.Semaphore(10) 
-
-        async def process_chunk(chunk):
-            async with semaphore:
-                hs_records = []
-                included_indices = []
-
-                if wire_op_mode == "upsert":
-                    for i, c in enumerate(chunk):
-                        dedupe_val = c["targetRecord"].get(dedupe_key)
-                        if dedupe_val:
-                            hs_records.append({
-                                "id": str(dedupe_val),
-                                "idProperty": dedupe_key,
-                                "properties": c["targetRecord"]
-                            })
-                            included_indices.append(i)
-                else:
-                    hs_records = [{"properties": c["targetRecord"]} for c in chunk]
-                    included_indices = list(range(len(chunk)))
-
-                skipped_indices = [i for i in range(len(chunk)) if i not in set(included_indices)]
-                missing_field_label = dedupe_key
-
-                if not hs_records:
-                    return {
-                        "chunk": chunk,
-                        "status": "error",
-                        "message": f"Missing required '{missing_field_label}' value for every record in this batch."
-                    }
-
-                req_payload = {"inputs": hs_records}
-                
-                try:
-                    while True:
-                        res = await client.post(endpoint, json=req_payload, headers=headers)
-                        
-                        if res.status_code == 401:
-                            await send_log(f" HubSpot token expired mid-migration. Silently refreshing...")
-                            token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
-                            headers["Authorization"] = f"Bearer {token}"
-                            continue
-
-                        if res.status_code == 429:
-                            retry_after = int(res.headers.get("Retry-After", 10))
-                            await send_log(f" [HubSpot Rate Limit] Pausing batch for {retry_after}s...")
-                            await asyncio.sleep(retry_after)
-                            continue
-                            
-                        break
-
-                    if res.status_code not in [201, 200, 207]:
-                        error_body = res.json()
-                        error_msg = error_body.get("message", res.text)
-                        return {"chunk": chunk, "status": "error", "message": error_msg}
-                        
-                    data = res.json()
-                    
-                    successes = data.get("results", [])
-                    success_map = {str(i): s for i, s in enumerate(successes)}
-                    
-                    errors = data.get("errors", [])
-                    error_map = {str(e.get("index")): e for e in errors}
-                    
-                    results_by_index = {}
-                    for hs_pos, orig_idx in enumerate(included_indices):
-                        idx_str = str(hs_pos)
-                        if idx_str in error_map:
-                            results_by_index[orig_idx] = {
-                                "success": False,
-                                "details": error_map[idx_str].get("message", "Validation failed")
-                            }
-                        elif idx_str in success_map:
-                            s = success_map[idx_str]
-                            if is_update_only and s.get("new") is True:
-                                results_by_index[orig_idx] = {
-                                    "success": True,
-                                    "skipped": True,
-                                    "id": s.get("id")
-                                }
-                            else:
-                                results_by_index[orig_idx] = {
-                                    "success": True,
-                                    "id": s.get("id")
-                                }
-                        else:
-                            results_by_index[orig_idx] = {"success": True, "id": "Success"}
-
-
-                    for orig_idx in skipped_indices:
-                        results_by_index[orig_idx] = {
-                            "success": False,
-                            "details": f"Skipped: missing required '{missing_field_label}' value."
-                        }
-
-                    results = [results_by_index[i] for i in range(len(chunk))]
-
-                    return {"chunk": chunk, "status": "completed", "results": results}
-                        
-                except Exception as exc:
-                    return {"chunk": chunk, "status": "error", "message": str(exc)}
-
-        batch_results = await asyncio.gather(*[process_chunk(chunk) for chunk in chunks])
-
-        for batch_res in batch_results:
-            chunk = batch_res["chunk"]
-            
-            if batch_res["status"] == "error":
-                for item in chunk:
-                    orig_record = source_records[item["originalIndex"]]
-                    orig_record["Target_Error"] = f"HubSpot API Error: {batch_res.get('message')}"
-                    all_error_data.append(orig_record)
-                    total_error += 1
+        # ---- normalise payload rows
+        items: List[dict] = []
+        for entry in payload:
+            raw = entry["targetRecord"]
+            container = raw.get("properties") if isinstance(raw.get("properties"), dict) else raw
+            props = self._clean_properties(raw)
+            if op_mode == "delete" or ext.lower() in _ID_FIELDS:
+                ext_val = (raw.get("id") or raw.get("Id") or raw.get("hs_object_id")
+                           or container.get("hs_object_id") or container.get("id"))
             else:
-                for item, hs_res in zip(chunk, batch_res.get("results", [])):
-                    orig_record = source_records[item["originalIndex"]]
+                ext_val = props.get(ext) if ext else None
+            items.append({"idx": entry["originalIndex"], "trace": str(entry["originalIndex"]),
+                          "props": props, "ext_val": None if ext_val in (None, "") else str(ext_val)})
 
-                    if hs_res.get("skipped"):
-                        orig_record["Target_SkipReason"] = (
-                            f"[{dedupe_key}] No matching record found in HubSpot. "
-                            f"Skipped because Update mode does not create new records."
-                        )
-                        all_skipped_data.append(orig_record)
-                        total_skipped += 1
-                        raw_id = hs_res.get("id")
-                        if raw_id:
-                            ids_to_revert.append(str(raw_id))
-                        continue
+        # Reference-only "patch" passes (HubSpot associations aren't written by this migrator) leave
+        # a row with no writable properties; sending it would create a blank record.
+        if op_mode != "delete":
+            writable = []
+            for it in items:
+                if it["props"]:
+                    writable.append(it)
+                else:
+                    skip(it, "No writable properties for HubSpot in this row (reference-only pass; "
+                             "HubSpot associations are not migrated).")
+            items = writable
 
-                    if hs_res.get("success"):
-                        raw_id = hs_res.get("id")
-                        orig_record["Target_Id"] = str(raw_id) if raw_id else "Success"
-                        
-                        all_success_data.append(orig_record)
-                        total_success += 1
+        async def req(method, url, **kw):
+            return await self._request(client, method, url, headers, user_id, "target", send_log, **kw)
+
+        # ---- delete
+        if op_mode == "delete":
+            for chunk in chunk_dataset(items, BATCH_SIZE):
+                targets = [c for c in chunk if c["ext_val"]]
+                for c in chunk:
+                    if not c["ext_val"]:
+                        fail(c, "No record id to delete.")
+                if not targets:
+                    continue
+                res = await req("POST", f"{objects_url}/batch/archive",
+                                json={"inputs": [{"id": c["ext_val"]} for c in targets]})
+                for c in targets:
+                    (ok(c, c["ext_val"]) if res.status_code in (200, 202, 204) else fail(c, self._fmt_http(res)))
+            return result()
+
+        # ---- wire helpers
+        def wire_input(mode, it):
+            inp: Dict[str, Any] = {"properties": it["props"], "objectWriteTraceId": it["trace"]}
+            if mode in ("update", "upsert"):
+                inp["id"] = it["ext_val"]
+                if ext.lower() not in _ID_FIELDS:
+                    inp["idProperty"] = ext
+            return inp
+
+        def parse_batch(body: dict, chunk: List[dict]):
+            """Attribute a batch response to records via objectWriteTraceId -- never by position."""
+            by_trace = {c["trace"]: c for c in chunk}
+            good: Dict[str, str] = {}
+            for r in body.get("results") or []:
+                t = str(r.get("objectWriteTraceId") or "")
+                if t in by_trace:
+                    good[t] = str(r.get("id"))
+            errors = body.get("errors") or []
+            err_for: Dict[str, dict] = {}
+            for e in errors:
+                tr = (e.get("context") or {}).get("objectWriteTraceId")
+                for t in (tr if isinstance(tr, list) else [tr] if tr else []):
+                    err_for[str(t)] = e
+            bad = {t: self._fmt_error(err_for.get(t) or (errors[0] if errors else None))
+                   for t in by_trace if t not in good}
+            return good, bad
+
+        async def send_batch(mode, chunk):
+            endpoint = {"insert": "create", "update": "update", "upsert": "upsert"}[mode]
+            return await req("POST", f"{objects_url}/batch/{endpoint}",
+                             json={"inputs": [wire_input(mode, c) for c in chunk]})
+
+        def settle_missing(mode, it, msg):
+            if mode == "update" and "OBJECT_NOT_FOUND" in msg:
+                skip(it, f"[{ext}] No matching record found in HubSpot. "
+                         f"Skipped because Update mode does not create new records.")
+            else:
+                fail(it, msg)
+
+        async def write_single(mode, it, sem):
+            """Exact attribution (one request, one record). Used for the probe and as the
+            safe path when the API doesn't echo objectWriteTraceId."""
+            async with sem:
+                if mode == "insert":
+                    res = await req("POST", objects_url, json={"properties": it["props"]})
+                    (ok(it, res.json().get("id")) if res.status_code in (200, 201) else fail(it, self._fmt_http(res)))
+                    return
+                res = await send_batch(mode, [it])
+                if res.status_code not in (200, 201, 207):
+                    return fail(it, self._fmt_http(res))
+                body = res.json()
+                if body.get("results"):
+                    return ok(it, body["results"][0].get("id"))
+                errors = body.get("errors") or []
+                settle_missing(mode, it, self._fmt_error(errors[0] if errors else None))
+
+        trace_ok: Optional[bool] = None   # does this portal echo objectWriteTraceId on batch results?
+
+        async def run_group(mode, group):
+            nonlocal trace_ok
+            remaining = list(group)
+            single_sem = asyncio.Semaphore(SINGLE_CONCURRENCY)
+
+            # Probe with single-record batches: attribution is trivially correct, and the first
+            # clean success tells us whether trace ids are echoed (needed to attribute big batches).
+            probes = 0
+            while trace_ok is None and remaining and probes < MAX_PROBES:
+                it = remaining.pop(0)
+                probes += 1
+                res = await send_batch(mode, [it])
+                if res.status_code not in (200, 201, 207):
+                    fail(it, self._fmt_http(res))
+                    continue
+                body = res.json()
+                results = body.get("results") or []
+                if results:
+                    ok(it, results[0].get("id"))
+                    trace_ok = bool(results[0].get("objectWriteTraceId"))
+                else:
+                    errors = body.get("errors") or []
+                    settle_missing(mode, it, self._fmt_error(errors[0] if errors else None))
+            if trace_ok is None and remaining:
+                trace_ok = False
+            if not remaining:
+                return
+
+            if not trace_ok:   # can't attribute batch results safely -> one request per record
+                await send_log(f"[{obj}] {pass_name}: batch results can't be matched to records; "
+                               f"writing {len(remaining)} record(s) individually.")
+                await asyncio.gather(*[write_single(mode, it, single_sem) for it in remaining])
+                return
+
+            batch_sem = asyncio.Semaphore(BATCH_CONCURRENCY)
+
+            async def do_chunk(chunk):
+                async with batch_sem:
+                    res = await send_batch(mode, chunk)
+                    if res.status_code in (200, 201, 207):
+                        good, bad = parse_batch(res.json(), chunk)
+                        for c in chunk:
+                            if c["trace"] in good:
+                                ok(c, good[c["trace"]])
+                            else:
+                                settle_missing(mode, c, bad[c["trace"]])
+                    elif len(chunk) > 1 and res.status_code < 500 and res.status_code != 429:
+                        # whole batch rejected (nothing committed): isolate the offending rows
+                        await asyncio.gather(*[write_single(mode, c, single_sem) for c in chunk])
                     else:
-                        orig_record["Target_Error"] = hs_res.get("details", "Failed")
-                        all_error_data.append(orig_record)
-                        total_error += 1
+                        msg = self._fmt_http(res)
+                        for c in chunk:
+                            fail(c, msg)
 
-        if ids_to_revert:
-            await send_log(
-                f"[{target_object}] {pass_name}: Update mode found {len(ids_to_revert)} record(s) with no "
-                f"match — reverting the records HubSpot auto-created for them..."
-            )
-            await self._archive_records(client, domain, headers, safe_obj, ids_to_revert, user_id, send_log)
+            await asyncio.gather(*[do_chunk(c) for c in chunk_dataset(remaining, BATCH_SIZE)])
 
-        return total_success, total_error, total_skipped, all_success_data, all_error_data, all_skipped_data
+        # ---- group rows by wire mode
+        groups: Dict[str, List[dict]] = {"insert": [], "update": [], "upsert": []}
+        for it in items:
+            if op_mode == "insert":
+                groups["insert"].append(it)
+            elif op_mode == "update":
+                if it["ext_val"]:
+                    groups["update"].append(it)
+                else:
+                    fail(it, f"No value for match field '{ext}'.")
+            else:  # upsert; rows without a key can only be created
+                groups["upsert" if it["ext_val"] else "insert"].append(it)
 
-    async def _archive_records(self, client, domain, headers, safe_obj, record_ids, user_id, send_log):
-        """Archives (soft-deletes) records HubSpot auto-created that 'update'
-        mode should never have created in the first place. HubSpot's batch
-        archive endpoint accepts up to 100 ids per call."""
-        for chunk in chunk_dataset(record_ids, 100):
-            try:
-                url = f"{domain}/crm/v3/objects/{safe_obj}/batch/archive"
-                req_payload = {"inputs": [{"id": rid} for rid in chunk]}
-                res = await client.post(url, json=req_payload, headers=headers)
+        for mode in ("insert", "update", "upsert"):
+            await run_group(mode, groups[mode])
 
-                if res.status_code == 401:
-                    token = await CrmService.refresh_crm_token(user_id, "hubspot", "target")
-                    headers["Authorization"] = f"Bearer {token}"
-                    res = await client.post(url, json=req_payload, headers=headers)
-
-                if res.status_code not in [204, 200]:
-                    await send_log(f"[{safe_obj}] Revert batch failed: {res.text}")
-            except Exception as e:
-                await send_log(f"[{safe_obj}] Revert Failed: {str(e)}")
+        return result()

@@ -1,0 +1,439 @@
+// ==========================================
+// LAYOUT / CARDS
+// ==========================================
+.migration-dashboard {
+  .card {
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+  }
+}
+
+.dash-header h4 {
+  letter-spacing: -0.01em;
+}
+
+.chart-card {
+  &:hover {
+    box-shadow: 0 0.5rem 1.25rem rgba(0, 0, 0, 0.08) !important;
+  }
+}
+
+// ==========================================
+// KPI CARDS
+// ==========================================
+.kpi-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1.25rem rgba(0, 0, 0, 0.08) !important;
+  }
+}
+
+.kpi-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.kpi-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+
+.kpi-value {
+  line-height: 1.2;
+}
+
+// ==========================================
+// CHARTS
+// ==========================================
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 260px;
+}
+
+.chart-container.chart-tall {
+  height: 320px;
+}
+
+.chart-container.chart-short {
+  height: 220px;
+}
+
+.chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 220px;
+  color: #adb5bd;
+  text-align: center;
+
+  i {
+    font-size: 2rem;
+    opacity: 0.6;
+  }
+
+  span {
+    font-size: 0.85rem;
+    color: #868e96;
+  }
+
+  &.chart-empty-success i {
+    color: #198754;
+    opacity: 0.8;
+  }
+}
+
+.chart-tall + .chart-empty,
+.chart-container.chart-tall ~ .chart-empty {
+  height: 320px;
+}
+
+// ==========================================
+// SKELETON LOADERS
+// ==========================================
+@keyframes skeleton-shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eef0f2 25%, #f7f8f9 37%, #eef0f2 63%);
+  background-size: 400px 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+  border-radius: 6px;
+}
+
+.skeleton-label {
+  height: 10px;
+  width: 60%;
+}
+
+.skeleton-value {
+  height: 22px;
+  width: 45%;
+}
+
+.skeleton-sub {
+  height: 10px;
+  width: 80%;
+}
+
+.skeleton-title {
+  height: 16px;
+  width: 40%;
+}
+
+.chart-skeleton {
+  height: 260px;
+  width: 100%;
+}
+
+.chart-skeleton.chart-tall {
+  height: 320px;
+}
+
+// ==========================================
+// TABS
+// ==========================================
+.history-tabs-header {
+  position: relative;
+  z-index: 2;
+}
+
+.history-body {
+  position: relative;
+  z-index: 1;
+}
+
+.history-tabs {
+  flex-wrap: nowrap;
+  margin: 0;
+  border-bottom: 1px solid #dee2e6;
+
+  .nav-item {
+    margin-bottom: -1px; // let the active underline sit on the border
+  }
+
+  .nav-link {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    padding: 0.6rem 1rem;
+    color: #6c757d;
+    opacity: 1;
+    visibility: visible;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: color 0.15s ease, border-color 0.15s ease;
+
+    &:hover:not(.active) {
+      color: #495057;
+      border-bottom-color: #dee2e6;
+    }
+
+    &.active {
+      color: var(--bs-primary, #0d6efd);
+      border-bottom-color: var(--bs-primary, #0d6efd);
+      background: transparent;
+    }
+  }
+}
+
+// ==========================================
+// TABLES
+// ==========================================
+.table-responsive {
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #dee2e6;
+    border-radius: 999px;
+  }
+}
+
+.table-hover tbody tr:hover {
+  background-color: rgba(13, 110, 253, 0.03);
+}
+
+// ==========================================
+// CRM PATHWAY CONNECTOR (two-way sync icon)
+// ==========================================
+.pathway-connector {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: #f1f3f5;
+  color: #6c757d;
+  flex-shrink: 0;
+
+  svg {
+    display: block;
+  }
+}
+
+// ==========================================
+// RECORDS CELL (Total + labeled success/error breakdown)
+// ==========================================
+.records-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 150px;
+}
+
+.records-total {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.records-total-value {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #212529;
+}
+
+.records-total-label {
+  font-size: 0.68rem;
+  color: #1c1d1d;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.records-bar {
+  display: flex;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background-color: #f1f3f5;
+}
+
+.records-bar-segment {
+  height: 100%;
+  transition: width 0.2s ease;
+}
+
+.records-bar-success {
+  background-color: #198754;
+}
+
+.records-bar-danger {
+  background-color: #dc3545;
+}
+
+.records-breakdown {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.record-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+
+  i.feather {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2.5;
+  }
+}
+
+.record-stat-value {
+  font-weight: 700;
+}
+
+.record-stat-label {
+  color: #868e96;
+  font-weight: 500;
+}
+
+.record-stat-success {
+  color: #198754;
+
+  .record-stat-label { color: #198754; opacity: 0.75; }
+}
+
+.record-stat-danger {
+  color: #dc3545;
+
+  .record-stat-label { color: #dc3545; opacity: 0.75; }
+}
+
+.record-stat-warning {
+  color: #b08500;
+
+  .record-stat-label { color: #b08500; opacity: 0.75; }
+}
+
+// ==========================================
+// DOWNLOAD ACTION PILLS
+// ==========================================
+.download-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+
+  i.feather {
+    width: 13px;
+    height: 13px;
+    stroke-width: 2.5;
+    flex-shrink: 0;
+  }
+
+  .dl-btn-download-icon {
+    width: 10px;
+    height: 10px;
+    stroke-width: 2.5;
+    opacity: 0.55;
+    margin-left: 0.05rem;
+  }
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.1);
+    text-decoration: none;
+
+    .dl-btn-download-icon {
+      opacity: 0.9;
+    }
+  }
+
+  &:active {
+    transform: translateY(0);
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+}
+
+.dl-btn-success {
+  background-color: rgba(25, 135, 84, 0.1);
+  color: #198754;
+  border-color: rgba(25, 135, 84, 0.25);
+
+  &:hover {
+    background-color: rgba(25, 135, 84, 0.16);
+    color: #146c43;
+  }
+}
+
+.dl-btn-danger {
+  background-color: rgba(220, 53, 69, 0.1);
+  color: #dc3545;
+  border-color: rgba(220, 53, 69, 0.25);
+
+  &:hover {
+    background-color: rgba(220, 53, 69, 0.16);
+    color: #b02a37;
+  }
+}
+
+.dl-btn-primary {
+  background-color: rgba(13, 110, 253, 0.1);
+  color: #0d6efd;
+  border-color: rgba(13, 110, 253, 0.25);
+
+  &:hover {
+    background-color: rgba(13, 110, 253, 0.16);
+    color: #0a58ca;
+  }
+}
+
+// ==========================================
+// PAGINATION
+// ==========================================
+.history-pager {
+  .pager-size {
+    width: auto;
+    min-width: 64px;
+  }
+
+  .page-link {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .page-item.disabled .page-link {
+    pointer-events: none;
+  }
+}
