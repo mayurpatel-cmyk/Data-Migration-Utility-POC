@@ -746,14 +746,15 @@ class RunStore:
             ).fetchone()["n"]
 
         waiting_total = count("")
-        discardable_total = count(f" AND {self._PRIOR_EXISTS}")
+        can_discard_sql = self._discardable_sql()
+        discardable_total = count(f" AND {can_discard_sql}")
         edited_total = count(f" AND {edited_sql}")
         where = f" AND {edited_sql}" if edited_only else ""
         total = edited_total if edited_only else waiting_total
 
         rows = self._conn.execute(
             "SELECT r.job_idx, r.row_idx, MIN(r.pass_no) AS pass_no, MAX(r.attempts) AS attempts, "
-            f"e.source_json, {edited_sql} AS has_edit, MAX({self._PRIOR_EXISTS}) AS can_discard {base}{where} "
+            f"e.source_json, {edited_sql} AS has_edit, MAX({can_discard_sql}) AS can_discard {base}{where} "
             "GROUP BY r.job_idx, r.row_idx ORDER BY has_edit DESC, r.job_idx, r.row_idx LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
@@ -915,6 +916,20 @@ class RunStore:
 
     _PRIOR_EXISTS = ("EXISTS (SELECT 1 FROM row_prior p WHERE p.job_idx=r.job_idx AND p.row_idx=r.row_idx "
                      "AND p.pass_no=r.pass_no)")
+    _EDITED_EXISTS = ("EXISTS (SELECT 1 FROM row_edit x WHERE x.job_idx=r.job_idx AND x.row_idx=r.row_idx "
+                      "AND COALESCE(x.old_value,'') != COALESCE(x.new_value,''))")
+
+    def _discardable_sql(self) -> str:
+        """
+        SQL: "this queued row may be discarded back to Failed".
+          * its error was saved when it was queued (row_prior), or
+          * it was queued BEFORE errors were saved: in a finished run every 'pending' row was queued by a user
+            (a finished run has no never-sent rows), so it is safe; in an interrupted run only rows the user
+            corrected count, because the rest may simply not have been sent yet.
+        """
+        if self.effective_status() == "completed":
+            return "1"
+        return f"({self._PRIOR_EXISTS} OR {self._EDITED_EXISTS})"
 
     def discard_rows(self, rows: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
         """
@@ -930,13 +945,23 @@ class RunStore:
         touched: set = set()
         keys_by_job: Dict[int, set] = {}
         now = time.time()
+        legacy_ok = self._discardable_sql()
         with self._tx() as c:
             for job_idx, row_idx in pairs:
                 found = c.execute(
-                    "SELECT r.pass_no, r.source_key, p.state AS p_state, p.error AS p_error, p.skip_reason AS p_skip "
-                    "FROM row_state r JOIN row_prior p ON p.job_idx=r.job_idx AND p.pass_no=r.pass_no AND p.row_idx=r.row_idx "
-                    "WHERE r.job_idx=? AND r.row_idx=? AND r.state='pending'", (job_idx, row_idx)).fetchall()
+                    "SELECT r.pass_no, r.source_key, p.state AS p_state, p.error AS p_error, p.skip_reason AS p_skip, "
+                    f"(p.job_idx IS NOT NULL) AS has_prior, ({legacy_ok}) AS legacy_ok "
+                    "FROM row_state r LEFT JOIN row_prior p ON p.job_idx=r.job_idx AND p.pass_no=r.pass_no AND p.row_idx=r.row_idx "
+                    "WHERE r.job_idx=? AND r.row_idx=? AND r.state='pending' ORDER BY r.pass_no", (job_idx, row_idx)).fetchall()
+                first_pass = True
                 for f in found:
+                    if not f["has_prior"]:
+                        if not f["legacy_ok"]:
+                            continue
+                        # queued before errors were saved: first pass is the failed one, later passes were blocked by it
+                        f = {**dict(f), "p_state": "error" if first_pass else "skipped", "p_error": None,
+                             "p_skip": None if first_pass else "parent_failed"}
+                    first_pass = False
                     error = f["p_error"]
                     if f["p_state"] == "error" and not error:
                         error = "Moved back from Ready to retry (the original error message was not recorded)."
@@ -971,7 +996,7 @@ class RunStore:
 
     def discard_matching(self, job_idx: Optional[int], search: str, edited_only: bool) -> Dict[str, Any]:
         """discard_rows for EVERY queued row matching the Ready-list filter (all pages)."""
-        conds = ["r.state='pending'", self._PRIOR_EXISTS]
+        conds = ["r.state='pending'", self._discardable_sql()]
         params: List[Any] = []
         if job_idx is not None:
             conds.append("r.job_idx=?")
