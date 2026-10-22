@@ -834,7 +834,7 @@
   /* table view */
   .rv-table { font-size: .78rem; width: max-content; min-width: 100%; }
   .rv-table th:nth-child(1), .rv-table td:nth-child(1) { position: sticky; left: 0; z-index: 1; background: #fff; }
-  .rv-table th:nth-child(2), .rv-table td:nth-child(2) { position: sticky; left: 50px; z-index: 1; background: #fff; box-shadow: 2px 0 0 var(--rv-line); }
+  .rv-table th:nth-child(2), .rv-table td:nth-child(2) { position: sticky; left: 72px; z-index: 1; background: #fff; box-shadow: 2px 0 0 var(--rv-line); }
   .rv-table thead th:nth-child(1), .rv-table thead th:nth-child(2) { z-index: 3; background: #f1f3f9; }
   .rv-table tr.row-fixed td:nth-child(1), .rv-table tr.row-fixed td:nth-child(2) { background: var(--rv-green-soft); }
   .rv-table td:nth-child(2) { min-width: 300px; max-width: 360px; }
@@ -956,7 +956,7 @@
   .rv-pill.ok { background: var(--rv-green-soft); color: var(--rv-green); }
   .rv-pill.wait { background: var(--rv-blue-soft); color: var(--rv-blue); }
   .rv-qrow {
-    display: grid; grid-template-columns: 64px 110px minmax(0, 1.3fr) minmax(0, 1fr); gap: 10px; align-items: start;
+    display: grid; grid-template-columns: 64px 110px minmax(0, 1.3fr) minmax(0, 1fr) auto; gap: 10px; align-items: start;
     padding: 10px 12px; background: #fff; border: 1px solid var(--rv-line); border-radius: 13px; animation: rvPop .25s ease both;
   }
   .rv-qrow.edited { border-color: #a9e2c9; background: linear-gradient(180deg, #f6fdf9, #fff 70%); }
@@ -967,9 +967,73 @@
   @container (max-width: 760px) {
     .rv-qrow { grid-template-columns: 64px minmax(0, 1fr); }
     .rv-qrow > :nth-child(n+3) { grid-column: 1 / -1; }
+    .rv-qrow .rv-qdiscard { justify-self: start; }
   }
   @keyframes rvSpin { to { transform: rotate(360deg); } }
   @keyframes rvRing { 0% { transform: scale(.9); opacity: .9; } 100% { transform: scale(1.35); opacity: 0; } }
+
+
+
+
+  /* ---------- in-panel confirm (discard) ---------- */
+  .rv-dlg-backdrop {
+    position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: rgba(20, 26, 38, .45); backdrop-filter: blur(2px); border-radius: inherit; animation: rvFade .15s ease-out;
+  }
+  .rv-dlg {
+    width: min(400px, 100%); text-align: center; background: #fff; border-radius: 18px; padding: 24px 22px 18px;
+    box-shadow: 0 24px 60px rgba(20, 26, 38, .35); animation: rvPop .2s ease-out;
+  }
+  .rv-dlg-ico { width: 46px; height: 46px; margin: 0 auto 10px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; background: var(--rv-red-soft); color: var(--rv-red); }
+  .rv-dlg h6 { font-weight: 700; color: var(--rv-ink); margin-bottom: 6px; }
+  .rv-dlg p { font-size: .82rem; color: var(--rv-muted); margin-bottom: 16px; }
+  .rv-dlg-actions { display: flex; justify-content: center; gap: 8px; }
+  .rv-dlg-actions .rv-btn { justify-content: center; min-width: 110px; }
+  .rv-btn-danger { background: var(--rv-red); color: #fff; border: 0; }
+  .rv-btn-danger:hover:not(:disabled) { filter: brightness(.93); }
+  .rv-dlg .rv-mini-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: rvSpin .7s linear infinite; display: inline-block; }
+  @keyframes rvFade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---------- discard from Ready to retry ---------- */
+  .rv-qdiscard, .rv-discard-all {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid #f7c9cb; background: #fff; color: var(--rv-red);
+    font-size: .72rem; font-weight: 700; border-radius: 9px; padding: 5px 10px; cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .rv-qdiscard:hover:not(:disabled), .rv-discard-all:hover:not(:disabled) { background: var(--rv-red-soft); border-color: var(--rv-red); }
+  .rv-qdiscard:disabled, .rv-discard-all:disabled { opacity: .5; cursor: not-allowed; }
+  .rv-qdiscard .rv-mini-spin, .rv-discard-all .rv-mini-spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: rvSpin .7s linear infinite; display: inline-block; }
+  .rv-ready .rv-discard-all { margin-left: 0; }
+
+  /* ---------- panel loader (tab switch / reload) ---------- */
+  .rv-topbar { position: relative; height: 3px; overflow: hidden; background: transparent; flex-shrink: 0; }
+  .rv-topbar.on { background: #e9ecf4; }
+  .rv-topbar.on::after { content: ''; position: absolute; top: 0; bottom: 0; width: 40%; border-radius: 3px; background: linear-gradient(90deg, var(--rv-brand), var(--rv-brand-2)); animation: rvBar 1.1s ease-in-out infinite; }
+  .rv-tab:disabled { cursor: progress; }
+  .rv-tab:disabled:not(.on) { opacity: .7; }
+  .rv-tab .rv-mini-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: rvSpin .7s linear infinite; display: inline-block; flex-shrink: 0; }
+  .rv-loading { position: relative; }
+  .rv-loader {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center;
+    padding: 26px 20px 22px; margin: 4px auto 16px; max-width: 360px; border-radius: 16px;
+    background: #fff; border: 1px solid var(--rv-line); box-shadow: 0 10px 30px rgba(20, 26, 38, .08); animation: rvPop .2s ease-out;
+  }
+  .rv-loader-ring { position: relative; width: 46px; height: 46px; margin-bottom: 10px; }
+  .rv-loader-ring::before { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 4px solid #e9ecf4; }
+  .rv-loader-ring::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%; border: 4px solid transparent;
+    border-top-color: var(--rv-brand); border-right-color: var(--rv-brand-2); animation: rvSpin .8s cubic-bezier(.5, .1, .5, .9) infinite;
+  }
+  .rv-loader-ring i { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--rv-brand); }
+  .rv-loader.ready .rv-loader-ring::after { border-top-color: var(--rv-green); border-right-color: #5fd3a6; }
+  .rv-loader.ready .rv-loader-ring i { color: var(--rv-green); }
+  .rv-loader b { font-size: .9rem; color: var(--rv-ink); }
+  .rv-loader span { font-size: .76rem; color: var(--rv-muted); }
+  .rv-loader .dots::after { content: ''; display: inline-block; width: 1.2em; text-align: left; animation: rvDots 1.2s steps(4, end) infinite; }
+  .rv-skeletons.dim { opacity: .55; pointer-events: none; }
+  .rv-skeletons.dim .rv-skel { height: 96px; }
+  .rv-pager-btns button .rv-mini-spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: rvSpin .7s linear infinite; display: inline-block; vertical-align: -1px; }
+  @keyframes rvBar { 0% { left: -40%; } 100% { left: 100%; } }
+  @keyframes rvDots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75%, 100% { content: '...'; } }
 
   /* ---------- animations ---------- */
   @keyframes rvPop { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: none; } }
@@ -1023,7 +1087,7 @@
   /* table view: readable columns, wrapped error text, horizontal scroll only inside the records area */
   .rv .rv-table { table-layout: auto; }
   .rv .rv-table td { min-width: 150px; max-width: 280px; }
-  .rv .rv-table td:nth-child(1) { min-width: 50px; max-width: 50px; }
+  .rv .rv-table td:nth-child(1), .rv .rv-table th:nth-child(1) { min-width: 72px; max-width: 72px; }
   .rv .rv-table td:nth-child(2) { min-width: 300px; max-width: 360px; white-space: normal; word-break: break-word; }
   .rv .rv-table td .form-control { min-width: 140px; width: 100%; text-overflow: ellipsis; }
   .rv .rv-pager { background: #fff; position: sticky; bottom: 0; }
@@ -1033,6 +1097,31 @@
     .rv .rv-side { max-height: 220px; }
     .rv .rv-records { min-height: 480px; }
   }
+
+  /* =====================================================================
+     STICKY TABLE HEADER + ROW SELECTION
+     The records grid row was `auto`, so the list grew to its full height, the panel body scrolled and .rv-scroll
+     (the element the <thead> sticks to) never scrolled -> the header scrolled away. Bounding the row makes
+     .rv-scroll the only vertical scroller; tabs, toolbar, selection bar and pager stay put around it.
+     ===================================================================== */
+  @container (min-width: 861px) {
+    .rv .rv-main { grid-template-rows: minmax(0, 1fr); }
+  }
+  @container (max-width: 860px) {
+    .rv .rv-records { height: min(72vh, 560px); }
+  }
+  .rv .rv-scroll.table-mode { padding: 0; }
+  .rv .rv-table thead th { box-shadow: inset 0 -1px 0 var(--rv-line); }
+  .rv-sel-col { white-space: nowrap; }
+  .rv-table .form-check-input, .rv-card-head .form-check-input { width: 1rem; height: 1rem; cursor: pointer; flex-shrink: 0; }
+  .rv-table tr.row-selected td { background: var(--rv-blue-soft); }
+  .rv-table tr.row-selected td:nth-child(1), .rv-table tr.row-selected td:nth-child(2) { background: var(--rv-blue-soft); }
+  .rv-card.selected { border-color: var(--rv-blue); box-shadow: 0 0 0 2px rgba(47, 111, 214, .18); }
+  .rv-selbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; flex-shrink: 0;
+    background: var(--rv-blue-soft); border-bottom: 1px solid #c9dcfa; color: #1f4fa3; font-size: .8rem; animation: rvPop .2s ease;
+  }
+  .rv-selbar .rv-btn { padding: 6px 12px; }
 </style>
 
 @if (isGlobalLoading) {
@@ -2860,13 +2949,14 @@
       <span class="rv-banner-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
       <div class="rv-banner-body">
         <b>{{ changeBanner.title }}.</b>
-        {{ changeBanner.rows }} record{{ changeBanner.rows === 1 ? '' : 's' }} corrected and queued for {{ activeRun.resumable ? 'Resume' : 'Retry' }}@if (changeBanner.unblocked > 0) { (+{{ changeBanner.unblocked }} blocked child record{{ changeBanner.unblocked === 1 ? '' : 's' }} released) }.
+        {{ changeBanner.rows }} record{{ changeBanner.rows === 1 ? '' : 's' }} @if (changeBanner.kind === 'discard') { moved back to the failed list, ready to edit again@if (changeBanner.unblocked > 0) { (+{{ changeBanner.unblocked }} child record{{ changeBanner.unblocked === 1 ? '' : 's' }} blocked again) } } @else { {{ changeBanner.kind === 'requeue' ? 'moved to the ready list for' : 'corrected and queued for' }} {{ activeRun.resumable ? 'Resume' : 'Retry' }}@if (changeBanner.unblocked > 0) { (+{{ changeBanner.unblocked }} blocked child record{{ changeBanner.unblocked === 1 ? '' : 's' }} released) } }.
         @if (changeBanner.field) {
         <span class="rv-diff d-inline-flex ms-1"><span class="k">{{ changeBanner.field }}</span><span class="arr">→</span><span class="new">{{ changeBanner.value || '(empty)' }}</span></span>
         }
       </div>
       <div class="rv-banner-actions">
-        @if (recoveryTab !== 'queued') { <button class="rv-link" (click)="showQueued()">Review queued records</button> }
+        @if (recoveryTab !== 'queued' && changeBanner.kind !== 'discard') { <button class="rv-link" (click)="showQueued()">Review queued records</button> }
+        @else if (recoveryTab === 'queued' && changeBanner.kind === 'discard') { <button class="rv-link" (click)="setRecoveryTab('failed')">Edit in Failed</button> }
         @else if ((activeRun.counts?.error || 0) > 0) { <button class="rv-link" (click)="setRecoveryTab('failed')">{{ activeRun.counts?.error }} still failed</button> }
         <button class="rv-banner-x" title="Dismiss" (click)="changeBanner = null">&times;</button>
       </div>
@@ -2943,14 +3033,17 @@
 
       <!-- ---- Right: records ---- -->
       <section class="rv-records">
-        <div class="rv-tabs" role="tablist">
-          <button class="rv-tab" role="tab" [class.on]="recoveryTab === 'failed'" (click)="setRecoveryTab('failed')">
-            <i class="feather icon-alert-circle"></i> Failed <span class="cnt">{{ activeRun.counts?.error || 0 }}</span>
+        <div class="rv-tabs" role="tablist" [attr.aria-busy]="isRecoveryBusy">
+          <button class="rv-tab" role="tab" [class.on]="recoveryTab === 'failed'" [disabled]="isRecoveryBusy" (click)="setRecoveryTab('failed')">
+            @if (recoverySwitchingTo === 'failed') { <span class="rv-mini-spin" aria-hidden="true"></span> } @else { <i class="feather icon-alert-circle"></i> }
+            Failed <span class="cnt">{{ activeRun.counts?.error || 0 }}</span>
           </button>
-          <button class="rv-tab ready" role="tab" [class.on]="recoveryTab === 'queued'" (click)="setRecoveryTab('queued')">
-            <i class="feather icon-send"></i> Ready to {{ activeRun.resumable ? 'resume' : 'retry' }} <span class="cnt">{{ queuedCount }}</span>
+          <button class="rv-tab ready" role="tab" [class.on]="recoveryTab === 'queued'" [disabled]="isRecoveryBusy" (click)="setRecoveryTab('queued')">
+            @if (recoverySwitchingTo === 'queued') { <span class="rv-mini-spin" aria-hidden="true"></span> } @else { <i class="feather icon-send"></i> }
+            Ready to {{ activeRun.resumable ? 'resume' : 'retry' }} <span class="cnt">{{ queuedCount }}</span>
           </button>
         </div>
+        <div class="rv-topbar" [class.on]="isRecoveryBusy" role="progressbar" aria-label="Loading records" [attr.aria-hidden]="!isRecoveryBusy"></div>
         <div class="rv-toolbar">
           <div class="rv-search">
             <i class="feather icon-search"></i>
@@ -2976,6 +3069,20 @@
           }
         </div>
 
+        @if (recoveryTab === 'failed' && selectedCount > 0) {
+        <div class="rv-selbar">
+          <span><i class="feather icon-check-square"></i> <b>{{ selectAllMatching ? 'All ' : '' }}{{ selectedCount }}</b> selected</span>
+          @if (canSelectAllMatching) { <button class="rv-link" (click)="selectAllFiltered()">Select all {{ failureTotal }} matching records</button> }
+          <button class="rv-link" (click)="clearSelection()">Clear</button>
+          <button class="rv-btn rv-btn-primary ms-auto" (click)="requeueSelected()"
+            [disabled]="isRequeuing || isSavingEdits || activeRun.status === 'running'"
+            title="Keeps the records as they are; only they are sent on the next {{ activeRun.resumable ? 'Resume' : 'Retry' }}">
+            @if (isRequeuing) { <span class="spinner-border spinner-border-sm"></span> } @else { <i class="feather icon-send"></i> }
+            Move to Ready to {{ activeRun.resumable ? 'resume' : 'retry' }}
+          </button>
+        </div>
+        }
+
         @if (recoveryTab === 'queued') {
 
         <!-- ======== READY TO RETRY / RESUME ======== -->
@@ -2990,10 +3097,24 @@
               <button [class.on]="queuedFilter === 'all'" (click)="setQueuedFilter('all')">All waiting</button>
               <button [class.on]="queuedFilter === 'edited'" (click)="setQueuedFilter('edited')">Corrected only</button>
             </div>
+            @if (queuedDiscardableTotal > 0) {
+            <button class="rv-discard-all" (click)="requestDiscard()" [disabled]="isRecoveryBusy || isDiscarding || activeRun.status === 'running'"
+              title="Move these records back to Failed so you can change their values again">
+              @if (isDiscarding && !discardingKey) { <span class="rv-mini-spin" aria-hidden="true"></span> } @else { <i class="feather icon-corner-up-left"></i> }
+              Discard {{ queuedDiscardableTotal }} to Failed
+            </button>
+            }
           </div>
 
-          @if (isLoadingQueued) {
-          <div class="rv-skeletons"><div class="rv-skel"></div><div class="rv-skel"></div></div>
+          @if (isLoadingQueued || recoverySwitchingTo === 'queued') {
+          <div class="rv-loading" role="status" aria-live="polite">
+            <div class="rv-loader ready">
+              <div class="rv-loader-ring"><i class="feather icon-send"></i></div>
+              <b>Loading ready-to-{{ activeRun.resumable ? 'resume' : 'retry' }} records<span class="dots"></span></b>
+              <span>Fetching the records queued for the next {{ activeRun.resumable ? 'resume' : 'retry' }}.</span>
+            </div>
+            <div class="rv-skeletons dim"><div class="rv-skel"></div><div class="rv-skel"></div></div>
+          </div>
           } @else if (queuedRows.length === 0) {
           <div class="rv-empty">
             <div class="rv-empty-icon"><i class="feather icon-inbox"></i></div>
@@ -3021,6 +3142,13 @@
               <div class="rv-qpreview">
                 @for (p of queuedPreview(row); track p.label) { <span [title]="p.value"><b>{{ p.label }}:</b> {{ p.value }}</span> }
               </div>
+              @if (row.canDiscard) {
+              <button class="rv-qdiscard" (click)="requestDiscard(row)" [disabled]="isDiscarding || activeRun.status === 'running'"
+                title="Move back to Failed so you can change the values again" [attr.aria-label]="'Discard row ' + (row.rowIdx + 1) + ' to Failed'">
+                @if (discardingKey === rowKey(row)) { <span class="rv-mini-spin" aria-hidden="true"></span> } @else { <i class="feather icon-corner-up-left"></i> }
+                Discard
+              </button>
+              }
             </div>
             }
           </div>
@@ -3033,17 +3161,22 @@
             · Page <b>{{ queuedPage + 1 }}</b> / {{ queuedPageCount }}
           </span>
           <div class="rv-pager-btns">
-            <button [disabled]="queuedPage === 0" (click)="changeQueuedPage(-1)"><i class="feather icon-chevron-left"></i> Prev</button>
-            <button [disabled]="queuedPage + 1 >= queuedPageCount" (click)="changeQueuedPage(1)">Next <i class="feather icon-chevron-right"></i></button>
+            <button [disabled]="queuedPage === 0 || isRecoveryBusy" (click)="changeQueuedPage(-1)"><i class="feather icon-chevron-left"></i> Prev</button>
+            <button [disabled]="queuedPage + 1 >= queuedPageCount || isRecoveryBusy" (click)="changeQueuedPage(1)">Next <i class="feather icon-chevron-right"></i></button>
           </div>
         </div>
 
         } @else {
 
-        <div class="rv-scroll">
-          @if (isLoadingFailures) {
-          <div class="rv-skeletons">
-            <div class="rv-skel"></div><div class="rv-skel"></div><div class="rv-skel"></div>
+        <div class="rv-scroll" [class.table-mode]="recoveryView === 'table'">
+          @if (isLoadingFailures || recoverySwitchingTo === 'failed') {
+          <div class="rv-loading" role="status" aria-live="polite">
+            <div class="rv-loader">
+              <div class="rv-loader-ring"><i class="feather icon-alert-circle"></i></div>
+              <b>Loading failed records<span class="dots"></span></b>
+              <span>Fetching the latest failed rows and error details.</span>
+            </div>
+            <div class="rv-skeletons dim"><div class="rv-skel"></div><div class="rv-skel"></div><div class="rv-skel"></div></div>
           </div>
           } @else if (failureRows.length === 0) {
           <div class="rv-empty">
@@ -3062,8 +3195,10 @@
           <!-- ======== CARD VIEW ======== -->
           <div class="rv-cards">
             @for (row of failureRows; track row.jobIdx + '-' + row.passNo + '-' + row.rowIdx) {
-            <article class="rv-card" [class.fixed]="row._dirty" [attr.data-tone]="row._info.tone">
+            <article class="rv-card" [class.fixed]="row._dirty" [class.selected]="isRowSelected(row)" [attr.data-tone]="row._info.tone">
               <header class="rv-card-head">
+                <input type="checkbox" class="form-check-input m-0" [attr.aria-label]="'Select row ' + (row.rowIdx + 1)"
+                  [checked]="isRowSelected(row)" (change)="toggleRowSelection(row, $any($event.target).checked)">
                 <span class="rv-rownum">Row {{ row.rowIdx + 1 }}</span>
                 <span class="rv-pill" [attr.data-tone]="row._info.tone"><i class="feather" [ngClass]="row._info.icon"></i> {{ row._info.title }}</span>
                 @if (row._dirty) { <span class="rv-edited"><i class="feather icon-edit-2"></i> Edited — not saved yet</span> }
@@ -3105,7 +3240,14 @@
           <table class="table table-sm mb-0 align-middle rv-table">
             <thead>
               <tr>
-                <th style="width: 50px">#</th>
+                <th class="rv-sel-col">
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="checkbox" class="form-check-input m-0" title="Select all on this page"
+                      [checked]="allPageSelected" [indeterminate]="somePageSelected"
+                      (change)="togglePageSelection($any($event.target).checked)">
+                    <span>#</span>
+                  </div>
+                </th>
                 <th style="min-width: 300px">Error from CRM</th>
                 @for (c of activeColumns; track c.sourceField) {
                 <th style="min-width: 150px">{{ c.sourceField }}<small class="d-block fw-normal">&rarr; {{ c.targetField }}</small></th>
@@ -3114,8 +3256,14 @@
             </thead>
             <tbody>
               @for (row of failureRows; track row.jobIdx + '-' + row.passNo + '-' + row.rowIdx) {
-              <tr [class.row-fixed]="row._dirty">
-                <td class="text-muted">{{ row.rowIdx + 1 }}</td>
+              <tr [class.row-fixed]="row._dirty" [class.row-selected]="isRowSelected(row)">
+                <td class="text-muted">
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="checkbox" class="form-check-input m-0" [attr.aria-label]="'Select row ' + (row.rowIdx + 1)"
+                      [checked]="isRowSelected(row)" (change)="toggleRowSelection(row, $any($event.target).checked)">
+                    <span>{{ row.rowIdx + 1 }}</span>
+                  </div>
+                </td>
                 <td>
                   <span class="rv-pill sm" [attr.data-tone]="row._info.tone">{{ row._info.title }}</span>
                   <div class="rv-table-err">{{ row.error }}</div>
@@ -3148,8 +3296,8 @@
                 @for (n of failurePageSizes; track n) { <option [value]="n" [selected]="n === failurePageSize">{{ n }}</option> }
               </select>
             </label>
-            <button [disabled]="failurePage === 0" (click)="changeFailurePage(-1)"><i class="feather icon-chevron-left"></i> Prev</button>
-            <button [disabled]="failurePage + 1 >= failurePageCount" (click)="changeFailurePage(1)">Next <i class="feather icon-chevron-right"></i></button>
+            <button [disabled]="failurePage === 0 || isRecoveryBusy" (click)="changeFailurePage(-1)"><i class="feather icon-chevron-left"></i> Prev</button>
+            <button [disabled]="failurePage + 1 >= failurePageCount || isRecoveryBusy" (click)="changeFailurePage(1)">Next <i class="feather icon-chevron-right"></i></button>
           </div>
         </div>
         }
@@ -3188,9 +3336,21 @@
       }
       }
       @if (activeRun.retryable && !activeRun.resumable) {
-      <button class="rv-btn rv-btn-primary" (click)="retryFromPanel()" [disabled]="isGlobalLoading || isSavingEdits">
+      @if (queuedCount > 0) {
+      <button class="rv-btn rv-btn-primary" (click)="retryFromPanel(true)" [disabled]="isGlobalLoading || isSavingEdits || isRequeuing"
+        title="Sends only the records in Ready to retry; the other failed records stay failed">
+        <i class="feather icon-send"></i> {{ dirtyRowCount ? 'Save & retry' : 'Retry' }} {{ queuedCount + dirtyRowCount }} ready record{{ (queuedCount + dirtyRowCount) === 1 ? '' : 's' }}
+      </button>
+      @if ((activeRun.counts?.error || 0) > 0) {
+      <button class="rv-btn rv-btn-ghost" (click)="retryFromPanel(false)" [disabled]="isGlobalLoading || isSavingEdits || isRequeuing">
+        <i class="feather icon-refresh-cw"></i> Retry all {{ activeRun.counts?.error }} failed
+      </button>
+      }
+      } @else {
+      <button class="rv-btn rv-btn-primary" (click)="retryFromPanel(false)" [disabled]="isGlobalLoading || isSavingEdits">
         <i class="feather icon-refresh-cw"></i> {{ dirtyRowCount ? 'Save & retry' : 'Retry' }} {{ activeRun.counts?.error }} failed record{{ activeRun.counts?.error === 1 ? '' : 's' }}
       </button>
+      }
       }
       @if (activeRun.retryable && activeRun.resumable) {
       <button class="rv-btn rv-btn-ghost" (click)="retryFromPanel()" [disabled]="isGlobalLoading || isSavingEdits">
@@ -3199,6 +3359,22 @@
       }
     </div>
   </footer>
+  }
+  @if (discardConfirm; as dc) {
+  <div class="rv-dlg-backdrop" (click)="cancelDiscard()" role="presentation">
+    <div class="rv-dlg" role="alertdialog" aria-modal="true" aria-labelledby="rvDiscardTitle" (click)="$event.stopPropagation()">
+      <div class="rv-dlg-ico"><i class="feather icon-corner-up-left"></i></div>
+      <h6 id="rvDiscardTitle">{{ dc.all ? 'Discard ' + dc.count + ' record' + (dc.count === 1 ? '' : 's') + '?' : 'Discard row ' + (dc.row.rowIdx + 1) + '?' }}</h6>
+      <p>They leave <b>Ready to {{ activeRun.resumable ? 'resume' : 'retry' }}</b> and go back to <b>Failed</b> with their original error. Values you corrected are kept, so you can change them again.</p>
+      <div class="rv-dlg-actions">
+        <button class="rv-btn rv-btn-ghost" (click)="cancelDiscard()" [disabled]="isDiscarding">Cancel</button>
+        <button class="rv-btn rv-btn-danger" (click)="confirmDiscard()" [disabled]="isDiscarding">
+          @if (isDiscarding) { <span class="rv-mini-spin" aria-hidden="true"></span> } @else { <i class="feather icon-corner-up-left"></i> }
+          {{ isDiscarding ? 'Discarding…' : 'Discard' }}
+        </button>
+      </div>
+    </div>
+  </div>
   }
 </div>
 }

@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.dependencies.auth import get_current_user
 from app.services.run_access import RunAccess
@@ -127,6 +127,39 @@ class MassUpdatePayload(BaseModel):
     errorKey: str = ""   # group key from /failures "groups": limits the change to rows with that error pattern
 
 
+class RowRef(BaseModel):
+    jobIdx: int = Field(..., ge=0)
+    rowIdx: int = Field(..., ge=0)
+
+
+class RequeuePayload(BaseModel):
+    rows: List[RowRef] = Field(default_factory=list, max_length=1000)
+    allMatching: bool = False          # every failed row matching the filter below (all pages)
+    jobIdx: Optional[int] = None
+    search: str = ""
+    errorKey: str = ""
+
+    @model_validator(mode="after")
+    def _needs_target(self) -> "RequeuePayload":
+        if not self.allMatching and not self.rows:
+            raise ValueError("Provide rows or set allMatching.")
+        return self
+
+
+class DiscardPayload(BaseModel):
+    rows: List[RowRef] = Field(default_factory=list, max_length=1000)
+    allMatching: bool = False          # every queued row matching the filter below (all pages)
+    jobIdx: Optional[int] = None
+    search: str = ""
+    editedOnly: bool = False
+
+    @model_validator(mode="after")
+    def _needs_target(self) -> "DiscardPayload":
+        if not self.allMatching and not self.rows:
+            raise ValueError("Provide rows or set allMatching.")
+        return self
+
+
 @router.patch("/api/runs/{run_id}/records")
 def edit_records(run_id: str, payload: EditPayload, current_user=Depends(get_current_user)) -> Dict[str, Any]:
     """Save corrected source values and re-queue those rows; the next Resume / Retry sends them."""
@@ -134,6 +167,36 @@ def edit_records(run_id: str, payload: EditPayload, current_user=Depends(get_cur
     try:
         with _edit_lock(store):
             result = store.apply_edits([e.model_dump() for e in payload.edits], _editor(current_user))
+        return {"success": True, **result}
+    finally:
+        store.close()
+
+
+@router.post("/api/runs/{run_id}/records/requeue")
+def requeue_records(run_id: str, payload: RequeuePayload, current_user=Depends(get_current_user)) -> Dict[str, Any]:
+    """Move the selected failed rows to 'Ready to retry' unchanged; the next Retry / Resume sends only those (plus corrected rows)."""
+    store = _open_run(current_user.id, run_id)
+    try:
+        with _edit_lock(store):
+            if payload.allMatching:
+                result = store.requeue_matching(payload.jobIdx, payload.search.strip(), payload.errorKey)
+            else:
+                result = store.requeue_rows([(r.jobIdx, r.rowIdx) for r in payload.rows])
+        return {"success": True, **result}
+    finally:
+        store.close()
+
+
+@router.post("/api/runs/{run_id}/records/discard")
+def discard_queued_records(run_id: str, payload: DiscardPayload, current_user=Depends(get_current_user)) -> Dict[str, Any]:
+    """Take rows out of 'Ready to retry' and put them back in 'Failed' (original error), so they can be edited again."""
+    store = _open_run(current_user.id, run_id)
+    try:
+        with _edit_lock(store):
+            if payload.allMatching:
+                result = store.discard_matching(payload.jobIdx, payload.search.strip(), payload.editedOnly)
+            else:
+                result = store.discard_rows([(x.jobIdx, x.rowIdx) for x in payload.rows])
         return {"success": True, **result}
     finally:
         store.close()

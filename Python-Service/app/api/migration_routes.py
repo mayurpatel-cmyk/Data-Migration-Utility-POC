@@ -490,7 +490,7 @@ async def websocket_migration(ws: WebSocket):
                 try:
                     if parent.status() != "completed":
                         raise ValueError("Only a completed run can be retried; resume interrupted runs instead.")
-                    store = parent.fork_for_retry()
+                    store = parent.fork_for_retry(only_pending=bool(payload.get("onlyQueued")))
                 except ValueError as e:
                     await websocket.send_json({"log": f"FATAL: {e}", "status": "Failed"})
                     parent.close()

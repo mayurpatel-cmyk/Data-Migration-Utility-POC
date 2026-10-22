@@ -3477,13 +3477,14 @@ onReviewPanelDragEnd(): void {
     });
   }
 
-  retryFailedRows(): void {
+  retryFailedRows(onlyQueued = false): void {
     if (!this.currentRunId || this.isGlobalLoading) return;
     this.isGlobalLoading = true;
     this.jobStatus = 'Running';
     this.logMessages = [];
     this.openMigrationSocket({
       mode: 'retry_failed',
+      onlyQueued,
       runId: this.currentRunId,
       authToken: localStorage.getItem('supabase_token') || ''
     });
@@ -3537,6 +3538,116 @@ onReviewPanelDragEnd(): void {
     return this.failureRows.filter((r) => r._dirty).length;
   }
 
+  private selectedFailed = new Set<string>();
+  selectAllMatching = false;
+  isRequeuing = false;
+
+  rowKey(row: any): string {
+    return `${row.jobIdx}:${row.rowIdx}`;
+  }
+
+  isRowSelected(row: any): boolean {
+    return this.selectAllMatching || this.selectedFailed.has(this.rowKey(row));
+  }
+
+  get selectedCount(): number {
+    return this.selectAllMatching ? this.failureTotal : this.selectedFailed.size;
+  }
+
+  get allPageSelected(): boolean {
+    return this.failureRows.length > 0 && this.failureRows.every((r) => this.isRowSelected(r));
+  }
+
+  get somePageSelected(): boolean {
+    return !this.allPageSelected && this.failureRows.some((r) => this.isRowSelected(r));
+  }
+
+  get canSelectAllMatching(): boolean {
+    return !this.selectAllMatching && this.allPageSelected && this.failureTotal > this.failureRows.length;
+  }
+
+  toggleRowSelection(row: any, checked: boolean): void {
+    if (this.selectAllMatching) {
+      if (checked) return;
+      this.selectAllMatching = false;
+      this.selectedFailed = new Set(this.failureRows.map((r) => this.rowKey(r)));
+    }
+    if (checked) this.selectedFailed.add(this.rowKey(row));
+    else this.selectedFailed.delete(this.rowKey(row));
+  }
+
+  togglePageSelection(checked: boolean): void {
+    if (!checked && this.selectAllMatching) {
+      this.clearSelection();
+      return;
+    }
+    for (const r of this.failureRows) {
+      if (checked) this.selectedFailed.add(this.rowKey(r));
+      else this.selectedFailed.delete(this.rowKey(r));
+    }
+  }
+
+  selectAllFiltered(): void {
+    this.selectAllMatching = true;
+  }
+
+  clearSelection(): void {
+    this.selectAllMatching = false;
+    this.selectedFailed = new Set<string>();
+  }
+
+  async requeueSelected(): Promise<void> {
+    if (!this.activeRun || !this.selectedCount || this.isRequeuing) return;
+    this.isRequeuing = true;
+    this.cdr.detectChanges();
+    try {
+      if (this.dirtyRowCount) await this.saveRunEdits(true); // corrected rows are re-queued by the save itself
+      const base = `/api/runs/${encodeURIComponent(this.activeRun.runId)}/records/requeue`;
+      let requeued = 0;
+      let unblocked = 0;
+      if (this.selectAllMatching) {
+        const res = await this.runApi(base, {
+          method: 'POST',
+          body: JSON.stringify({
+            allMatching: true,
+            jobIdx: this.failureJobIdx,
+            search: this.failureSearch.trim(),
+            errorKey: this.failureGroupKey
+          })
+        });
+        requeued = res.rowsRequeued || 0;
+        unblocked = res.rowsUnblocked || 0;
+      } else {
+        const rows = Array.from(this.selectedFailed, (k) => {
+          const [jobIdx, rowIdx] = k.split(':').map(Number);
+          return { jobIdx, rowIdx };
+        });
+        for (let i = 0; i < rows.length; i += 500) {
+          const res = await this.runApi(base, { method: 'POST', body: JSON.stringify({ rows: rows.slice(i, i + 500) }) });
+          requeued += res.rowsRequeued || 0;
+          unblocked += res.rowsUnblocked || 0;
+        }
+      }
+      this.clearSelection();
+      await this.refreshActiveRun();
+      if (requeued > 0) {
+        this.changeBanner = { title: 'Moved to Ready', rows: requeued, unblocked, kind: 'requeue' };
+      } else {
+        this.toastr.info('Those records are no longer failed, so nothing was moved.', 'Recovery');
+      }
+      await this.loadFailures(); // also reloads the queued list while the Ready tab is open
+      if (!this.failureRows.length && this.failurePage > 0) {
+        this.failurePage = Math.max(0, this.failurePageCount - 1);
+        await this.loadFailures();
+      }
+    } catch (e: any) {
+      this.toastr.error(e?.message || 'Could not move the selected records.', 'Recovery');
+    } finally {
+      this.isRequeuing = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   recoveryView: 'cards' | 'table' = 'cards';
   /** Collapses the progress/steps block so the failed-records list gets the space. */
   recoverySummaryCollapsed = false;
@@ -3548,12 +3659,15 @@ onReviewPanelDragEnd(): void {
   queuedTotal = 0;
   queuedWaiting = 0;
   queuedEditedTotal = 0;
+  queuedDiscardableTotal = 0;
+  isDiscarding = false;
+  discardingKey: string | null = null;
   queuedPage = 0;
   queuedFilter: 'all' | 'edited' = 'all';
   isLoadingQueued = false;
   massPreview: { field: string; value: string; count: number; filter: string; errorKey: string; search: string } | null = null;
   isApplyingMass = false;
-  changeBanner: { title: string; rows: number; unblocked: number; field?: string; value?: string } | null = null;
+  changeBanner: { title: string; rows: number; unblocked: number; field?: string; value?: string; kind?: 'edit' | 'requeue' | 'discard' } | null = null;
 
   get queuedCount(): number {
     return this.activeRun?.counts?.pending || 0;
@@ -3581,18 +3695,30 @@ onReviewPanelDragEnd(): void {
     this.recoveryExpanded = !this.recoveryExpanded;
   }
 
+  recoverySwitchingTo: 'failed' | 'queued' | null = null;
+
+  get isRecoveryBusy(): boolean {
+    return this.isLoadingFailures || this.isLoadingQueued || this.recoverySwitchingTo !== null;
+  }
+
   async setRecoveryTab(tab: 'failed' | 'queued'): Promise<void> {
-    if (tab === this.recoveryTab) return;
-    if (tab === 'queued' && this.dirtyRowCount) await this.saveRunEdits(true);
-    this.recoveryTab = tab;
-    this.massPreview = null;
-    if (tab === 'queued') {
-      this.queuedPage = 0;
-      await this.loadQueued();
-    } else {
-      await this.loadFailures();
-    }
+    if (tab === this.recoveryTab || this.recoverySwitchingTo) return;
+    this.recoverySwitchingTo = tab;
     this.cdr.detectChanges();
+    try {
+      if (tab === 'queued' && this.dirtyRowCount) await this.saveRunEdits(true);
+      this.recoveryTab = tab;
+      this.massPreview = null;
+      if (tab === 'queued') {
+        this.queuedPage = 0;
+        await this.loadQueued();
+      } else {
+        await this.loadFailures();
+      }
+    } finally {
+      this.recoverySwitchingTo = null;
+      this.cdr.detectChanges();
+    }
   }
 
   showQueued(): void {
@@ -3631,6 +3757,7 @@ onReviewPanelDragEnd(): void {
       this.queuedTotal = res.total || 0;
       this.queuedWaiting = res.waitingTotal || 0;
       this.queuedEditedTotal = res.editedTotal || 0;
+      this.queuedDiscardableTotal = res.discardableTotal || 0;
     } catch (e: any) {
       this.toastr.error(e?.message || 'Could not load the queued records.', 'Recovery');
     } finally {
@@ -3643,6 +3770,61 @@ onReviewPanelDragEnd(): void {
     return this.columnsForJob(row.jobIdx)
       .slice(0, 4)
       .map((c: any) => ({ label: c.sourceField, value: this.formatCellValue(row.record?.[c.sourceField]) }));
+  }
+
+  discardConfirm: { all: boolean; row?: any; count: number } | null = null;
+
+  requestDiscard(row?: any): void {
+    if (!this.activeRun || this.isDiscarding || this.activeRun.status === 'running') return;
+    const count = row ? 1 : this.queuedDiscardableTotal;
+    if (!count) return;
+    this.discardConfirm = { all: !row, row, count };
+  }
+
+  cancelDiscard(): void {
+    if (!this.isDiscarding) this.discardConfirm = null;
+  }
+
+  async confirmDiscard(): Promise<void> {
+    const c = this.discardConfirm;
+    if (!c) return;
+    await this.discardQueued(c.all ? undefined : c.row);
+    this.discardConfirm = null;
+    this.cdr.detectChanges();
+  }
+
+  private async discardQueued(row?: any): Promise<void> {
+    if (!this.activeRun || this.isDiscarding || this.activeRun.status === 'running') return;
+    const all = !row;
+    if (!(all ? this.queuedDiscardableTotal : 1)) return;
+
+    this.isDiscarding = true;
+    this.discardingKey = all ? null : this.rowKey(row);
+    this.cdr.detectChanges();
+    try {
+      const body = all
+        ? { allMatching: true, jobIdx: this.failureJobIdx, search: this.failureSearch.trim(), editedOnly: this.queuedFilter === 'edited' }
+        : { rows: [{ jobIdx: row.jobIdx, rowIdx: row.rowIdx }] };
+      const res = await this.runApi(`/api/runs/${encodeURIComponent(this.activeRun.runId)}/records/discard`, {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      const n = res.rowsDiscarded || 0;
+      await this.refreshActiveRun();
+      if (n > 0) {
+        this.changeBanner = { title: 'Moved back to Failed', rows: n, unblocked: res.rowsReblocked || 0, kind: 'discard' };
+      } else {
+        this.toastr.info('Those records cannot be discarded (they were never failed), so they stay queued.', 'Recovery');
+      }
+      if (this.queuedPage > 0 && this.queuedTotal - n <= this.queuedPage * this.failurePageSize) this.queuedPage -= 1;
+      await this.loadFailures(); // reloads the Failed list and, while the Ready tab is open, the queued list too
+    } catch (e: any) {
+      this.toastr.error(e?.message || 'Could not discard the records.', 'Recovery');
+    } finally {
+      this.isDiscarding = false;
+      this.discardingKey = null;
+      this.cdr.detectChanges();
+    }
   }
 
   requestMassUpdate(field: string, value: string): void {
@@ -3681,7 +3863,6 @@ onReviewPanelDragEnd(): void {
     }
   }
 
-  /** % of all rows in the run that already succeeded (drives the progress ring). */
   get successPct(): number {
     const c = this.activeRun?.counts || {};
     const total = (c.success || 0) + (c.error || 0) + (c.skipped || 0) + (c.pending || 0);
@@ -3762,6 +3943,7 @@ onReviewPanelDragEnd(): void {
   }
 
   clearFailureFilter(): void {
+    this.clearSelection();
     this.massPreview = null;
     this.queuedPage = 0;
     this.failureSearch = '';
@@ -3851,7 +4033,6 @@ onReviewPanelDragEnd(): void {
     return this.recoverableRuns.some((r) => r.runId !== this.activeRun?.runId);
   }
 
-  /** Dropdown options: the recoverable runs, plus the open run if the server list does not contain it. */
   get recoverableOptions(): any[] {
     const list = this.recoverableRuns;
     return this.activeRun && !list.some((r) => r.runId === this.activeRun.runId) ? [this.activeRun, ...list] : list;
@@ -3862,7 +4043,6 @@ onReviewPanelDragEnd(): void {
       const { runs } = await this.runApi('/api/runs/recoverable');
       this.recoverableRuns = runs || [];
     } catch {
-      // keep the previous list on a transient error
     } finally {
       this.cdr.detectChanges();
     }
@@ -3909,6 +4089,7 @@ onReviewPanelDragEnd(): void {
         this.runApi(`/api/runs/${encodeURIComponent(runId)}`),
         this.refreshRecoverableRuns()
       ]);
+      this.clearSelection();
       this.activeRun = detail;
       this.scheduleLockRefresh();
       this.runJobs = detail.jobColumns || [];
@@ -3947,7 +4128,6 @@ onReviewPanelDragEnd(): void {
     }
   }
 
-  /** The server no longer has this run (cleaned up, other folder, other account): stop offering Retry/Resume for it. */
   private handleStaleRun(runId?: string): void {
     this.forgetRun();
     if (!runId || this.currentRunId === runId) {
@@ -3956,6 +4136,7 @@ onReviewPanelDragEnd(): void {
       this.canRetryFailed = false;
     }
     this.activeRun = null;
+    this.clearSelection();
     this.showRecoveryPanel = false;
     this.recoverableRuns = this.recoverableRuns.filter((r) => r.runId !== runId);
     this.toastr.warning(
@@ -3980,7 +4161,6 @@ onReviewPanelDragEnd(): void {
       this.failureRows = (res.rows || []).map((r: any) => ({ ...r, _edited: {}, _orig: {}, _dirty: false, _info: this.explainError(r.error) }));
       this.failureTotal = res.total || 0;
       this.failureGroups = (res.groups || []).map((g: any) => ({ ...g, _info: this.explainError(g.message), _field: this.guessGroupField(g) }));
-      // The selected error group has no rows left (all fixed / re-queued): drop the filter instead of showing an empty list.
       if (this.failureGroupKey && this.failureTotal === 0 && !this.failureGroups.some((g) => g.key === this.failureGroupKey)) {
         this.failureGroupKey = '';
         this.isLoadingFailures = false;
@@ -4010,6 +4190,7 @@ onReviewPanelDragEnd(): void {
     this.failureSearch = value;
     clearTimeout(this.failureSearchTimer);
     this.failureSearchTimer = setTimeout(() => {
+      this.clearSelection();
       this.massPreview = null;
       this.queuedPage = 0;
       this.failurePage = 0;
@@ -4020,6 +4201,7 @@ onReviewPanelDragEnd(): void {
   async onFailureJobChange(value: string): Promise<void> {
     this.failureJobIdx = value === '' ? null : Number(value);
     this.failureGroupKey = '';
+    this.clearSelection();
     this.massPreview = null;
     this.queuedPage = 0;
     this.failurePage = 0;
@@ -4031,6 +4213,7 @@ onReviewPanelDragEnd(): void {
     this.queuedPage = 0;
     this.failureJobIdx = group.jobIdx;
     this.failureGroupKey = group.key;
+    this.clearSelection();
     this.failureSearch = '';
     this.failurePage = 0;
     void this.loadFailures();
@@ -4044,7 +4227,6 @@ onReviewPanelDragEnd(): void {
     await this.loadFailures();
   }
 
-  /** The CRM usually names the offending field in the error text: highlight those cells like the validation grid. */
   hasRunCellError(row: any, col: any): boolean {
     const text = String(row?.error || '').toLowerCase();
     if (!text) return false;
@@ -4115,14 +4297,14 @@ onReviewPanelDragEnd(): void {
     this.resumeMigration(includeFailed);
   }
 
-  async retryFromPanel(): Promise<void> {
+  async retryFromPanel(onlyQueued = false): Promise<void> {
     if (!this.activeRun) return;
     if (this.dirtyRowCount) await this.saveRunEdits(true);
     this.showRecoveryPanel = false;
     this.currentRunId = this.activeRun.runId;
-    this.globalLoadingText = 'Retrying failed records...';
-    this.globalLoadingSubText = 'Only failed and corrected records are re-sent.';
-    this.retryFailedRows();
+    this.globalLoadingText = 'Retrying records...';
+    this.globalLoadingSubText = onlyQueued ? 'Only the records marked ready to retry are re-sent.' : 'Only failed and corrected records are re-sent.';
+    this.retryFailedRows(onlyQueued);
   }
 
   async restartFromPanel(): Promise<void> {
@@ -4167,10 +4349,6 @@ onReviewPanelDragEnd(): void {
 
   private lockRefreshTimer: any = null;
 
-  /**
-   * After a backend crash the dead session's lock lapses on its own (~30s). Re-check the run when it does, so
-   * Resume appears without the user having to reload. A genuinely live run is re-checked the same way.
-   */
   private scheduleLockRefresh(): void {
     clearTimeout(this.lockRefreshTimer);
     const wait = this.activeRun?.lockRemainingSec || 0;
@@ -4186,7 +4364,6 @@ onReviewPanelDragEnd(): void {
     }
   }
 
-  /** True when the panel is closed but the current run still has something to resume / retry. */
   get canReopenRecovery(): boolean {
     return !this.showRecoveryPanel && !this.isGlobalLoading && !!this.currentRunId && (this.canResume || this.canRetryFailed);
   }
@@ -4200,7 +4377,6 @@ onReviewPanelDragEnd(): void {
     this.recoveryMinimized = false;
   }
 
-  /** Dismiss the panel. Unsaved cell edits are discarded, so ask first when there are any. */
   async cancelRecoveryPanel(): Promise<void> {
     const dirty = this.dirtyRowCount;
     if (dirty > 0) {
@@ -4223,7 +4399,6 @@ onReviewPanelDragEnd(): void {
     this.cdr.detectChanges();
   }
 
-  /** Always reloads from the server so counts and failed rows are current after a retry / resume. */
   async reopenRecoveryPanel(): Promise<void> {
     if (this.currentRunId) await this.openRunRecovery(this.currentRunId);
   }
@@ -4238,7 +4413,6 @@ onReviewPanelDragEnd(): void {
 
   positionRecoveryPanel(): void {
     this.recoveryExpanded = false;
-    // Match the CSS size (min(1280px, 96vw) x min(90vh, 860px)) so the panel starts centred and never off-screen.
     const w = Math.min(1280, window.innerWidth * 0.96);
     const h = Math.min(860, window.innerHeight * 0.9);
     this.recoveryLeft = Math.max(12, (window.innerWidth - w) / 2);

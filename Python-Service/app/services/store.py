@@ -11,7 +11,6 @@ from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-# Absolute path; set SURESHIFT_RUNS_DIR so a restart from another working directory still finds old runs.
 BASE_RUNS_DIR = os.path.abspath(os.environ.get("SURESHIFT_RUNS_DIR") or os.path.join(os.getcwd(), "SureShift_staging_databases", "runs"))
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _STRIPPED_REQUEST_KEYS = {"authToken", "sourceRecords"}
@@ -49,6 +48,11 @@ CREATE TABLE IF NOT EXISTS pending_revert (
 CREATE TABLE IF NOT EXISTS ref_raw (
     job_idx INTEGER NOT NULL, row_idx INTEGER NOT NULL, raw_json TEXT NOT NULL,
     PRIMARY KEY (job_idx, row_idx)
+);
+CREATE TABLE IF NOT EXISTS row_prior (
+    job_idx INTEGER NOT NULL, pass_no INTEGER NOT NULL, row_idx INTEGER NOT NULL,
+    state TEXT NOT NULL, error TEXT, skip_reason TEXT, source_key TEXT,
+    PRIMARY KEY (job_idx, pass_no, row_idx)
 );
 CREATE TABLE IF NOT EXISTS row_edit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, job_idx INTEGER NOT NULL, row_idx INTEGER NOT NULL,
@@ -94,11 +98,6 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, default=str)
 
 
-# ---------------------------------------------------------------------------------------------
-# Error grouping. CRM messages embed row-specific data (record ids, emails, values, numbers), so grouping by the
-# raw text produced one "group" per row. error_pattern() replaces that data with placeholders so every row that
-# failed for the same reason lands in ONE group; field names and error codes are kept so different problems stay apart.
-# ---------------------------------------------------------------------------------------------
 _P_PICKLIST = re.compile(r"(bad value for restricted picklist field:)\s*.*", re.I | re.S)
 _P_TOO_LARGE = re.compile(r"(data value too large:)\s*.*?(\(max length=)", re.I | re.S)
 _P_FROM_STRING = re.compile(r'(from String )"[^"]*"', re.I)
@@ -577,15 +576,17 @@ class RunStore:
         return success, errors, skipped
 
     # ------------------------------------------------------------------ retry-failed fork
-    def fork_for_retry(self) -> "RunStore":
+    def fork_for_retry(self, only_pending: bool = False) -> "RunStore":
         """
         Child run = full copy of this run (source rows, queue, finished rows) with failed rows reset to
         pending. Because finished rows are carried over, the child's final report is the merged latest
         state of every row, and the passes re-run in the original order.
         """
-        failed = self._conn.execute("SELECT COUNT(*) AS n FROM row_state WHERE state IN ('error','pending')").fetchone()["n"]
+        # only_pending: the user picked specific failed rows (they are 'pending' now); the others must stay failed.
+        states = "('pending')" if only_pending else "('error','pending')"
+        failed = self._conn.execute(f"SELECT COUNT(*) AS n FROM row_state WHERE state IN {states}").fetchone()["n"]
         if not failed:
-            raise ValueError("This run has no failed rows to retry.")
+            raise ValueError("This run has no records waiting to be retried." if only_pending else "This run has no failed rows to retry.")
 
         new_id = f"run_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
         path = _db_path(self.actor_id, new_id)
@@ -603,11 +604,13 @@ class RunStore:
                 "lock_expires_at=NULL, created_at=?, updated_at=?",
                 (new_id, self.actor_id, self.run_id, now_iso, now_iso),
             )
-            c.execute(
-                "UPDATE row_state SET state='pending', error=NULL, skip_reason=NULL, attempts=0, updated_at=? "
-                "WHERE state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')",
-                (now,),
-            )
+            if not only_pending:
+                RunStore._stash_prior(c, "state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')", ())
+                c.execute(
+                    "UPDATE row_state SET state='pending', error=NULL, skip_reason=NULL, attempts=0, updated_at=? "
+                    "WHERE state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')",
+                    (now,),
+                )
             c.execute("UPDATE job SET bulk_job_id=NULL, bulk_rows=NULL")
             for r in c.execute("SELECT DISTINCT job_idx FROM pending_revert").fetchall():
                 c.execute("DELETE FROM kv WHERE key=?", (f"done:{r['job_idx']}",))
@@ -683,8 +686,9 @@ class RunStore:
         return out
 
     # ------------------------------------------------------------------ failed rows: read, edit, requeue
-    def failed_rows(self, job_idx: Optional[int], state: str, search: str, offset: int, limit: int,
-                    error_key: str = "") -> Tuple[int, List[Dict[str, Any]]]:
+    @staticmethod
+    def _failed_base(job_idx: Optional[int], state: str, search: str, error_key: str) -> Tuple[str, List[Any]]:
+        """Shared FROM/WHERE for the failed-rows list and the "select everything matching" requeue."""
         conds = ["r.state='skipped' AND r.skip_reason LIKE 'parent_failed%'"] if state == "blocked" else ["r.state='error'"]
         params: List[Any] = []
         if job_idx is not None:
@@ -699,6 +703,11 @@ class RunStore:
             params += [like, like]
         base = ("FROM row_state r JOIN extracted e ON e.job_idx=r.job_idx AND e.row_idx=r.row_idx WHERE "
                 + " AND ".join(conds))
+        return base, params
+
+    def failed_rows(self, job_idx: Optional[int], state: str, search: str, offset: int, limit: int,
+                    error_key: str = "") -> Tuple[int, List[Dict[str, Any]]]:
+        base, params = self._failed_base(job_idx, state, search, error_key)
         total = self._conn.execute(f"SELECT COUNT(*) AS n {base}", params).fetchone()["n"]
         rows = self._conn.execute(
             "SELECT r.job_idx, r.pass_no, r.row_idx, r.state, r.error, r.skip_reason, r.attempts, e.source_json "
@@ -737,13 +746,14 @@ class RunStore:
             ).fetchone()["n"]
 
         waiting_total = count("")
+        discardable_total = count(f" AND {self._PRIOR_EXISTS}")
         edited_total = count(f" AND {edited_sql}")
         where = f" AND {edited_sql}" if edited_only else ""
         total = edited_total if edited_only else waiting_total
 
         rows = self._conn.execute(
             "SELECT r.job_idx, r.row_idx, MIN(r.pass_no) AS pass_no, MAX(r.attempts) AS attempts, "
-            f"e.source_json, {edited_sql} AS has_edit {base}{where} "
+            f"e.source_json, {edited_sql} AS has_edit, MAX({self._PRIOR_EXISTS}) AS can_discard {base}{where} "
             "GROUP BY r.job_idx, r.row_idx ORDER BY has_edit DESC, r.job_idx, r.row_idx LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
@@ -770,11 +780,11 @@ class RunStore:
                 rec.pop(k, None)
             changes = [c for c in edits_by_row.get((r["job_idx"], r["row_idx"]), {}).values() if (c["from"] or "") != (c["to"] or "")]
             out.append({"jobIdx": r["job_idx"], "passNo": r["pass_no"], "rowIdx": r["row_idx"],
-                        "attempts": r["attempts"], "edits": changes, "record": rec})
-        return {"total": total, "waitingTotal": waiting_total, "editedTotal": edited_total, "rows": out}
+                        "attempts": r["attempts"], "edits": changes, "record": rec, "canDiscard": bool(r["can_discard"])})
+        return {"total": total, "waitingTotal": waiting_total, "editedTotal": edited_total,
+                "discardableTotal": discardable_total, "rows": out}
 
     def failure_groups(self, job_idx: Optional[int]) -> List[Dict[str, Any]]:
-        # One group per (job, error PATTERN): rows that failed for the same reason are counted together.
         sql = "SELECT job_idx, err_pat(error) AS message, COUNT(*) AS n FROM row_state WHERE state='error'"
         params: List[Any] = []
         if job_idx is not None:
@@ -826,6 +836,7 @@ class RunStore:
                     continue
                 c.execute("UPDATE extracted SET source_json=? WHERE job_idx=? AND row_idx=?", (_dumps(rec), job_idx, row_idx))
                 changed_rows += 1
+                self._stash_prior(c, "job_idx=? AND row_idx=? AND state IN ('error','skipped')", (job_idx, row_idx))
                 cur = c.execute(
                     "UPDATE row_state SET state='pending', error=NULL, skip_reason=NULL, attempts=0, updated_at=? "
                     "WHERE job_idx=? AND row_idx=? AND state IN ('error','skipped')", (now, job_idx, row_idx))
@@ -835,22 +846,152 @@ class RunStore:
                     keys_by_job.setdefault(job_idx, set()).add(k["source_key"])
                 touched_jobs.add(job_idx)
 
+            unblocked = self._release_children(c, keys_by_job, touched_jobs, now)
+
+        return {"rowsChanged": changed_rows, "rowsRequeued": requeued, "rowsUnblocked": unblocked, "jobs": sorted(touched_jobs)}
+
+    @staticmethod
+    def _release_children(c: sqlite3.Connection, keys_by_job: Dict[int, set], touched_jobs: set, now: float) -> int:
+        """
+        After rows were put back to 'pending': release the child rows that were blocked only by them, and re-open
+        the touched jobs (a finished job must be re-entered to send its re-queued rows; references are re-mapped).
+        """
+        unblocked = 0
+        for job_idx, keys in keys_by_job.items():
+            keys = list(keys)
+            for start in range(0, len(keys), 500):
+                chunk = keys[start:start + 500]
+                marks = ",".join("?" * len(chunk))
+                RunStore._stash_prior(
+                    c, f"job_idx=? AND state='skipped' AND skip_reason LIKE 'parent_failed%' AND source_key IN ({marks})",
+                    [job_idx, *chunk])
+                cur = c.execute(
+                    "UPDATE row_state SET state='pending', skip_reason=NULL, attempts=0, updated_at=? "
+                    f"WHERE job_idx=? AND state='skipped' AND skip_reason LIKE 'parent_failed%' AND source_key IN ({marks})",
+                    [now, job_idx, *chunk])
+                unblocked += cur.rowcount
+        for job_idx in touched_jobs:
+            c.execute("DELETE FROM kv WHERE key IN (?, ?)", (f"done:{job_idx}", f"files_done:{job_idx}"))
+            c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, '1')", (f"refresh_refs:{job_idx}",))
+        return unblocked
+
+    def requeue_rows(self, rows: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
+        """
+        Move the given FAILED rows (job_idx, row_idx) to 'pending' without touching their data, so the next
+        Retry (onlyQueued) / Resume sends exactly these. Rows that are not in 'error' are left alone.
+        """
+        pairs = sorted({(int(j), int(r)) for j, r in rows})
+        requeued = 0
+        touched: set = set()
+        keys_by_job: Dict[int, set] = {}
+        now = time.time()
+        with self._tx() as c:
+            for job_idx, row_idx in pairs:
+                self._stash_prior(c, "job_idx=? AND row_idx=? AND state='error'", (job_idx, row_idx))
+                cur = c.execute(
+                    "UPDATE row_state SET state='pending', error=NULL, skip_reason=NULL, attempts=0, updated_at=? "
+                    "WHERE job_idx=? AND row_idx=? AND state='error'", (now, job_idx, row_idx))
+                if not cur.rowcount:
+                    continue
+                requeued += cur.rowcount
+                touched.add(job_idx)
+                for k in c.execute("SELECT DISTINCT source_key FROM row_state WHERE job_idx=? AND row_idx=? AND source_key != ''",
+                                   (job_idx, row_idx)).fetchall():
+                    keys_by_job.setdefault(job_idx, set()).add(k["source_key"])
+            unblocked = self._release_children(c, keys_by_job, touched, now)
+        return {"rowsRequeued": requeued, "rowsUnblocked": unblocked, "jobs": sorted(touched)}
+
+    @staticmethod
+    def _stash_prior(c: sqlite3.Connection, where: str, params: Sequence[Any]) -> None:
+        """
+        Remember how rows looked BEFORE they were moved to 'pending' (their error / skip reason), so a user can
+        discard them from "Ready to retry" and get them back in "Failed" exactly as they were.
+        Call this BEFORE the UPDATE that clears the error.
+        """
+        c.execute(
+            "INSERT OR REPLACE INTO row_prior (job_idx, pass_no, row_idx, state, error, skip_reason, source_key) "
+            f"SELECT job_idx, pass_no, row_idx, state, error, skip_reason, source_key FROM row_state WHERE {where}",
+            list(params))
+
+    _PRIOR_EXISTS = ("EXISTS (SELECT 1 FROM row_prior p WHERE p.job_idx=r.job_idx AND p.row_idx=r.row_idx "
+                     "AND p.pass_no=r.pass_no)")
+
+    def discard_rows(self, rows: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
+        """
+        Undo "Ready to retry" for the given (job_idx, row_idx) pairs: each queued row goes back to the state it had
+        before it was queued ('error' with its original message, or 'skipped' while its parent is failed). Values the
+        user corrected are KEPT (and stay audited), so the row can be edited again in the Failed list.
+        Rows that were never failed (e.g. still waiting because a run was interrupted) cannot be discarded.
+        A failed parent that comes back also re-blocks the children that were released together with it.
+        """
+        pairs = sorted({(int(j), int(r)) for j, r in rows})
+        reblocked = 0
+        done_pairs: set = set()   # distinct records (a record can sit in several passes)
+        touched: set = set()
+        keys_by_job: Dict[int, set] = {}
+        now = time.time()
+        with self._tx() as c:
+            for job_idx, row_idx in pairs:
+                found = c.execute(
+                    "SELECT r.pass_no, r.source_key, p.state AS p_state, p.error AS p_error, p.skip_reason AS p_skip "
+                    "FROM row_state r JOIN row_prior p ON p.job_idx=r.job_idx AND p.pass_no=r.pass_no AND p.row_idx=r.row_idx "
+                    "WHERE r.job_idx=? AND r.row_idx=? AND r.state='pending'", (job_idx, row_idx)).fetchall()
+                for f in found:
+                    error = f["p_error"]
+                    if f["p_state"] == "error" and not error:
+                        error = "Moved back from Ready to retry (the original error message was not recorded)."
+                    c.execute(
+                        "UPDATE row_state SET state=?, error=?, skip_reason=?, attempts=0, updated_at=? "
+                        "WHERE job_idx=? AND pass_no=? AND row_idx=? AND state='pending'",
+                        (f["p_state"], error, f["p_skip"], now, job_idx, f["pass_no"], row_idx))
+                    c.execute("DELETE FROM row_prior WHERE job_idx=? AND pass_no=? AND row_idx=?", (job_idx, f["pass_no"], row_idx))
+                    done_pairs.add((job_idx, row_idx))
+                    touched.add(job_idx)
+                    if f["p_state"] == "error" and f["source_key"]:
+                        keys_by_job.setdefault(job_idx, set()).add(f["source_key"])
+
+            # children that were released together with a parent that is failed again must be blocked again
             for job_idx, keys in keys_by_job.items():
                 keys = list(keys)
                 for start in range(0, len(keys), 500):
                     chunk = keys[start:start + 500]
                     marks = ",".join("?" * len(chunk))
-                    cur = c.execute(
-                        "UPDATE row_state SET state='pending', skip_reason=NULL, attempts=0, updated_at=? "
-                        f"WHERE job_idx=? AND state='skipped' AND skip_reason LIKE 'parent_failed%' AND source_key IN ({marks})",
-                        [now, job_idx, *chunk])
-                    unblocked += cur.rowcount
+                    for ch in c.execute(
+                            "SELECT r.pass_no, r.row_idx, p.error AS p_error, p.skip_reason AS p_skip "
+                            "FROM row_state r JOIN row_prior p ON p.job_idx=r.job_idx AND p.pass_no=r.pass_no AND p.row_idx=r.row_idx "
+                            f"WHERE r.job_idx=? AND r.state='pending' AND p.state='skipped' AND r.source_key IN ({marks})",
+                            [job_idx, *chunk]).fetchall():
+                        c.execute(
+                            "UPDATE row_state SET state='skipped', error=?, skip_reason=?, attempts=0, updated_at=? "
+                            "WHERE job_idx=? AND pass_no=? AND row_idx=? AND state='pending'",
+                            (ch["p_error"], ch["p_skip"], now, job_idx, ch["pass_no"], ch["row_idx"]))
+                        c.execute("DELETE FROM row_prior WHERE job_idx=? AND pass_no=? AND row_idx=?", (job_idx, ch["pass_no"], ch["row_idx"]))
+                        reblocked += 1
+        return {"rowsDiscarded": len(done_pairs), "rowsReblocked": reblocked, "requested": len(pairs), "jobs": sorted(touched)}
 
-            for job_idx in touched_jobs:  # a finished job must be re-entered to send its re-queued rows
-                c.execute("DELETE FROM kv WHERE key IN (?, ?)", (f"done:{job_idx}", f"files_done:{job_idx}"))
-                c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, '1')", (f"refresh_refs:{job_idx}",))
+    def discard_matching(self, job_idx: Optional[int], search: str, edited_only: bool) -> Dict[str, Any]:
+        """discard_rows for EVERY queued row matching the Ready-list filter (all pages)."""
+        conds = ["r.state='pending'", self._PRIOR_EXISTS]
+        params: List[Any] = []
+        if job_idx is not None:
+            conds.append("r.job_idx=?")
+            params.append(job_idx)
+        if search:
+            conds.append("e.source_json LIKE ?")
+            params.append(f"%{search}%")
+        if edited_only:
+            conds.append("EXISTS (SELECT 1 FROM row_edit x WHERE x.job_idx=r.job_idx AND x.row_idx=r.row_idx "
+                         "AND COALESCE(x.old_value,'') != COALESCE(x.new_value,''))")
+        found = self._conn.execute(
+            "SELECT DISTINCT r.job_idx, r.row_idx FROM row_state r JOIN extracted e ON e.job_idx=r.job_idx AND e.row_idx=r.row_idx "
+            "WHERE " + " AND ".join(conds), params).fetchall()
+        return self.discard_rows([(r["job_idx"], r["row_idx"]) for r in found])
 
-        return {"rowsChanged": changed_rows, "rowsRequeued": requeued, "rowsUnblocked": unblocked, "jobs": sorted(touched_jobs)}
+    def requeue_matching(self, job_idx: Optional[int], search: str, error_key: str) -> Dict[str, Any]:
+        """requeue_rows for EVERY failed row matching the failed-list filter (all pages)."""
+        base, params = self._failed_base(job_idx, "error", search, error_key)
+        found = self._conn.execute(f"SELECT DISTINCT r.job_idx, r.row_idx {base}", params).fetchall()
+        return self.requeue_rows([(r["job_idx"], r["row_idx"]) for r in found])
 
     def mass_update(self, job_idx: int, field: str, value: Any, error_contains: str, editor: str,
                     error_key: str = "") -> Dict[str, Any]:
@@ -898,6 +1039,7 @@ class RunStore:
         with self._tx() as c:
             jobs = [r["job_idx"] for r in c.execute(
                 "SELECT DISTINCT job_idx FROM row_state WHERE state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')").fetchall()]
+            self._stash_prior(c, "state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')", ())
             cur = c.execute(
                 "UPDATE row_state SET state='pending', error=NULL, skip_reason=NULL, attempts=0, updated_at=? "
                 "WHERE state='error' OR (state='skipped' AND skip_reason LIKE 'parent_failed%')", (now,))
