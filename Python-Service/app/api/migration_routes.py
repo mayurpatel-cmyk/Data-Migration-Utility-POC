@@ -576,6 +576,14 @@ async def websocket_migration(ws: WebSocket):
                 keyedJobs=[i for i, q in enumerate(execution_queue) if q.get("correlationField")],
             )
         store.add_participant(user_id, user_name or user_email, mode)
+        if mode == "start":
+            store.set_run_meta(runKind="migration", retryRound=0, resumeCount=0)
+        elif mode == "restart":
+            store.set_run_meta(runKind="restart", retryRound=0, resumeCount=0)
+        elif mode == "retry_failed":
+            store.set_run_meta(runKind="retry")  # the round number was set when the retry run was created
+        elif mode == "resume":
+            store.set_run_meta(resumeCount=int(run_meta.get("resumeCount") or 0) + 1)
         if mode == "retry_failed":
             _c = store.counts()
             retry_baseline_success = _c.get("success", 0)
@@ -903,6 +911,14 @@ async def websocket_migration(ws: WebSocket):
             last_job = execution_queue[last_idx]
             last_meta = store.get_job_meta(last_idx)
             report_urls = {}
+            retry_summary = None
+            if mode == "retry_failed":
+                retry_summary = {
+                    "attempted": retry_attempted,
+                    "recovered": max(0, len(safe_success_data) - retry_baseline_success),
+                    "stillFailing": len(formatted_errors),
+                }
+            _kind = store.run_kind_info()
             try:
                 await websocket.send_json({"log": "Generating Audit Reports (PDF & CSV)...", "status": "Finalizing"})
                 report_urls = AuditService.generate_and_save_reports(
@@ -921,18 +937,18 @@ async def websocket_migration(ws: WebSocket):
                     user_name=user_name,
                     source_mode=last_meta.get("sourceMode", "Direct API Sync"),
                     actual_query_used=last_meta.get("actualQueryUsed"),
+                    run_id=store.run_id,
+                    run_kind=_kind["runKind"],
+                    retry_round=_kind["retryRound"],
+                    parent_run_id=store._run_row()["parent_run_id"],
+                    resume_count=_kind["resumeCount"],
+                    retry_summary=retry_summary,
                 )
             except Exception:
                 logger.exception("Failed to generate/persist migration reports for run %s", store.run_id)
                 report_urls = {}
 
-            retry_summary = None
-            if mode == "retry_failed":
-                retry_summary = {
-                    "attempted": retry_attempted,
-                    "recovered": max(0, len(safe_success_data) - retry_baseline_success),
-                    "stillFailing": len(formatted_errors),
-                }
+            if retry_summary:
                 await websocket.send_json({
                     "log": f"Retry result: {retry_summary['recovered']} of {retry_summary['attempted']} record(s) recovered, "
                            f"{retry_summary['stillFailing']} still failing.",

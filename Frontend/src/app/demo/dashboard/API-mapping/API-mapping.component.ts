@@ -3569,6 +3569,7 @@ onReviewPanelDragEnd(): void {
   toggleRowSelection(row: any, checked: boolean): void {
     if (this.selectAllMatching) {
       if (checked) return;
+      // Un-ticking one row leaves "all matching" mode: keep the rest of this page selected.
       this.selectAllMatching = false;
       this.selectedFailed = new Set(this.failureRows.map((r) => this.rowKey(r)));
     }
@@ -4038,6 +4039,23 @@ onReviewPanelDragEnd(): void {
     return this.activeRun && !list.some((r) => r.runId === this.activeRun.runId) ? [this.activeRun, ...list] : list;
   }
 
+  runKindLabel(r: any): string {
+    switch (r?.runKind) {
+      case 'retry': return `Retry #${r.retryRound || 1}`;
+      case 'restart': return 'Restart';
+      default: return 'Migration';
+    }
+  }
+
+  runOptionLabel(r: any): string {
+    const crm = (v: string) => (v ? v.charAt(0).toUpperCase() + v.slice(1) : '?');
+    const objects: string[] = (r?.jobTargets || []).filter(Boolean);
+    const objText = objects.length > 2 ? `${objects.slice(0, 2).join(', ')} +${objects.length - 2}` : objects.join(', ');
+    const route = r?.sourceCrm || r?.targetCrm ? `${crm(r.sourceCrm)} → ${crm(r.targetCrm)}` : '';
+    const who = r?.isMine ? 'you' : r?.startedBy?.name || 'another user';
+    return [this.runKindLabel(r), route, objText, r?.status, who, r?.runId].filter(Boolean).join(' · ');
+  }
+
   async refreshRecoverableRuns(): Promise<void> {
     try {
       const { runs } = await this.runApi('/api/runs/recoverable');
@@ -4063,7 +4081,6 @@ onReviewPanelDragEnd(): void {
       this.pendingRecovery = candidate;
       this.openPendingRecovery();
     } catch {
-      // offline / server restarting: the next visit asks again
     } finally {
       this.cdr.detectChanges();
     }

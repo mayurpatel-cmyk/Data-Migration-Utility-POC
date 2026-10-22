@@ -300,6 +300,7 @@ class RunStore:
             "counts": counts,
             "resumable": status in ("interrupted", "cancelled"),
             "retryable": status == "completed" and (counts.get("error", 0) > 0 or counts.get("pending", 0) > 0),
+            **self.run_kind_info(row, meta),
             "startedBy": meta.get("startedBy"),
             "participants": (meta.get("participants") or [])[-5:],
             "sourceCrm": meta.get("sourceCrm"),
@@ -597,6 +598,8 @@ class RunStore:
             dst.close()
 
         child = RunStore(self.actor_id, new_id, path)
+        parent_round = int(self.run_meta().get("retryRound") or (1 if self.run_kind_info()["runKind"] == "retry" else 0))
+        child.set_run_meta(runKind="retry", retryRound=parent_round + 1, resumeCount=0)  # label it before anything else sees it
         now_iso, now = _now_iso(), time.time()
         with child._tx() as c:
             c.execute(
@@ -628,6 +631,25 @@ class RunStore:
         meta = self.run_meta()
         meta.update(values)
         self.set_kv("run_meta", _dumps(meta))
+
+    def run_kind_info(self, row: Optional[sqlite3.Row] = None, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        What kind of run this is, for the recovery panel and the audit report:
+          migration = the original run, retry = child run that re-sends failed / corrected rows (round 1, 2, ...),
+          restart = "start over" run. Runs created before this was recorded are inferred from their history.
+        """
+        row = row or self._run_row()
+        meta = meta if meta is not None else self.run_meta()
+        kind = meta.get("runKind")
+        if not kind:
+            kind = "migration"
+            if row["parent_run_id"]:
+                actions = [p.get("action") for p in (meta.get("participants") or [])]
+                last = next((a for a in reversed(actions) if a in ("retry_failed", "restart")), None)
+                kind = "restart" if last == "restart" else "retry"
+        retry_round = int(meta.get("retryRound") or (1 if kind == "retry" else 0))
+        return {"runKind": kind, "retryRound": retry_round, "resumeCount": int(meta.get("resumeCount") or 0),
+                "retryOf": row["parent_run_id"] if kind == "retry" else None}
 
     def add_participant(self, user_id: str, name: Optional[str], action: str) -> None:
         meta = self.run_meta()
@@ -1056,6 +1078,7 @@ class RunStore:
             )
             for kv in self._conn.execute("SELECT key, value FROM kv WHERE key LIKE 'csv:%' OR key='run_meta'").fetchall():
                 c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (kv["key"], kv["value"]))
+        child.set_run_meta(runKind="restart", retryRound=0, resumeCount=0)
         return child  # the caller marks the parent 'superseded' once it has passed its safety checks
 
     def requeue_failed(self) -> int:

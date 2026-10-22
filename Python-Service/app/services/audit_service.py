@@ -320,7 +320,7 @@ class AuditService:
     # MIGRATION REPORTS
     # ==========================================
     @staticmethod
-    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, migration_mode: str = None, source_mode: str = None, actual_query_used: str = None):
+    def generate_and_save_reports(user_id: str, session_id: str, source_crm: str, target_crm: str, target_object: str, success_data: list, error_data: list, auth_token: str, extraction_query: str = "", time_filter: dict = None, op_mode: str = "", user_email: str = None, user_name: str = None, migration_mode: str = None, source_mode: str = None, actual_query_used: str = None, run_id: str = None, run_kind: str = "migration", retry_round: int = 0, parent_run_id: str = None, resume_count: int = 0, retry_summary: dict = None):
         success_count = len(success_data)
         error_count = len(error_data)
         total = success_count + error_count
@@ -330,6 +330,21 @@ class AuditService:
 
         run_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M:%S %p UTC")
         migration_mode_display = migration_mode or ("CSV / Excel Upload" if (source_crm or "").lower() == "csv" else "Direct API Sync")
+
+        run_kind = (run_kind or "migration").lower()
+        is_retry = run_kind == "retry"
+        run_type_label = {
+            "migration": "Initial migration",
+            "retry": f"RETRY of failed records (round {retry_round or 1}) - not a new migration",
+            "restart": "Restarted migration (start over)",
+        }.get(run_kind, "Migration")
+        run_type_short = {"migration": "Migration", "retry": f"Retry #{retry_round or 1}", "restart": "Restart"}.get(run_kind, "Migration")
+        # Retries / restarts must not overwrite the report of the run they came from (same session id).
+        file_id = session_id
+        if run_kind == "retry":
+            file_id = f"{session_id}_retry{retry_round or 1}"
+        elif run_kind == "restart":
+            file_id = f"{session_id}_restart_{(run_id or '')[-8:] or 'run'}"
 
         effective_query = actual_query_used or AuditService._build_effective_query(source_crm, target_object, extraction_query, time_filter)
 
@@ -347,19 +362,45 @@ class AuditService:
             # --- WATERMARK ---
             pdf.set_font("Arial", "B", 40)
             pdf.set_text_color(240, 240, 240)  # Very light gray
-            pdf.text(25, 165, s("SureShift Migration"))
+            pdf.text(25, 165, s("SureShift Retry" if is_retry else "SureShift Migration"))
             pdf.set_text_color(0, 0, 0)
 
             # --- RUN DETAILS ---
             pdf.set_fill_color(245, 245, 245) # Light grey section header
             pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 8, txt=s(" Migration Run Details"), ln=True, fill=True)
+            pdf.cell(0, 8, txt=s(" Retry Run Details" if is_retry else " Migration Run Details"), ln=True, fill=True)
             pdf.set_font("Arial", "", 10)
             pdf.cell(95, 7, txt=s(f"  User Name: {user_name or 'N/A'}"))
             pdf.cell(95, 7, txt=s(f"  User Email: {user_email or 'N/A'}"), ln=True)
             pdf.cell(95, 7, txt=s(f"  Generated At: {run_timestamp}"))
             pdf.cell(95, 7, txt=s(f"  Operation Mode: {op_mode}"), ln=True)
-            pdf.ln(5)
+            pdf.cell(0, 7, txt=s(f"  Run Type: {run_type_label}"), ln=True)
+            if run_id:
+                pdf.cell(0, 7, txt=s(f"  Run ID: {run_id}"), ln=True)
+            if parent_run_id and run_kind in ("retry", "restart"):
+                pdf.cell(0, 7, txt=s(f"  {'Retried' if is_retry else 'Replaces'} Run: {parent_run_id}"), ln=True)
+            if resume_count:
+                pdf.cell(0, 7, txt=s(f"  Resumed After Interruption: {resume_count} time(s)"), ln=True)
+            pdf.ln(3)
+
+            if is_retry:
+                pdf.set_fill_color(255, 244, 214)
+                pdf.set_text_color(138, 83, 0)
+                pdf.set_font("Arial", "B", 10)
+                pdf.multi_cell(0, 6, txt=s(
+                    "  RETRY RUN: this report is for a retry, not a normal migration. Only records that failed earlier "
+                    "(or that were corrected) were sent again. Records that succeeded in earlier runs are carried over "
+                    "and counted in the totals below."), border=1, fill=True)
+                if retry_summary:
+                    pdf.set_font("Arial", "", 10)
+                    pdf.multi_cell(0, 6, txt=s(
+                        f"  This retry: {retry_summary.get('attempted', 0)} record(s) re-sent, "
+                        f"{retry_summary.get('recovered', 0)} recovered, {retry_summary.get('stillFailing', 0)} still failing."),
+                        border=1, fill=True)
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_fill_color(245, 245, 245)
+                pdf.ln(3)
+            pdf.ln(2)
 
             # --- MIGRATION SCOPE ---
             pdf.set_font("Arial", "B", 12)
@@ -410,10 +451,10 @@ class AuditService:
                     pdf.cell(140, 7, txt=s(item['category']), border=1)
                     pdf.cell(50, 7, txt=s(str(item['count'])), border=1, ln=True, align="C")
 
-            temp_pdf = os.path.join(tempfile.gettempdir(), f"{session_id}.pdf")
+            temp_pdf = os.path.join(tempfile.gettempdir(), f"{file_id}.pdf")
             pdf.output(temp_pdf)
 
-            pdf_filename = f"{session_id}.pdf"
+            pdf_filename = f"{file_id}.pdf"
             urls["pdf"] = AuditService._upload_file(
                 temp_pdf, f"{user_id}/{pdf_filename}",
                 content_type="application/pdf",
@@ -433,7 +474,7 @@ class AuditService:
             if success_count > 0:
                 fieldnames = list(success_data[0].keys())
                 urls["success_csv"] = AuditService._upload_csv(
-                    success_data, fieldnames, f"{user_id}/{session_id}_success.csv"
+                    success_data, fieldnames, f"{user_id}/{file_id}_success.csv"
                 )
         except Exception:
             logger.exception(
@@ -454,7 +495,7 @@ class AuditService:
 
                 fieldnames = ["Migration_Error_Message"] + [k for k in flat_errors[0].keys() if k != "Migration_Error_Message"]
                 urls["error_csv"] = AuditService._upload_csv(
-                    flat_errors, fieldnames, f"{user_id}/{session_id}_error.csv"
+                    flat_errors, fieldnames, f"{user_id}/{file_id}_error.csv"
                 )
         except Exception:
             logger.exception(
@@ -467,7 +508,7 @@ class AuditService:
         # ==========================================
         scoped_client = AuditService._scoped_client(auth_token)
 
-        scoped_client.table("migration_history").insert({
+        history_row = {
             "user_id": user_id,
             "session_id": session_id,
             "source_crm": source_crm,
@@ -482,7 +523,13 @@ class AuditService:
             "error_summary": error_summary,
             "migration_mode": migration_mode_display,
             "source_mode": source_mode,
-        }).execute()
+        }
+        optional_columns = {"run_type": run_kind, "retry_round": retry_round or None, "run_id": run_id, "parent_run_id": parent_run_id}
+        try:
+            scoped_client.table("migration_history").insert({**history_row, **optional_columns}).execute()
+        except Exception as exc:
+            logger.warning("[AUDIT] migration_history has no run_type columns yet (%s); saving the standard row.", exc)
+            scoped_client.table("migration_history").insert(history_row).execute()
 
         return urls
 

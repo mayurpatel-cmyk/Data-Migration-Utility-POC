@@ -994,6 +994,11 @@
   .rv-dlg .rv-mini-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: rvSpin .7s linear infinite; display: inline-block; }
   @keyframes rvFade { from { opacity: 0; } to { opacity: 1; } }
 
+  /* ---------- run kind chip ---------- */
+  .rv-kind { display: inline-block; font-size: .62rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; padding: 1px 8px; border-radius: 999px; margin-right: 6px; background: rgba(255, 255, 255, .18); color: #fff; }
+  .rv-kind[data-kind='retry'] { background: #f5a524; color: #3b2600; }
+  .rv-kind[data-kind='restart'] { background: #5aa9ff; color: #04213f; }
+
   /* ---------- discard from Ready to retry ---------- */
   .rv-qdiscard, .rv-discard-all {
     display: inline-flex; align-items: center; gap: 6px; border: 1px solid #f7c9cb; background: #fff; color: var(--rv-red);
@@ -2800,7 +2805,11 @@
           @if (activeRun && recoveryMinimized) { <span class="rv-mini-badge">{{ activeRun.counts?.error || 0 }} failed</span> }
         </div>
         @if (activeRun && !recoveryMinimized) {
-        <div class="rv-header-sub">Run <span class="font-monospace">{{ activeRun.runId }}</span> ·
+        <div class="rv-header-sub">
+          <span class="rv-kind" [attr.data-kind]="activeRun.runKind">{{ runKindLabel(activeRun) }}</span>
+          @if (activeRun.sourceCrm || activeRun.targetCrm) { {{ activeRun.sourceCrm | titlecase }} → {{ activeRun.targetCrm | titlecase }} · }
+          @if (activeRun.jobTargets?.length) { {{ activeRun.jobTargets.join(', ') }} · }
+           <span class="font-monospace">{{ activeRun.runId }}</span> ·
           started by {{ activeRun.isMine ? 'you' : (activeRun.startedBy?.name || activeRun.startedBy?.email || 'another user') }} ·
           last activity {{ activeRun.updatedAt | date: 'MMM d, h:mm a' }}</div>
         }
@@ -2906,7 +2915,7 @@
           <select class="form-select form-select-sm mt-1" (change)="openRunRecovery($any($event.target).value)">
             @for (r of recoverableOptions; track r.runId) {
             <option [value]="r.runId" [selected]="r.runId === activeRun.runId">
-              {{ r.runId }} · {{ r.status }} · {{ r.isMine ? 'you' : (r.startedBy?.name || 'another user') }}
+              {{ runOptionLabel(r) }}
             </option>
             }
           </select>
