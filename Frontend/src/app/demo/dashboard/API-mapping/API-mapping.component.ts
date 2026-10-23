@@ -253,6 +253,8 @@ isProfileDropdownOpen = false;
   jobStatus = 'Idle';
   logMessages: string[] = [];
   customQuery: string = '';
+  scopeSuggestions: { field: string; parent: string; count: number; query: string }[] = [];
+  private migratedParents: Record<string, number> = {};
   isDefaultQuery: boolean = true;
   queryError: string | null = null;
   isPreviewLoading = false;
@@ -356,6 +358,58 @@ get fileMigrationNotes(): string[] {
   // --- EXPANDABLE QUERY EDITOR ---
   isQueryEditorExpanded = false;
   queryEditorHeight = 120; // px; also changes when the user drags the resize handle
+
+  async loadMigratedParents(): Promise<void> {
+    try {
+      const res = await this.connectivity.guardedFetch(
+        `${environment.apiUrl}/api/metadata/migrated-parents?sourceCrm=${this.sourceCrmId}&targetCrm=${this.targetCrmId}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('supabase_token') || ''}` } }
+      );
+      this.migratedParents = res.ok ? (await res.json()).parents || {} : {};
+    } catch {
+      this.migratedParents = {};
+    }
+    this.buildScopeSuggestions();
+    this.cdr.detectChanges();
+  }
+
+  buildScopeSuggestions(): void {
+    this.scopeSuggestions = [];
+    const crm = (this.sourceCrmId || '').toLowerCase();
+    if (!['salesforce', 'zoho'].includes(crm) || !this.selectedSourceObject) return;
+
+    const fields = this.allSourceFields.length > 0 ? this.allSourceFields : this.sourceFields;
+    const cols = ['Id', ...fields
+      .filter((f) => f.name !== 'Id' && !f.name.startsWith('System'))
+      .slice(0, 15)
+      .map((f) => f.name)].join(', ');
+
+    const seen = new Set<string>();
+    for (const f of fields) {
+      for (const parent of (f.referenceTo || [])) {
+        const count = this.migratedParents[parent] || 0;
+        const key = `${f.name}|${parent}`;
+        if (count > 0 && parent !== this.selectedSourceObject && !seen.has(key)) {
+          seen.add(key);
+          this.scopeSuggestions.push({
+            field: f.name, parent, count,
+            query: `SELECT ${cols} FROM ${this.selectedSourceObject} WHERE ${f.name} IN ({{MIGRATED:${parent}}})`
+          });
+        }
+      }
+    }
+  }
+
+  isScopeActive(s: { field: string; parent: string }): boolean {
+    const q = (this.customQuery || '').toLowerCase();
+    return q.includes(`{{migrated:${s.parent.toLowerCase()}}}`) && q.includes(s.field.toLowerCase());
+  }
+
+  useScopeSuggestion(s: { query: string }): void {
+    this.customQuery = s.query;
+    this.isDefaultQuery = false;
+    this.monacoEditorInstance?.setValue(s.query);
+  }
 
   toggleQueryEditorSize(): void {
     this.isQueryEditorExpanded = !this.isQueryEditorExpanded;
@@ -2065,6 +2119,7 @@ onReviewPanelDragEnd(): void {
 
     this.selectedSourceObject = entityName;
     this.isSourceDropdownOpen = false;
+    this.scopeSuggestions = [];
 
     this.buildDefaultQuery(entityName);
     this.loadSourceObjectCount(entityName);
@@ -2266,6 +2321,7 @@ onReviewPanelDragEnd(): void {
 
     const payload = {
       crmId: this.sourceCrmId,
+      targetCrmId: this.targetCrmId,
       objectName: this.selectedSourceObject,
       query: safeQuery,
       headers: this.previewHeaders,
@@ -2316,6 +2372,10 @@ onReviewPanelDragEnd(): void {
 
   async loadSourceObjectCount(objectName: string, query: string = '', timeFilter: { field: string; startDate: string; endDate: string; utcOffsetMinutes: number } | null = null) {
     if (!objectName || !this.sourceCrmId) {
+      this.selectedSourceObjectCount = null;
+      return;
+    }
+    if (/\{\{\s*MIGRATED\s*:/i.test(query)) {
       this.selectedSourceObjectCount = null;
       return;
     }
@@ -2706,6 +2766,8 @@ onReviewPanelDragEnd(): void {
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
           this.prefetchParentFieldMetadata();
+
+          void this.loadMigratedParents();
 
           this.previewHeaders = sourceData.headers || [];
           this.previewRecords = sourceData.sampleRecords || [];

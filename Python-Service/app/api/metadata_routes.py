@@ -11,6 +11,8 @@ from app.services.crm_service import CrmService
 from app.services.crm_metadata_service import CrmMetadataService
 from app.services.crm_query_service import CrmQueryService
 from app.services.ai_services import LocalAiService
+from app.services.id_mapping_service import IdMappingService
+from app.services.parent_scope_service import ParentScopeService, ParentScopeError, ScopeContext
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -83,6 +85,7 @@ class PreviewFilterPayload(BaseModel):
     limit: int = 5
     role: str = "source"
     migrationTimeFilter: Optional[Dict[str, Any]] = None 
+    targetCrmId: str = ""   # required only when the query uses {{MIGRATED:<Object>}}
 
 @router.post("/api/metadata/preview-filter")
 async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Depends(get_current_user)):
@@ -97,6 +100,19 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
         raise HTTPException(status_code=400, detail="Object name is required.")
 
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_id, role)
+
+    if ParentScopeService.has_scope(query):
+        if not payload.targetCrmId:
+            raise HTTPException(status_code=400, detail="targetCrmId is required when the query uses {{MIGRATED:<Object>}}.")
+        tgt = CrmService.get_active_crm_credentials(current_user.id, payload.targetCrmId.lower(), "target")
+        try:
+            query = ParentScopeService.first_chunk_query(query, ScopeContext(
+                current_user.id, crm_id, payload.targetCrmId,
+                creds.get("instance_url") or creds.get("api_domain") or creds.get("subdomain"),
+                tgt.get("instance_url") or tgt.get("api_domain") or tgt.get("subdomain"),
+            ))
+        except ParentScopeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     async def _fetch(token):
         creds["access_token"] = token
@@ -119,6 +135,18 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
             new_token = await CrmService.refresh_crm_token(current_user.id, crm_id, role)
             return await _fetch(new_token)
         raise e
+
+# =========================================================
+# MIGRATED PARENTS (drives "connected object" query suggestions)
+# =========================================================
+@router.get("/api/metadata/migrated-parents")
+async def get_migrated_parents(sourceCrm: str, targetCrm: str, current_user = Depends(get_current_user)):
+    """{ "parents": { "Account": 5, ... } } -- objects already migrated for this CRM + org pair."""
+    src = CrmService.get_active_crm_credentials(current_user.id, sourceCrm.lower(), "source")
+    tgt = CrmService.get_active_crm_credentials(current_user.id, targetCrm.lower(), "target")
+    inst = lambda c: c.get("instance_url") or c.get("api_domain") or c.get("subdomain")
+    counts = IdMappingService.get_mapped_counts(current_user.id, sourceCrm, targetCrm, inst(src), inst(tgt))
+    return {"parents": counts}
 
 # =========================================================
 # HIGH-SPEED HYBRID AI AUTO-MAPPING WITH TOKEN ALIGNMENT

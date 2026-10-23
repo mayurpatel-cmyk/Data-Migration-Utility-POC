@@ -292,6 +292,35 @@ class IdMappingService:
             conn.close()
 
     @staticmethod
+    def get_mapped_counts(
+        user_id: str,
+        source_crm: str,
+        target_crm: str,
+        source_instance: Optional[str] = None,
+        target_instance: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """{object_name: number of migrated records} for this CRM+instance pair. Drives the
+        "connected object" suggestions (which parents can a child query be scoped to)."""
+        conn = IdMappingService._connect(user_id)
+        try:
+            cursor = conn.execute(
+                """
+                SELECT object_name, COUNT(*) FROM id_mappings
+                WHERE source_crm = ? AND target_crm = ?
+                  AND source_instance = ? AND target_instance = ?
+                GROUP BY object_name
+                """,
+                (
+                    source_crm.lower(), target_crm.lower(),
+                    IdMappingService._instance_key(source_instance),
+                    IdMappingService._instance_key(target_instance),
+                )
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    @staticmethod
     async def remap_reference_fields(
         source_records: List[dict],
         mappings: List[dict],

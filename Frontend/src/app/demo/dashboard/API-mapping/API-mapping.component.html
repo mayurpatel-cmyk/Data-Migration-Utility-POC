@@ -1335,6 +1335,29 @@
           </div>
         </div>
 
+        @if (scopeSuggestions.length) {
+        <div class="rounded border px-2 py-2 mb-2 animate__animated animate__fadeIn"
+          style="background: #eef6ff; border-color: #b6d4fe !important;">
+          <div class="d-flex align-items-center gap-2 mb-2" style="font-size: 0.75rem;">
+            <i class="feather icon-link text-primary"></i>
+            <span class="fw-bold text-primary">Linked to already-migrated objects</span>
+            <span class="text-muted">Pick one to scope this query automatically (no IDs needed)</span>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            @for (s of scopeSuggestions; track s.field + s.parent) {
+            <button type="button" class="btn btn-sm rounded-pill d-inline-flex align-items-center gap-1 shadow-sm"
+              [ngClass]="isScopeActive(s) ? 'btn-primary' : 'btn-outline-primary bg-white'"
+              style="font-size: 0.75rem; font-weight: 600;" [title]="s.query" (click)="useScopeSuggestion(s)">
+              <i class="feather" [ngClass]="isScopeActive(s) ? 'icon-check-circle' : 'icon-git-merge'"></i>
+              <span>{{ s.parent }}</span>
+              <span class="opacity-75 fw-normal">via {{ s.field }}</span>
+              <span class="badge rounded-pill bg-light text-dark ms-1">{{ s.count | number }}</span>
+            </button>
+            }
+          </div>
+        </div>
+        }
+
         <div class="d-flex justify-content-end mb-1">
           <button type="button" class="btn btn-sm btn-link text-muted p-0 text-decoration-none"
             style="font-size: 0.75rem;" (click)="toggleQueryEditorSize()"

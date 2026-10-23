@@ -22,6 +22,7 @@ from app.services.payload_builder import PayloadBuilderService
 from app.services.audit_service import AuditService
 from app.services.field_access_utils import find_non_writable_mapped_fields
 from app.services.id_mapping_service import IdMappingService
+from app.services.parent_scope_service import ParentScopeService, ParentScopeError, ScopeContext
 from app.services.migrators.cross_crm_file_migrator import CrossCrmFileMigrator
 from app.services.crm_picklist_sync_service import MultiCrmPicklistSyncService
 from app.services.file_adapters.registry import supported_crms, effective_strategy
@@ -725,9 +726,17 @@ async def websocket_migration(ws: WebSocket):
                     else:
                         source_mode = "Direct API Sync"
                         await send_log(f"[{target_object}] Direct API extraction from {source_crm.capitalize()}...")
-                        extract_result = await source_migrator.extract(
-                            client, source_creds, source_object, extraction_query, mappings, send_log, time_filter
-                        )
+                        try:
+                            extract_result = await ParentScopeService.extract(
+                                source_migrator, client, source_creds, source_object, extraction_query, mappings,
+                                send_log, time_filter,
+                                ScopeContext(user_id, source_crm, target_crm, source_instance, target_instance),
+                            )
+                        except ParentScopeError as exc:
+                            final_status = "failed"
+                            await websocket.send_json({"log": f"[{target_object}] FATAL: {exc}", "status": "Failed"})
+                            await websocket.close()
+                            return
                         if isinstance(extract_result, tuple):
                             source_records, actual_query_used = extract_result
                         else:
@@ -1210,9 +1219,22 @@ async def websocket_validate_stream(websocket: WebSocket):
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 # 1. DYNAMIC API EXTRACTION
-                extract_result = await source_migrator.extract(
-                    client, source_creds, obj_name, query, mappings, send_log, time_filter
-                )
+                scope_ctx = None
+                if ParentScopeService.has_scope(query):
+                    _tgt = CrmService.get_active_crm_credentials(user_id, target_crm, "target")
+                    scope_ctx = ScopeContext(
+                        user_id, source_crm, target_crm,
+                        source_creds.get("instance_url") or source_creds.get("api_domain") or source_creds.get("subdomain"),
+                        _tgt.get("instance_url") or _tgt.get("api_domain") or _tgt.get("subdomain"),
+                    )
+                if scope_ctx:
+                    extract_result = await ParentScopeService.extract(
+                        source_migrator, client, source_creds, obj_name, query, mappings, send_log, time_filter, scope_ctx
+                    )
+                else:
+                    extract_result = await source_migrator.extract(
+                        client, source_creds, obj_name, query, mappings, send_log, time_filter
+                    )
 
                 if isinstance(extract_result, tuple):
                     raw_records, validation_query_used = extract_result
