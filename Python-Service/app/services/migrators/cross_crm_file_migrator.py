@@ -4,6 +4,7 @@ import shutil
 import tempfile
 from typing import Optional
 
+from app.services.crm_service import CrmSessionExpired
 from app.services.file_adapters.base import SourceFile
 from app.services.file_adapters.registry import get_adapter
 from app.services.migrators.salesforce_file_migrator import (
@@ -56,6 +57,7 @@ class CrossCrmFileMigrator:
         semaphore = asyncio.Semaphore(min(concurrency, source.max_concurrency, target.max_concurrency))
         staging_dir = tempfile.mkdtemp(prefix=f"file_migration_{user_id}_")
         limit_error: Optional[Exception] = None
+        session_error: Optional[Exception] = None
 
         try:
             try:
@@ -79,11 +81,11 @@ class CrossCrmFileMigrator:
             processed = 0
 
             async def process(f: SourceFile):
-                nonlocal limit_error, processed
+                nonlocal limit_error, session_error, processed
                 bucket = results["attachments" if f.kind == "attachment" else "files"]
 
                 async with semaphore:
-                    if limit_error:  # rate limit already hit; leave un-checkpointed so a re-run resumes here
+                    if limit_error or session_error:  # rate limit / dead login already hit; leave un-checkpointed so a re-run resumes here
                         return
 
                     new_parent = id_map.get(f.parent_id)
@@ -105,6 +107,9 @@ class CrossCrmFileMigrator:
                                                        new_parent, f, path, send_log)
                     except ApiLimitNearExhaustionError as e:
                         limit_error = e
+                        return
+                    except CrmSessionExpired as e:
+                        session_error = e  # not a per-file failure: stop and let the run pause for a re-login
                         return
                     except Exception as e:
                         ok, info = False, f"{type(e).__name__}: {e}"
@@ -129,6 +134,10 @@ class CrossCrmFileMigrator:
                         await send_log(f"[Files] Processed {processed}/{len(files)}...")
 
             await asyncio.gather(*[process(f) for f in files])
+
+            if session_error:
+                await send_log("[Files] Stopping: the CRM login expired. Progress so far is checkpointed -- log in again and resume.")
+                raise session_error
 
             if limit_error:
                 results["apiLimitReached"] = True

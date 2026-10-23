@@ -299,7 +299,9 @@ class RunStore:
             "updatedAt": row["updated_at"],
             "counts": counts,
             "resumable": status in ("interrupted", "cancelled"),
-            "retryable": status == "completed" and (counts.get("error", 0) > 0 or counts.get("pending", 0) > 0),
+            "retryable": status == "completed" and (
+                counts.get("error", 0) > 0 or counts.get("pending", 0) > 0 or self.file_failure_total() > 0
+            ),
             **self.run_kind_info(row, meta),
             "startedBy": meta.get("startedBy"),
             "participants": (meta.get("participants") or [])[-5:],
@@ -354,6 +356,21 @@ class RunStore:
 
     def mark_files_done(self, job_idx: int) -> None:
         self.set_kv(f"files_done:{job_idx}", "1")
+
+    def file_failure_counts(self) -> Dict[int, int]:
+        """{job_idx: files/attachments that failed to copy} for jobs whose last file pass had failures."""
+        out: Dict[int, int] = {}
+        for r in self._conn.execute("SELECT key, value FROM kv WHERE key LIKE 'file_failures:%'").fetchall():
+            try:
+                n = int(r["value"])
+                if n > 0:
+                    out[int(r["key"].split(":", 1)[1])] = n
+            except (ValueError, IndexError):
+                continue
+        return out
+
+    def file_failure_total(self) -> int:
+        return sum(self.file_failure_counts().values())
 
     def get_job_meta(self, job_idx: int) -> Dict[str, Any]:
         return json.loads(self.get_kv(f"meta:{job_idx}") or "{}")
@@ -586,7 +603,9 @@ class RunStore:
         # only_pending: the user picked specific failed rows (they are 'pending' now); the others must stay failed.
         states = "('pending')" if only_pending else "('error','pending')"
         failed = self._conn.execute(f"SELECT COUNT(*) AS n FROM row_state WHERE state IN {states}").fetchone()["n"]
-        if not failed:
+        # Files that failed to copy are retried too (not when the user picked specific rows).
+        file_failed_jobs = [] if only_pending else sorted(self.file_failure_counts())
+        if not failed and not file_failed_jobs:
             raise ValueError("This run has no records waiting to be retried." if only_pending else "This run has no failed rows to retry.")
 
         new_id = f"run_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -621,6 +640,9 @@ class RunStore:
             for r in c.execute("SELECT DISTINCT job_idx FROM row_state WHERE state='pending'").fetchall():
                 c.execute("DELETE FROM kv WHERE key IN (?, ?)", (f"done:{r['job_idx']}", f"files_done:{r['job_idx']}"))
                 c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, '1')", (f"refresh_refs:{r['job_idx']}",))
+            for fj in file_failed_jobs:
+                # re-run this job's file pass; files already copied are skipped by the file checkpoint
+                c.execute("DELETE FROM kv WHERE key IN (?, ?)", (f"done:{fj}", f"files_done:{fj}"))
         return child
 
     # ------------------------------------------------------------------ org identity / ownership / stop reason

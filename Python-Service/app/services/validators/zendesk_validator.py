@@ -34,7 +34,7 @@ class ZendeskValidator:
             valid_mask &= ~is_duplicate
 
         for mapping in mappings:
-            csv_col = mapping.get('csvField')
+            csv_col = mapping.get('csvField') or mapping.get('sourceField')
             target_field = mapping.get('sfField', mapping.get('targetField')) # Handle both UI keys safely
             
             if not target_field or csv_col not in df.columns or mapping.get('skipValidation'):
@@ -107,7 +107,7 @@ class ZendeskValidator:
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
 
                 if valid_values and not mapping.get('syncPicklistValues'):
-                    is_invalid_dropdown = ~str_col.isin(valid_values) & ~is_empty
+                    is_invalid_dropdown = ~str_col.isin([str(v).lower() for v in valid_values]) & ~is_empty
                     if is_invalid_dropdown.any():
                         df.loc[is_invalid_dropdown, '_errors'] += f"[{csv_col}: Invalid Dropdown value. Must match a Zendesk field Tag.] "
                         valid_mask &= ~is_invalid_dropdown
@@ -117,10 +117,11 @@ class ZendeskValidator:
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
                 
                 if valid_values and not mapping.get('syncPicklistValues'):
+                    valid_lower = {str(v).lower() for v in valid_values}
                     def is_valid_multiselect(val):
                         if pd.isna(val) or str(val).strip() == '': return True
                         items = [i.strip().lower() for i in str(val).split(';')]
-                        return all(item in valid_values for item in items if item)
+                        return all(item in valid_lower for item in items if item)
 
                     is_invalid_multi = ~df[csv_col].apply(is_valid_multiselect) & ~is_empty
                     if is_invalid_multi.any():

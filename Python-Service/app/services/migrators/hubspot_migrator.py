@@ -5,7 +5,7 @@ import os
 import re
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from app.services.crm_service import CrmService
+from app.services.crm_service import CrmService, CrmSessionExpired
 from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN
 from app.services.time_filter_service import build_hubspot_time_filters, TimeFilterError
 
@@ -23,7 +23,7 @@ SEARCH_SETTLE_SECONDS = float(os.environ.get("HUBSPOT_SEARCH_SETTLE_SECONDS", "8
 _SINGULAR_TO_OBJECT = {"contact": "contacts", "company": "companies", "deal": "deals", "ticket": "tickets"}
 _ID_FIELDS = {"id", "hs_object_id"}
 _READ_ONLY_PROPS = _ID_FIELDS
-_PROPAGATE = (ApiQuotaExhausted, CircuitOpen, asyncio.CancelledError)   # stop the run, never swallow
+_PROPAGATE = (ApiQuotaExhausted, CircuitOpen, asyncio.CancelledError, CrmSessionExpired)   # stop the run, never swallow
 
 logger = logging.getLogger(__name__)
 

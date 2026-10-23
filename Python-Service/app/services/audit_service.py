@@ -339,7 +339,6 @@ class AuditService:
             "restart": "Restarted migration (start over)",
         }.get(run_kind, "Migration")
         run_type_short = {"migration": "Migration", "retry": f"Retry #{retry_round or 1}", "restart": "Restart"}.get(run_kind, "Migration")
-        # Retries / restarts must not overwrite the report of the run they came from (same session id).
         file_id = session_id
         if run_kind == "retry":
             file_id = f"{session_id}_retry{retry_round or 1}"
@@ -361,7 +360,7 @@ class AuditService:
 
             # --- WATERMARK ---
             pdf.set_font("Arial", "B", 40)
-            pdf.set_text_color(240, 240, 240)  # Very light gray
+            pdf.set_text_color(240, 240, 240)
             pdf.text(25, 165, s("SureShift Retry" if is_retry else "SureShift Migration"))
             pdf.set_text_color(0, 0, 0)
 
@@ -391,12 +390,14 @@ class AuditService:
                     "  RETRY RUN: this report is for a retry, not a normal migration. Only records that failed earlier "
                     "(or that were corrected) were sent again. Records that succeeded in earlier runs are carried over "
                     "and counted in the totals below."), border=1, fill=True)
+                pdf.set_x(pdf.l_margin)
                 if retry_summary:
                     pdf.set_font("Arial", "", 10)
                     pdf.multi_cell(0, 6, txt=s(
                         f"  This retry: {retry_summary.get('attempted', 0)} record(s) re-sent, "
                         f"{retry_summary.get('recovered', 0)} recovered, {retry_summary.get('stillFailing', 0)} still failing."),
                         border=1, fill=True)
+                    pdf.set_x(pdf.l_margin)
                 pdf.set_text_color(0, 0, 0)
                 pdf.set_fill_color(245, 245, 245)
                 pdf.ln(3)

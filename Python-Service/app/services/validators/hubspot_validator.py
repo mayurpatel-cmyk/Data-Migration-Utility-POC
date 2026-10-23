@@ -31,7 +31,7 @@ class HubspotValidator:
             valid_mask &= ~is_duplicate
 
         for mapping in mappings:
-            csv_col = mapping.get('csvField')
+            csv_col = mapping.get('csvField') or mapping.get('sourceField')
             target_field = mapping.get('sfField', mapping.get('targetField')) # Handle both UI keys safely
             
             if not target_field or csv_col not in df.columns or mapping.get('skipValidation'):

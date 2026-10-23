@@ -1,7 +1,9 @@
 import re
 import asyncio
-from app.services.crm_service import CrmService
-from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen
+import httpx
+from fastapi import HTTPException
+from app.services.crm_service import CrmService, CrmSessionExpired, crm_session_expired
+from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN
 from app.services.time_filter_service import (
     merge_time_clause,
     build_zoho_time_clause,
@@ -17,7 +19,35 @@ def chunk_dataset(data: list, chunk_size: int = 100):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
+# Errors raised BEFORE anything reached Zoho: the write certainly did not happen, so a re-send cannot duplicate it.
+_PRE_SEND_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def _write_error(exc: Exception, wire_op_mode: str) -> str:
+    """
+    Error text for a chunk that raised. For an INSERT whose outcome is ambiguous (timeout / dropped connection /
+    unreadable reply) the record may already exist in Zoho, so it is tagged OUTCOME_UNKNOWN: the runner then looks
+    it up by its correlation key instead of re-sending it blindly (that is how duplicates are created).
+    """
+    if wire_op_mode == "insert" and not isinstance(exc, (_PRE_SEND_ERRORS, HTTPException)):
+        detail = f"{type(exc).__name__}: {exc}"[:200]
+        return f"{OUTCOME_UNKNOWN}Zoho did not confirm this write ({detail}); the record may already exist."
+    return str(exc)
+
+
 class ZohoMigrator:
+
+    async def _extract_request(self, client, method: str, url: str, headers: dict, user_id, send_log, **kwargs):
+        """One extraction request. A 401 (access tokens last 1 hour) refreshes the token once and replays the call."""
+        res = await getattr(client, method)(url, headers=headers, **kwargs)
+        if res.status_code == 401:
+            await send_log(" Zoho token expired during extraction. Silently refreshing...")
+            token = await CrmService.refresh_crm_token(user_id, "zoho", "source")
+            headers["Authorization"] = f"Zoho-oauthtoken {token}"
+            res = await getattr(client, method)(url, headers=headers, **kwargs)
+            if res.status_code == 401:  # a freshly refreshed token was refused too
+                raise crm_session_expired("zoho", "source")
+        return res
 
     async def extract(self, client, creds, obj_name, query, mappings, send_log, time_filter=None):
         zoho_token = creds.get("access_token")
@@ -26,6 +56,7 @@ class ZohoMigrator:
             domain = f"https://{domain}"
 
         headers = {"Authorization": f"Zoho-oauthtoken {zoho_token}"}
+        user_id = creds.get("user_id")
         target_fields = [m.get("sourceField") or m.get("csvField") for m in mappings if m.get("sourceField") or m.get("csvField")]
         safe_fields = target_fields[:40] if target_fields else ["id"]
 
@@ -51,7 +82,10 @@ class ZohoMigrator:
                     coql_query = build_coql(raw_query, obj_name, safe_fields, time_clause, limit=page_size, offset=offset)
                     actual_query_used = actual_query_used or coql_query
 
-                    res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": coql_query})
+                    res = await self._extract_request(
+                        client, "post", f"{domain}/crm/v6/coql", headers, user_id, send_log,
+                        json={"select_query": coql_query},
+                    )
                     if res.status_code == 204:  # COQL returns 204 when nothing matches
                         break
                     if res.status_code != 200:
@@ -70,9 +104,10 @@ class ZohoMigrator:
                 await send_log("Extracting data from Zoho (Standard API)...")
                 data, page = [], 1
                 while True:
-                    res = await client.get(
+                    res = await self._extract_request(
+                        client, "get",
                         f"{domain}/crm/v6/{obj_name}?page={page}&per_page=200&fields={','.join(safe_fields)}",
-                        headers=headers,
+                        headers, user_id, send_log,
                     )
                     if res.status_code == 204:
                         break
@@ -101,6 +136,8 @@ class ZohoMigrator:
 
             return processed_data, actual_query_used
 
+        except CrmSessionExpired:
+            raise  # the login is dead: let the run pause so it can be resumed after logging in again
         except Exception as e:
             raise Exception(f"Failed to extract from Zoho: {str(e)}")
 
@@ -145,6 +182,7 @@ class ZohoMigrator:
 
         for chunk in chunks:
             zoho_data_rows = [c["targetRecord"] for c in chunk]
+            decided = set()  # rows of this chunk that already have an answer (never overwritten by a later exception)
             
             try:
                 req_payload = {"data": zoho_data_rows}
@@ -152,6 +190,7 @@ class ZohoMigrator:
                    req_payload["duplicate_check_fields"] = [options["targetExtIdField"]]
 
                 rate_limit_hits = 0
+                refreshed = False
                 while True:
                     if http_method == "PUT":
                         res = await client.put(api_path, json=req_payload, headers=headers)
@@ -159,6 +198,9 @@ class ZohoMigrator:
                         res = await client.post(api_path, json=req_payload, headers=headers)
                     
                     if res.status_code == 401:
+                        if refreshed:  # a freshly refreshed token was refused too (revoked / scope): do not loop forever
+                            raise crm_session_expired("zoho", "target")
+                        refreshed = True
                         await send_log("  Zoho token expired mid-migration. Silently refreshing...")
                         token = await CrmService.refresh_crm_token(user_id, "zoho", "target")
                         headers["Authorization"] = f"Zoho-oauthtoken {token}"
@@ -190,6 +232,7 @@ class ZohoMigrator:
                                 )
                                 all_skipped_data.append(orig_record)
                                 total_skipped += 1
+                                decided.add(item["originalIndex"])
                                 if raw_id:
                                     ids_to_revert.append(str(raw_id))
                                     on_revert_pending = options.get("onRevertPending")
@@ -201,6 +244,7 @@ class ZohoMigrator:
                             
                             all_success_data.append(orig_record)
                             total_success += 1
+                            decided.add(item["originalIndex"])
                         else:
                             err_msg = z_res.get("message") or z_res.get("code", "Unknown Error")
                             details = z_res.get("details", {})
@@ -215,24 +259,33 @@ class ZohoMigrator:
                             orig_record["Target_Error"] = f"Zoho Error: {err_msg}"
                             all_error_data.append(orig_record)
                             total_error += 1
+                            decided.add(item["originalIndex"])
                 else:
                     error_text = res.text
                     try: error_text = res.json().get("message", res.json().get("errors", [{}])[0].get("message", res.text))
                     except: pass
                     
                     await send_log(f" Zoho API Rejected Batch ({res.status_code}): {error_text}")
+                    # INSERT + 5xx (not 503): Zoho may have created the records before failing -> outcome unknown
+                    unconfirmed = wire_op_mode == "insert" and res.status_code >= 500 and res.status_code != 503
                     for item in chunk:
                         orig_record = source_records[item["originalIndex"]]
-                        orig_record["Target_Error"] = f"Zoho API Error: {error_text}"
+                        orig_record["Target_Error"] = (
+                            f"{OUTCOME_UNKNOWN}Zoho did not confirm this write (HTTP {res.status_code}: {str(error_text)[:160]}); "
+                            f"the record may already exist."
+                            if unconfirmed else f"Zoho API Error: {error_text}"
+                        )
                         all_error_data.append(orig_record)
                         total_error += 1
                         
-            except (ApiQuotaExhausted, CircuitOpen):
+            except (ApiQuotaExhausted, CircuitOpen, CrmSessionExpired):
                 raise  # a stop signal for the run, not a per-row failure: let the runner checkpoint and pause
             except Exception as exc:
                 for item in chunk:
+                    if item["originalIndex"] in decided:
+                        continue  # this row already got its real answer before the exception
                     orig_record = source_records[item["originalIndex"]]
-                    orig_record["Target_Error"] = str(exc)
+                    orig_record["Target_Error"] = _write_error(exc, wire_op_mode)
                     all_error_data.append(orig_record)
                     total_error += 1
 
@@ -283,6 +336,10 @@ class ZohoMigrator:
             quoted = ",".join("'" + str(v).replace("\\", "\\\\").replace("'", "\\'") + "'" for v in chunk)
             query = f"select id, {key_field} from {module} where {key_field} in ({quoted}) limit 200"
             res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": query})
+            if res.status_code == 401:  # the run's token may have expired (1 hour): refresh once and replay
+                token = await CrmService.refresh_crm_token(options.get("userId"), "zoho", "target")
+                headers["Authorization"] = f"Zoho-oauthtoken {token}"
+                res = await client.post(f"{domain}/crm/v6/coql", headers=headers, json={"select_query": query})
             if res.status_code == 204:
                 continue
             res.raise_for_status()

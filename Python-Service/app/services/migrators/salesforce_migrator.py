@@ -1,7 +1,9 @@
+import os
 import urllib.parse
 import asyncio
 import re
 from app.services.crm_service import CrmService
+from app.services.resilience.retry import CircuitOpen
 from app.services.time_filter_service import (
     merge_time_clause,
     build_salesforce_time_clause,
@@ -12,6 +14,11 @@ from app.services.query_field_utils import ensure_fields_selected
 def chunk_dataset(data: list, chunk_size: int = 5000):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
+
+# A Bulk batch that has not reached a final state after this long pauses the run (resumable: the job id is saved)
+# instead of polling forever.
+BULK_POLL_TIMEOUT_SEC = float(os.environ.get("SURESHIFT_BULK_POLL_TIMEOUT_MIN", "120")) * 60
+
 
 class SalesforceMigrator:
     
@@ -182,20 +189,54 @@ class SalesforceMigrator:
 
         await client.post(f"{bulk_base_url}/job/{job_id}", json={"state": "Closed"}, headers=sf_headers)
 
+        async def bulk_get(url):
+            """Bulk API GET. A session that expired mid-run (401 / InvalidSessionId) is refreshed once and replayed."""
+            nonlocal sf_token
+            res = await client.get(url, headers=sf_headers)
+            if res.status_code == 401 or (res.status_code in (400, 403, 500) and "InvalidSessionId" in (res.text or "")):
+                await send_log(f"[{target_object}] Session Expired during Bulk polling. Silently refreshing SF Token...")
+                sf_token = await CrmService.refresh_crm_token(user_id, "salesforce", "target")
+                sf_headers["X-SFDC-Session"] = sf_token
+                res = await client.get(url, headers=sf_headers)
+            return res
+
+        def batch_state(r):
+            if r.status_code != 200:
+                return None
+            try:
+                return r.json().get("state")
+            except ValueError:
+                return None
+
+        loop = asyncio.get_running_loop()
+        poll_deadline = loop.time() + BULK_POLL_TIMEOUT_SEC
         poll_delay = 1.0
         while True:
             await asyncio.sleep(poll_delay)
-            status_res = await asyncio.gather(*[client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}", headers=sf_headers) for b_id in batch_ids])
-            states = [r.json().get("state") for r in status_res]
-            if all(s == "Completed" for s in states) or any(s in ["Failed", "NotProcessed"] for s in states):
+            status_res = [await bulk_get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}") for b_id in batch_ids]
+            states = [batch_state(r) for r in status_res]
+            if all(s in ("Completed", "Failed", "NotProcessed") for s in states):
                 break
+            if loop.time() > poll_deadline:
+                raise CircuitOpen(
+                    f"Salesforce Bulk job {job_id} did not finish within {int(BULK_POLL_TIMEOUT_SEC // 60)} minutes. "
+                    f"The job id is saved: resume the run to re-attach to it."
+                )
             poll_delay = min(poll_delay * 1.5, 4.0)
 
         ids_to_revert = []  
 
         for i, b_id in enumerate(batch_ids):
-            res = await client.get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result", headers=sf_headers)
-            results = res.json()
+            res = await bulk_get(f"{bulk_base_url}/job/{job_id}/batch/{b_id}/result")
+            try:
+                results = res.json() if res.status_code == 200 else None
+            except ValueError:
+                results = None
+            if not isinstance(results, list):
+                raise Exception(
+                    f"Could not read the results of Salesforce Bulk batch {b_id} "
+                    f"(HTTP {res.status_code}, state {states[i] if i < len(states) else 'unknown'}): {(res.text or '')[:200]}"
+                )
             original_chunk = chunks[i]
 
             for row_data, sf_result in zip(original_chunk, results):
@@ -266,6 +307,10 @@ class SalesforceMigrator:
             url, params = f"{base}/services/data/v60.0/query", {"q": soql}
             while url:
                 res = await client.get(url, params=params, headers=headers)
+                if res.status_code == 401:  # the run's token may have expired: refresh once and replay
+                    token = await CrmService.refresh_crm_token(options.get("userId"), "salesforce", "target")
+                    headers["Authorization"] = f"Bearer {token}"
+                    res = await client.get(url, params=params, headers=headers)
                 res.raise_for_status()
                 body = res.json()
                 for rec in body.get("records", []):

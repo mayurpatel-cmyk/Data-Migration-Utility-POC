@@ -61,7 +61,7 @@ class SalesforceValidator:
         for m in mappings:
             sf_f = (m.get('sfField', m.get('targetField')) or '').lower()
             if sf_f.endswith('countrycode') or (sf_f.endswith('country') and sf_f != sf_field_being_processed.lower()):
-                return m.get('csvField')
+                return m.get('csvField') or m.get('sourceField')
         return None
 
     def validate(self, records: list, mappings: list, dedupe_key: str, target_rules: dict, date_format: str = "") -> dict:
@@ -94,7 +94,7 @@ class SalesforceValidator:
         country_code_col_by_prefix = self._resolve_country_columns(mappings)
 
         for mapping in mappings:
-            csv_col = mapping.get('csvField')
+            csv_col = mapping.get('csvField') or mapping.get('sourceField')
             sf_field = mapping.get('sfField', mapping.get('targetField'))  # Adapted for new mappings schema
 
             if csv_col not in df.columns or not sf_field:
@@ -198,7 +198,7 @@ class SalesforceValidator:
 
                 if field_rules.get('controllerName') and field_rules.get('dependentValues'):
                     controller_sf_name = field_rules.get('controllerName')
-                    controller_csv_col = next((m.get('csvField') for m in mappings if m.get('sfField') == controller_sf_name), None)
+                    controller_csv_col = next(((m.get('csvField') or m.get('sourceField')) for m in mappings if m.get('sfField') == controller_sf_name), None)
 
                     if controller_csv_col and controller_csv_col in df.columns:
                         dep_map = field_rules.get('dependentValues')
@@ -352,7 +352,7 @@ class SalesforceValidator:
             for suffix in ('countrycode', 'country'):
                 if sf_f.endswith(suffix):
                     prefix = sf_f[: -len(suffix)]
-                    result[prefix] = m.get('csvField')
+                    result[prefix] = m.get('csvField') or m.get('sourceField')
                     break
         return result
 

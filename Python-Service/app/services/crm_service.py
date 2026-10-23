@@ -12,13 +12,21 @@ SENSITIVE_CONNECTION_FIELDS = {"access_token", "refresh_token"}
 PROBE_TIMEOUT = 10.0
 
 
+class CrmSessionExpired(HTTPException):
+    """
+    A coded CRM_SESSION_EXPIRED error (still a plain HTTPException with status 401, so every existing
+    `except HTTPException` keeps working). Migrators let this one propagate so the run PAUSES and can be resumed
+    after the user logs in again, instead of marking every remaining row as failed.
+    """
+
+
 def crm_session_expired(crm_type: str, role: str, message: Optional[str] = None) -> HTTPException:
     """
     One consistent, machine-readable error for "this CRM token is dead, user must log in again".
     The frontend (crm-session.util.ts) keys off detail.code, and detail.side tells it which
     connection (source/target) to clear.
     """
-    return HTTPException(
+    return CrmSessionExpired(
         status_code=401,
         detail={
             "code": CRM_SESSION_EXPIRED,
@@ -177,7 +185,7 @@ class CrmService:
         refresh_token = creds.get("refresh_token")
 
         if not refresh_token:
-            raise HTTPException(status_code=401, detail="No refresh token available. Reconnect UI.")
+            raise crm_session_expired(crm_type, role, f"No refresh token available for {crm_type}. Please log in again.")
 
         crm = crm_type.lower()
         res = None
@@ -242,4 +250,4 @@ class CrmService:
                 supabase.table("crm_connections").update(update).eq("id", creds["id"]).execute()
                 return new_access
 
-        raise HTTPException(status_code=401, detail="Refresh token expired. Reconnect UI.")
+        raise crm_session_expired(crm_type, role)

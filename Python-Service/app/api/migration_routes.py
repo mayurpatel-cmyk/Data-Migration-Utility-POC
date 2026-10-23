@@ -528,6 +528,17 @@ async def websocket_migration(ws: WebSocket):
         source_migrator = MIGRATORS.get(source_crm) if source_crm != "csv" else None
         target_creds = live["target"]
         target_migrator = MIGRATORS.get(target_crm)
+        if target_migrator is None or not callable(getattr(target_migrator, "upload", None)):
+            # e.g. Zendesk: it can be a SOURCE (extract) but has no write adapter yet. Fail clearly instead of
+            # letting every row fail one by one.
+            final_status = "failed"
+            await websocket.send_json({
+                "log": f"FATAL: Writing data into {target_crm.capitalize()} is not supported yet "
+                       f"(it can only be used as a migration source).",
+                "status": "Failed",
+            })
+            await websocket.close()
+            return
 
         async def send_log(msg: str, status: str = "Running"):
             await websocket.send_json({"log": msg, "status": status})
@@ -896,6 +907,13 @@ async def websocket_migration(ws: WebSocket):
                                     "deferredRecordCount": max(0, len(job_id_map) - len(scoped_id_map)),
                                 },
                             })
+                            # remember failed files so "Retry failed" can re-run this job's file pass
+                            _file_failed = ((file_results.get("attachments") or {}).get("error", 0)
+                                            + (file_results.get("files") or {}).get("error", 0))
+                            if _file_failed:
+                                store.set_kv(f"file_failures:{job_index}", str(_file_failed))
+                            else:
+                                store.delete_kv(f"file_failures:{job_index}")
                             if file_results.get("apiLimitReached"):
                                 raise ApiQuotaExhausted("The daily API limit was reached during file migration.")
                     store.mark_files_done(job_index)
@@ -954,6 +972,12 @@ async def websocket_migration(ws: WebSocket):
                            f"{retry_summary['stillFailing']} still failing.",
                     "status": "Finalizing",
                 })
+            _file_failures = store.file_failure_total()
+            if _file_failures:
+                await websocket.send_json({
+                    "log": f"{_file_failures} file/attachment(s) could not be copied. Use Retry failed to try them again.",
+                    "status": "Finalizing",
+                })
             final_status = "completed"
             store.clear_stop_reason()
             store.set_status("completed")
@@ -966,7 +990,7 @@ async def websocket_migration(ws: WebSocket):
                 "skippedData": formatted_skipped,
                 "reportUrls": report_urls,
                 "runId": store.run_id,
-                "retryable": len(formatted_errors) > 0,
+                "retryable": len(formatted_errors) > 0 or store.file_failure_total() > 0,
                 "retrySummary": retry_summary,
             })
         await websocket.close()
