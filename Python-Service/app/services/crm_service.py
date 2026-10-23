@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import os
+import time
 from typing import Optional
 
 import httpx
@@ -10,6 +12,46 @@ from app.utils.config import supabase
 CRM_SESSION_EXPIRED = "CRM_SESSION_EXPIRED"
 SENSITIVE_CONNECTION_FIELDS = {"access_token", "refresh_token"}
 PROBE_TIMEOUT = 10.0
+
+logger = logging.getLogger(__name__)
+
+_TRANSIENT_WINERRORS = {10035, 10053, 10054}
+_TRANSIENT_HTTPX_ERRORS = (
+    httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.WriteError,
+    httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError, httpx.CloseError,
+)
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """True for a dropped / reset / timed-out connection (e.g. a pooled HTTP/2 connection closed by a firewall)."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, _TRANSIENT_HTTPX_ERRORS):
+            return True
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in _TRANSIENT_WINERRORS:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _execute_with_retry(query, max_retries: int = 3, base_delay: float = 0.3):
+    """
+    Runs a Supabase query builder's .execute(), retrying ONLY when the connection itself failed (reset / dropped /
+    timed out). The queries used here are idempotent (select / delete / update by key). Any other error -- bad
+    filter, auth, a real HTTP error response -- propagates immediately, exactly as before.
+    """
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return query.execute()
+        except Exception as exc:
+            if not _is_transient_network_error(exc):
+                raise
+            last_exc = exc
+            logger.warning("[SUPABASE] Connection error on attempt %d/%d (%s) -- retrying.", attempt, max_retries, type(exc).__name__)
+            time.sleep(base_delay * attempt)
+    raise last_exc
 
 
 class CrmSessionExpired(HTTPException):
@@ -49,7 +91,7 @@ class CrmService:
     @staticmethod
     def get_user_connections(user_id: str):
         try:
-            response = supabase.table("crm_connections").select("*").eq("user_id", user_id).execute()
+            response = _execute_with_retry(supabase.table("crm_connections").select("*").eq("user_id", user_id))
             return response.data
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -57,8 +99,8 @@ class CrmService:
     @staticmethod
     def delete_connection(user_id: str, side: str):
         try:
-            response = (
-                supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
+            response = _execute_with_retry(
+                supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side)
             )
             return response.data
         except Exception as e:
@@ -67,13 +109,12 @@ class CrmService:
     @staticmethod
     def get_active_crm_credentials(user_id: str, crm_type: str, role: str):
         """Fetches the secure CRM credentials for a user directly from the database."""
-        response = (
+        response = _execute_with_retry(
             supabase.table("crm_connections")
             .select("*")
             .eq("user_id", user_id)
             .eq("crm_type", crm_type.lower())
             .eq("connection_role", role.lower())
-            .execute()
         )
 
         if not response.data:
@@ -247,7 +288,7 @@ class CrmService:
                 # HubSpot / Zendesk may rotate the refresh token -- keep it or the next refresh fails.
                 if data.get("refresh_token"):
                     update["refresh_token"] = data["refresh_token"]
-                supabase.table("crm_connections").update(update).eq("id", creds["id"]).execute()
+                _execute_with_retry(supabase.table("crm_connections").update(update).eq("id", creds["id"]))
                 return new_access
 
         raise crm_session_expired(crm_type, role)

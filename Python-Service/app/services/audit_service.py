@@ -252,13 +252,19 @@ class AuditService:
             writer.writeheader()
             writer.writerows(rows)
 
-        url = AuditService._upload_file(
-            tmp_path, storage_path,
-            content_type="text/csv; charset=utf-8",
-            disposition="attachment",
-            bucket=bucket,
-        )
-        os.remove(tmp_path)
+        try:
+            url = AuditService._upload_file(
+                tmp_path, storage_path,
+                content_type="text/csv; charset=utf-8",
+                disposition="attachment",
+                bucket=bucket,
+            )
+        finally:
+            # remove the temp file even when the upload fails (e.g. blocked by a network filter)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         return url
 
     # ==========================================
@@ -360,7 +366,7 @@ class AuditService:
 
             # --- WATERMARK ---
             pdf.set_font("Arial", "B", 40)
-            pdf.set_text_color(240, 240, 240)
+            pdf.set_text_color(240, 240, 240)  # Very light gray
             pdf.text(25, 165, s("SureShift Retry" if is_retry else "SureShift Migration"))
             pdf.set_text_color(0, 0, 0)
 
