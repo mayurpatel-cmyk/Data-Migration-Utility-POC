@@ -1344,12 +1344,27 @@
               <i class="feather icon-link" style="font-size: 0.75rem;"></i>
             </span>
             <span class="fw-bold" style="color: #0a58ca;">Linked to already-migrated objects</span>
-            <span class="text-muted">Click one to scope this query to records whose parent was already migrated (no Ids needed)</span>
+            <span class="text-muted">Click one or more to scope this query to records whose parents were already migrated (no Ids needed)</span>
+            @if (scopeSuggestions.length > 1) {
+            <span class="ms-auto d-inline-flex align-items-center gap-1" style="font-size: 0.72rem;">
+              <span class="text-muted">Match</span>
+              <span class="btn-group btn-group-sm" role="group" aria-label="Match mode">
+                <button type="button" class="btn"
+                  [ngClass]="scopeJoin === 'AND' ? 'btn-primary' : 'btn-outline-primary bg-white'"
+                  style="font-size: 0.72rem; padding: 1px 10px;"
+                  title="Record must link to ALL selected parents (AND)" (click)="setScopeJoin('AND')">All</button>
+                <button type="button" class="btn"
+                  [ngClass]="scopeJoin === 'OR' ? 'btn-primary' : 'btn-outline-primary bg-white'"
+                  style="font-size: 0.72rem; padding: 1px 10px;"
+                  title="Record may link to ANY selected parent (OR)" (click)="setScopeJoin('OR')">Any</button>
+              </span>
+            </span>
+            }
           </div>
           <div class="d-flex flex-wrap gap-2">
             @for (s of scopeSuggestions; track s.field + s.parent) {
             <button type="button" class="d-inline-flex align-items-center gap-2 rounded-3 text-start"
-              [title]="s.query" (click)="useScopeSuggestion(s)"
+              [title]="isScopeActive(s) ? 'Selected - click to remove from the query' : 'Click to add: ' + s.field + ' IN ({{MIGRATED:' + s.parent + '}})'" (click)="useScopeSuggestion(s)"
               [ngStyle]="{
                 'background': isScopeActive(s) ? '#0d6efd' : '#ffffff',
                 'color': isScopeActive(s) ? '#ffffff' : '#212529',

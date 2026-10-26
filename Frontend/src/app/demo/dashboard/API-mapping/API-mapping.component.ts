@@ -255,6 +255,8 @@ isProfileDropdownOpen = false;
   customQuery: string = '';
   scopeSuggestions: { field: string; parent: string; count: number; query: string }[] = [];
   private migratedParents: Record<string, number> = {};
+  scopeJoin: 'AND' | 'OR' = 'AND';          // how several selected parent chips combine
+  private scopeSelectClause = '';           // 'SELECT <cols> FROM <object>' used when chips build the query
   isDefaultQuery: boolean = true;
   queryError: string | null = null;
   isPreviewLoading = false;
@@ -384,6 +386,8 @@ get fileMigrationNotes(): string[] {
       .slice(0, 15)
       .map((f) => f.name)].join(', ');
 
+    this.scopeSelectClause = `SELECT ${cols} FROM ${this.selectedSourceObject}`;
+
     const seen = new Set<string>();
     for (const f of fields) {
       for (const parent of (f.referenceTo || [])) {
@@ -400,15 +404,41 @@ get fileMigrationNotes(): string[] {
     }
   }
 
-  isScopeActive(s: { field: string; parent: string }): boolean {
-    const q = (this.customQuery || '').toLowerCase();
-    return q.includes(`{{migrated:${s.parent.toLowerCase()}}}`) && q.includes(s.field.toLowerCase());
+  private scopeCondition(s: { field: string; parent: string }): string {
+    return `${s.field} IN ({{MIGRATED:${s.parent}}})`;
   }
 
-  useScopeSuggestion(s: { query: string }): void {
-    this.customQuery = s.query;
+  isScopeActive(s: { field: string; parent: string }): boolean {
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(String.raw`\b${esc(s.field)}\s+IN\s*\(\s*\{\{\s*MIGRATED\s*:\s*${esc(s.parent)}\s*\}\}\s*\)`, 'i');
+    return re.test(this.customQuery || '');
+  }
+
+  get activeScopeCount(): number {
+    return this.scopeSuggestions.filter((x) => this.isScopeActive(x)).length;
+  }
+
+  /** Chips toggle: pick Account and Contact to scope an Opportunity query by BOTH parents. */
+  useScopeSuggestion(s: { field: string; parent: string; query: string }): void {
+    const active = this.scopeSuggestions.filter((x) => this.isScopeActive(x));
+    const next = this.isScopeActive(s)
+      ? active.filter((x) => !(x.field === s.field && x.parent === s.parent))
+      : [...active, s];
+    this.applyScopeSelection(next);
+  }
+
+  setScopeJoin(join: 'AND' | 'OR'): void {
+    this.scopeJoin = join;
+    this.applyScopeSelection(this.scopeSuggestions.filter((x) => this.isScopeActive(x)));
+  }
+
+  private applyScopeSelection(selected: { field: string; parent: string }[]): void {
+    const q = selected.length
+      ? `${this.scopeSelectClause} WHERE ${selected.map((x) => this.scopeCondition(x)).join(` ${this.scopeJoin} `)}`
+      : this.scopeSelectClause;
+    this.customQuery = q;
     this.isDefaultQuery = false;
-    this.monacoEditorInstance?.setValue(s.query);
+    this.monacoEditorInstance?.setValue(q);
   }
 
   toggleQueryEditorSize(): void {

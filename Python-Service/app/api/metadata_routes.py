@@ -17,6 +17,8 @@ from app.services.parent_scope_service import ParentScopeService, ParentScopeErr
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+PREVIEW_MAX_SCOPE_STATEMENTS = 25  # cap on Id-chunk statements a single Preview click may run
+
 # =========================================================
 # FETCH OBJECTS DYNAMICALLY (With Silent Token Refresh)
 # =========================================================
@@ -101,21 +103,54 @@ async def get_filtered_preview(payload: PreviewFilterPayload, current_user = Dep
 
     creds = CrmService.get_active_crm_credentials(current_user.id, crm_id, role)
 
+    scoped_queries: Optional[List[str]] = None   # one statement per combination of parent-Id chunks
+    scope_limit: Optional[int] = None            # the user's own trailing LIMIT, if any
     if ParentScopeService.has_scope(query):
         if not payload.targetCrmId:
             raise HTTPException(status_code=400, detail="targetCrmId is required when the query uses {{MIGRATED:<Object>}}.")
         tgt = CrmService.get_active_crm_credentials(current_user.id, payload.targetCrmId.lower(), "target")
         try:
-            query = ParentScopeService.first_chunk_query(query, ScopeContext(
+            scoped_queries, scope_limit, _ = ParentScopeService.expand(query, ScopeContext(
                 current_user.id, crm_id, payload.targetCrmId,
                 creds.get("instance_url") or creds.get("api_domain") or creds.get("subdomain"),
                 tgt.get("instance_url") or tgt.get("api_domain") or tgt.get("subdomain"),
             ))
         except ParentScopeError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        query = scoped_queries[0]
+
+    async def _scoped_preview():
+        """With several parents (e.g. Account AND Contact) the first Id-chunk combination can legitimately be
+        empty while a later one has rows, so walk the combinations until the preview limit is filled."""
+        eff_limit = scope_limit if scope_limit else limit
+        records, seen_ids, first_used, ran = [], set(), None, 0
+        for q in scoped_queries[:PREVIEW_MAX_SCOPE_STATEMENTS]:
+            if len(records) >= eff_limit:
+                break
+            ran += 1
+            res = await CrmQueryService.execute_salesforce_query(
+                creds, obj_name, q, headers_list, eff_limit - len(records), payload.migrationTimeFilter
+            )
+            first_used = first_used or res.get("queryUsed")
+            for row in res.get("records", []):
+                rid = row.get("Id") if isinstance(row, dict) else None
+                if rid is not None:
+                    if rid in seen_ids:
+                        continue
+                    seen_ids.add(rid)
+                records.append(row)
+        used = first_used or query
+        if ran < len(scoped_queries) and len(records) < eff_limit:
+            used += f"  /* preview checked {ran} of {len(scoped_queries)} chunk(s); the full run checks all of them */"
+        elif len(scoped_queries) > 1:
+            used += f"  /* +{len(scoped_queries) - 1} more chunk(s) in the full run */"
+        return {"records": records[:eff_limit], "queryUsed": used}
 
     async def _fetch(token):
         creds["access_token"] = token
+
+        if scoped_queries and crm_id == "salesforce":
+            return await _scoped_preview()
 
         if crm_id == "salesforce":
             return await CrmQueryService.execute_salesforce_query(creds, obj_name, query, headers_list, limit,payload.migrationTimeFilter)
