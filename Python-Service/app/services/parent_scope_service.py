@@ -11,7 +11,7 @@ Query syntax (anywhere an IN list is valid):
 (IdMappingService), scoped to the current CRM + org pair. The expansion is chunked so the SOQL/COQL
 statement never exceeds URL limits, and the user's trailing LIMIT is applied to the combined result.
 
-Only SQL-style sources (Salesforce SOQL, Zoho COQL) are supported. The linking of the child's lookup to
+Only Salesforce (SOQL) sources are supported for now (see SQL_STYLE_CRMS). The linking of the child's lookup to
 the NEW parent Id in the target org is unchanged: remap_reference_fields() already does that from the
 same map.
 """
@@ -23,7 +23,7 @@ from app.services.id_mapping_service import IdMappingService
 TOKEN_RE = re.compile(r"\{\{\s*MIGRATED\s*:\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}", re.IGNORECASE)
 _TRAILING_LIMIT_RE = re.compile(r"(?is)\s+limit\s+(\d+)\s*$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
-SQL_STYLE_CRMS = {"salesforce", "zoho"}
+SQL_STYLE_CRMS = {"salesforce"}
 DEFAULT_CHUNK_SIZE = 200  # 200 quoted Ids stays well under the ~8 KB GET URL limit once encoded
 
 
@@ -51,7 +51,7 @@ class ParentScopeService:
     def expand(query: str, ctx: ScopeContext, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Tuple[List[str], Optional[int], int]:
         """Returns (queries, overall_limit, parent_count). One query per chunk of parent Ids."""
         if ctx.source_crm not in SQL_STYLE_CRMS:
-            raise ParentScopeError("{{MIGRATED:...}} is supported for Salesforce and Zoho sources only.")
+            raise ParentScopeError("{{MIGRATED:...}} is currently supported for Salesforce sources only.")
 
         parents = {m.group(1) for m in TOKEN_RE.finditer(query)}
         if len(parents) != 1:

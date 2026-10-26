@@ -376,7 +376,7 @@ get fileMigrationNotes(): string[] {
   buildScopeSuggestions(): void {
     this.scopeSuggestions = [];
     const crm = (this.sourceCrmId || '').toLowerCase();
-    if (!['salesforce', 'zoho'].includes(crm) || !this.selectedSourceObject) return;
+    if (crm !== 'salesforce' || !this.selectedSourceObject) return; // Zoho excluded: the Id map stores truncated Ids
 
     const fields = this.allSourceFields.length > 0 ? this.allSourceFields : this.sourceFields;
     const cols = ['Id', ...fields
@@ -2376,6 +2376,7 @@ onReviewPanelDragEnd(): void {
       return;
     }
     if (/\{\{\s*MIGRATED\s*:/i.test(query)) {
+      // The count endpoint can't resolve {{MIGRATED:...}}; the preview shows the scoped rows instead.
       this.selectedSourceObjectCount = null;
       return;
     }
@@ -2767,6 +2768,7 @@ onReviewPanelDragEnd(): void {
           );
           this.prefetchParentFieldMetadata();
 
+          // Fields are known now: (re)load which parents are already migrated, then build the chips.
           void this.loadMigratedParents();
 
           this.previewHeaders = sourceData.headers || [];

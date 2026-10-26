@@ -1336,22 +1336,50 @@
         </div>
 
         @if (scopeSuggestions.length) {
-        <div class="rounded border px-2 py-2 mb-2 animate__animated animate__fadeIn"
-          style="background: #eef6ff; border-color: #b6d4fe !important;">
-          <div class="d-flex align-items-center gap-2 mb-2" style="font-size: 0.75rem;">
-            <i class="feather icon-link text-primary"></i>
-            <span class="fw-bold text-primary">Linked to already-migrated objects</span>
-            <span class="text-muted">Pick one to scope this query automatically (no IDs needed)</span>
+        <div class="rounded-3 border mb-2 animate__animated animate__fadeIn"
+          style="background: linear-gradient(135deg, #f4f8ff 0%, #eaf2ff 100%); border-color: #c5dafc !important; padding: 10px 12px;">
+          <div class="d-flex align-items-center gap-2 mb-2 flex-wrap" style="font-size: 0.78rem;">
+            <span class="d-inline-flex align-items-center justify-content-center rounded-circle"
+              style="width: 22px; height: 22px; background: #0d6efd; color: #fff;">
+              <i class="feather icon-link" style="font-size: 0.75rem;"></i>
+            </span>
+            <span class="fw-bold" style="color: #0a58ca;">Linked to already-migrated objects</span>
+            <span class="text-muted">Click one to scope this query to records whose parent was already migrated (no Ids needed)</span>
           </div>
           <div class="d-flex flex-wrap gap-2">
             @for (s of scopeSuggestions; track s.field + s.parent) {
-            <button type="button" class="btn btn-sm rounded-pill d-inline-flex align-items-center gap-1 shadow-sm"
-              [ngClass]="isScopeActive(s) ? 'btn-primary' : 'btn-outline-primary bg-white'"
-              style="font-size: 0.75rem; font-weight: 600;" [title]="s.query" (click)="useScopeSuggestion(s)">
-              <i class="feather" [ngClass]="isScopeActive(s) ? 'icon-check-circle' : 'icon-git-merge'"></i>
-              <span>{{ s.parent }}</span>
-              <span class="opacity-75 fw-normal">via {{ s.field }}</span>
-              <span class="badge rounded-pill bg-light text-dark ms-1">{{ s.count | number }}</span>
+            <button type="button" class="d-inline-flex align-items-center gap-2 rounded-3 text-start"
+              [title]="s.query" (click)="useScopeSuggestion(s)"
+              [ngStyle]="{
+                'background': isScopeActive(s) ? '#0d6efd' : '#ffffff',
+                'color': isScopeActive(s) ? '#ffffff' : '#212529',
+                'border': isScopeActive(s) ? '1px solid #0d6efd' : '1px solid #b6d0fb',
+                'box-shadow': isScopeActive(s) ? '0 2px 8px rgba(13,110,253,.35)' : '0 1px 2px rgba(0,0,0,.06)',
+                'padding': '6px 10px',
+                'cursor': 'pointer',
+                'transition': 'all .15s ease'
+              }">
+              <span class="d-inline-flex align-items-center justify-content-center rounded-circle flex-shrink-0"
+                [ngStyle]="{
+                  'width': '26px', 'height': '26px',
+                  'background': isScopeActive(s) ? 'rgba(255,255,255,.22)' : '#e7f0ff',
+                  'color': isScopeActive(s) ? '#ffffff' : '#0d6efd'
+                }">
+                <i class="feather" style="font-size: 0.85rem;"
+                  [ngClass]="isScopeActive(s) ? 'icon-check' : 'icon-git-merge'"></i>
+              </span>
+              <span class="d-flex flex-column" style="line-height: 1.15;">
+                <span class="fw-bold" style="font-size: 0.82rem;">{{ s.parent }}</span>
+                <span style="font-size: 0.68rem; font-family: monospace;"
+                  [style.color]="isScopeActive(s) ? 'rgba(255,255,255,.85)' : '#6c757d'">via {{ s.field }}</span>
+              </span>
+              <span class="rounded-pill fw-bold ms-1"
+                style="font-size: 0.7rem; padding: 2px 8px; min-width: 26px; text-align: center;"
+                [ngStyle]="{
+                  'background': isScopeActive(s) ? '#ffffff' : '#0d6efd',
+                  'color': isScopeActive(s) ? '#0d6efd' : '#ffffff'
+                }"
+                [title]="(s.count | number) + ' ' + s.parent + ' record(s) already migrated'">{{ s.count | number }}</span>
             </button>
             }
           </div>

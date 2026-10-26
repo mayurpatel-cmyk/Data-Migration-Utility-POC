@@ -307,7 +307,7 @@ class SalesforceMigrator:
             url, params = f"{base}/services/data/v60.0/query", {"q": soql}
             while url:
                 res = await client.get(url, params=params, headers=headers)
-                if res.status_code == 401:  # the run's token may have expired: refresh once and replay
+                if res.status_code == 401:
                     token = await CrmService.refresh_crm_token(options.get("userId"), "salesforce", "target")
                     headers["Authorization"] = f"Bearer {token}"
                     res = await client.get(url, params=params, headers=headers)
@@ -383,5 +383,5 @@ class SalesforceMigrator:
                 await send_log(f"[{target_object}] Revert incomplete: {len(failed)} of {len(ids)} record(s) not deleted.")
         except Exception as e:
             await send_log(f"[{target_object}] Revert Failed: {str(e)}")
-            return list(ids)  # unknown how far it got; ids that are already deleted are accepted on the retry
+            return list(ids)
         return failed
