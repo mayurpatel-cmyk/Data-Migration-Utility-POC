@@ -101,6 +101,29 @@ interface FileMigrationBudgetPreview {
   targetBudgetVerified?: boolean;
 }
 
+interface ValidationErrorInfo {
+  title: string;
+  detail: string;
+}
+
+interface ErrorSummaryItem {
+  message: string;
+  count: number;
+}
+
+interface ValidationFrameBuffer {
+  dirty: boolean;
+  terminal: boolean;
+  logs: string[];
+  status?: string;
+  stats?: { total: number; valid: number; invalid: number; duplicates: number };
+  sessionId?: string;
+  invalidRecords?: any[];
+  errorSummary?: ErrorSummaryItem[];
+  fieldAccessErrors?: any[];
+  error?: ValidationErrorInfo;
+}
+
 @Component({
   selector: 'app-api-mapping',
   standalone: true,
@@ -131,6 +154,29 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   private mappingCancel$ = new Subject<void>();
 
   private allSourceFields: FieldMeta[] = [];
+  private sourceFieldMap = new Map<string, FieldMeta>();
+  private targetFieldMap = new Map<string, FieldMeta>();
+  private destroyed = false;
+
+  // ---- streaming / rendering throttles ----
+  private static readonly MAX_LOG_LINES = 1000;
+  private static readonly UI_FLUSH_MS = 250;
+  private static readonly VALIDATION_TERMINAL = ['Validation Passed', 'Validation Warning', 'Validation Failed'];
+  private vBuf: ValidationFrameBuffer = { dirty: false, terminal: false, logs: [] };
+  private vFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private migLogBuf: string[] = [];
+  private migLogTimer: ReturnType<typeof setTimeout> | null = null;
+  private terminalRevealed = false;
+
+  // ---- validation error presentation ----
+  validationError: ValidationErrorInfo | null = null;
+  validationErrorSummary: ErrorSummaryItem[] = [];
+  errorSummaryIsSample = true;
+  showCleanColumns = false;
+  sortedErrorTableFields: MappingRow[] = [];
+  visibleErrorColumns: MappingRow[] = [];
+  errorColumnCount = 0;
+  private errorColumns = new Set<string>();
   private readonly allowOrderBy = true;
   private readonly PICKLIST_TYPES_BY_CRM: Record<string, string[]> = {
     salesforce: ['picklist', 'multipicklist'],
@@ -418,7 +464,6 @@ get fileMigrationNotes(): string[] {
     return this.scopeSuggestions.filter((x) => this.isScopeActive(x)).length;
   }
 
-  /** Chips toggle: pick Account and Contact to scope an Opportunity query by BOTH parents. */
   useScopeSuggestion(s: { field: string; parent: string; query: string }): void {
     const active = this.scopeSuggestions.filter((x) => this.isScopeActive(x));
     const next = this.isScopeActive(s)
@@ -546,6 +591,10 @@ private showSchemaLoader(): void {
   }
 
   ngOnDestroy() {
+    this.destroyed = true;
+    if (this.vFlushTimer) clearTimeout(this.vFlushTimer);
+    if (this.migLogTimer) clearTimeout(this.migLogTimer);
+    clearTimeout(this.lockRefreshTimer);
     this.mappingCancel$.next();
     this.mappingCancel$.complete();
 
@@ -651,9 +700,22 @@ private showSchemaLoader(): void {
     }
   }
 
+  private qfCacheKey = '';
+  private qfCacheValue: string[] | null = null;
+  private qfSetSource: string[] | null = null;
+  private qfSetValue: Set<string> | null = null;
+
   getQuerySelectedFields(): string[] | null {
     const crm = (this.sourceCrmId || '').toLowerCase();
     const query = (this.customQuery || '').trim();
+    const key = `${crm}|${this.selectedSourceObject}|${query}`;
+    if (key === this.qfCacheKey) return this.qfCacheValue;
+    this.qfCacheValue = this.computeQuerySelectedFields(crm, query);
+    this.qfCacheKey = key;
+    return this.qfCacheValue;
+  }
+
+  private computeQuerySelectedFields(crm: string, query: string): string[] | null {
     if (!query) return null;
 
     switch (crm) {
@@ -1016,7 +1078,11 @@ get isEligibleForTimeFilter(): boolean {
     if (!this.restrictMappingToQueryFields) return null;
     const querySelectedFields = this.getQuerySelectedFields();
     if (!querySelectedFields) return null;
-    return new Set(querySelectedFields.map((f) => f.toLowerCase()));
+    if (querySelectedFields !== this.qfSetSource) {
+      this.qfSetSource = querySelectedFields;
+      this.qfSetValue = new Set(querySelectedFields.map((f) => f.toLowerCase()));
+    }
+    return this.qfSetValue;
   }
 
   private restrictToQueryFields<T extends { sourceField: string }>(rows: T[]): T[] {
@@ -1117,7 +1183,7 @@ toggleProfileDropdown(event: Event): void {
   }
 
   getFieldMeta(fieldName: string, side: 'source' | 'target'): FieldMeta | undefined {
-    return side === 'source' ? this.sourceFields.find((f) => f.name === fieldName) : this.targetFields.find((f) => f.name === fieldName);
+    return (side === 'source' ? this.sourceFieldMap : this.targetFieldMap).get(fieldName);
   }
 
   getFieldTypeBadge(type: string | undefined): string {
@@ -1666,10 +1732,10 @@ startReviewPanelDrag(event: MouseEvent): void {
   const rect = panelEl.getBoundingClientRect();
   this.reviewPanelDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
   this.reviewPanelDragging = true;
+  this.beginDrag((e) => this.onReviewPanelDrag(e), () => (this.reviewPanelDragging = false));
   event.preventDefault();
 }
 
-@HostListener('document:mousemove', ['$event'])
 onReviewPanelDrag(event: MouseEvent): void {
   if (!this.reviewPanelDragging) return;
 
@@ -1681,10 +1747,6 @@ onReviewPanelDrag(event: MouseEvent): void {
   this.reviewPanelTop = Math.min(Math.max(event.clientY - this.reviewPanelDragOffset.y, 0), maxTop);
 }
 
-@HostListener('document:mouseup')
-onReviewPanelDragEnd(): void {
-  this.reviewPanelDragging = false;
-}
 
   // --- ADD THIS TEMPLATE CONSTANT ---
   readonly ZENDESK_CUSTOM_OBJECT_TEMPLATE = `/* Zendesk Custom Object Query Template 
@@ -1812,9 +1874,9 @@ onReviewPanelDragEnd(): void {
 
     const requiredFields = this.targetFields.filter((f) => f.isRequired || f.required).map((f) => f.name);
 
-    const mappedFields = this.mappings.filter((m) => m.targetField !== '').map((m) => m.targetField);
+    const mappedFields = new Set(this.mappings.filter((m) => m.targetField !== '').map((m) => m.targetField));
 
-    return requiredFields.filter((reqField) => !mappedFields.includes(reqField));
+    return requiredFields.filter((reqField) => !mappedFields.has(reqField));
   }
 
   isFieldWritable(field: FieldMeta | undefined | null, mode: string = this.operationMode): boolean {
@@ -1839,7 +1901,7 @@ onReviewPanelDragEnd(): void {
 
     this.mappings.forEach((m) => {
       if (!m.targetField || seen.has(m.targetField)) return;
-      const fieldMeta = this.targetFields.find((f) => f.name === m.targetField);
+      const fieldMeta = this.targetFieldMap.get(m.targetField);
       if (fieldMeta && !this.isFieldWritable(fieldMeta)) {
         seen.add(m.targetField);
         violations.push({ targetField: m.targetField, label: fieldMeta.label });
@@ -2302,15 +2364,13 @@ onReviewPanelDragEnd(): void {
     }
   }
 
-  scrollToBottom() {
+  scrollToBottom(revealTerminal = false) {
     const logContainer = document.querySelector('.bg-dark.overflow-auto, .bg-light.overflow-auto, .shadow-inner');
     if (logContainer) {
       logContainer.scrollTop = logContainer.scrollHeight;
     }
-
-    const terminalCard = document.getElementById('execution-terminal');
-    if (terminalCard) {
-      terminalCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (revealTerminal) {
+      document.getElementById('execution-terminal')?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }
 
@@ -2796,9 +2856,10 @@ onReviewPanelDragEnd(): void {
           this.sourceFields = this.allSourceFields.filter(
             (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
           );
+          this.sourceFieldMap = new Map(this.sourceFields.map((f) => [f.name, f] as [string, FieldMeta]));
+          this.targetFieldMap = new Map(this.targetFields.map((f) => [f.name, f] as [string, FieldMeta]));
           this.prefetchParentFieldMetadata();
 
-          // Fields are known now: (re)load which parents are already migrated, then build the chips.
           void this.loadMigratedParents();
 
           this.previewHeaders = sourceData.headers || [];
@@ -2838,6 +2899,8 @@ onReviewPanelDragEnd(): void {
           this.errorData = [];
           this.skippedData = [];
           this.isValidating = false;
+          this.validationError = null;
+          this.validationErrorSummary = [];
 
           this.updateMappedCount();
           this.isLoading = false;
@@ -3165,6 +3228,8 @@ onReviewPanelDragEnd(): void {
     this.successData = [];
     this.errorData = [];
     this.skippedData = [];
+    this.validationError = null;
+    this.validationErrorSummary = [];
 
     this.toastr.info(
       'Your mapping changed since the last validation run -- validate again before running the migration.',
@@ -3208,6 +3273,7 @@ onReviewPanelDragEnd(): void {
     }
 
     this.mappedCount = this.mappings.filter((m) => m.targetField !== '').length;
+    this.rebuildErrorColumnCache();
     this.cdr.markForCheck();
   }
 
@@ -3370,67 +3436,30 @@ onReviewPanelDragEnd(): void {
 
 
     this.closeSocket(this.validationSocket);
+    this.resetValidationBuffer();
+    this.validationError = null;
+    this.validationErrorSummary = [];
+    this.terminalRevealed = false;
 
-    const ws = new WebSocket(`${environment.wsUrl}/ws/validate-stream`);
+    const ws = this.zone.runOutsideAngular(() => new WebSocket(`${environment.wsUrl}/ws/validate-stream`));
     this.validationSocket = ws;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify(payload));
-    };
-
-    ws.onmessage = (event) => {
-      this.zone.run(() => {
-        const data = JSON.parse(event.data);
-
-        if (isSocketAuthExpired(data)) {
-          this.handleSessionExpired(getSocketExpiredSides(data));
-          return;
-        }
-        if (data.log) {
-          this.logMessages.push(data.log);
-          if (this.logMessages.length > 50) this.logMessages.shift();
-        }
-
-        if (data.status) {
-          this.jobStatus = data.status;
-        }
-
-        if (data.fieldAccessErrors && data.fieldAccessErrors.length > 0) {
-          const fieldList = data.fieldAccessErrors.map((v: any) => v.label || v.field).join(', ');
-          this.toastr.error(
-            `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove them from the mapping and try again.`,
-            'No Field-Level Write Access'
-          );
-          this.isValidating = false;
-        }
-
-        if (data.stats) {
-          this.aggregateStats = data.stats;
-        }
-
-        if ((data.status === 'Validation Passed' || data.status === 'Validation Warning') && data.invalidRecords) {
-          this.validationResults.invalidRecords = data.invalidRecords;
-          if (data.sessionId) {
-            this.currentSessionId = data.sessionId;
-          }
-
-          if (data.invalidRecords.length >= 500) {
-            this.toastr.warning('Showing the first 500 errors to prevent browser lag.', 'Max Errors Reached');
-          }
-          this.isValidating = false;
-        }
-
-        this.cdr.detectChanges();
-        setTimeout(() => this.scrollToBottom(), 10);
-      });
-    };
+    ws.onopen = () => ws.send(JSON.stringify(payload));
+    ws.onmessage = (event: MessageEvent) => this.onValidationFrame(ws, event.data);
 
     ws.onerror = () => {
       this.zone.run(() => {
+        this.flushValidationUi();
         if (this.validationSocket === ws) this.validationSocket = null;
         this.logError(' WebSocket Error: Validation stream disconnected.');
         this.jobStatus = 'Validation Failed';
         this.isValidating = false;
+        if (!this.validationError) {
+          this.validationError = {
+            title: 'Validation stream disconnected',
+            detail: 'The connection to the validation engine failed. Check your network / server status and run validation again.'
+          };
+        }
         void this.notifySocketFailure('Validation stream');
         this.cdr.detectChanges();
       });
@@ -3439,14 +3468,141 @@ onReviewPanelDragEnd(): void {
     ws.onclose = (event: CloseEvent) => {
       if (!event.wasClean) void this.connectivity.reportFailure();
       this.zone.run(() => {
+        if (this.validationSocket && this.validationSocket !== ws) return; // superseded by a newer run
+        this.flushValidationUi();
         if (this.validationSocket === ws) this.validationSocket = null;
-        if (this.jobStatus !== 'Validation Passed' && this.jobStatus !== 'Validation Warning' && this.jobStatus !== 'Validation Failed') {
+        if (!ApiMappingComponent.VALIDATION_TERMINAL.includes(this.jobStatus)) {
           this.jobStatus = 'Disconnected';
+          if (this.isValidating && !this.validationError) this.validationError = this.describeSocketClose(event);
         }
         this.isValidating = false;
         this.cdr.detectChanges();
       });
     };
+  }
+
+  // ---------------- validation stream: parse off-zone, coalesce, render ~4x/sec ----------------
+  private emptyValidationBuffer(): ValidationFrameBuffer {
+    return { dirty: false, terminal: false, logs: [] };
+  }
+
+  private resetValidationBuffer(): void {
+    if (this.vFlushTimer) {
+      clearTimeout(this.vFlushTimer);
+      this.vFlushTimer = null;
+    }
+    this.vBuf = this.emptyValidationBuffer();
+  }
+
+  private onValidationFrame(ws: WebSocket, raw: unknown): void {
+    if (this.validationSocket !== ws || this.destroyed) return;
+
+    let data: any;
+    try {
+      data = JSON.parse(String(raw));
+    } catch {
+      this.vBuf.logs.push('Warning: received an unreadable frame from the validation engine.');
+      this.vBuf.dirty = true;
+      this.scheduleValidationFlush();
+      return;
+    }
+
+    if (isSocketAuthExpired(data)) {
+      this.zone.run(() => this.handleSessionExpired(getSocketExpiredSides(data)));
+      return;
+    }
+
+    const b = this.vBuf;
+    b.dirty = true;
+    if (data.log) b.logs.push(String(data.log));
+    if (data.status) b.status = data.status;
+    if (data.stats) b.stats = data.stats;
+    if (data.sessionId) b.sessionId = data.sessionId;
+    if (Array.isArray(data.fieldAccessErrors) && data.fieldAccessErrors.length) b.fieldAccessErrors = data.fieldAccessErrors;
+    if (Array.isArray(data.errorSummary)) b.errorSummary = data.errorSummary;
+
+    const isFinalStatus = ApiMappingComponent.VALIDATION_TERMINAL.includes(data.status);
+    if (isFinalStatus && Array.isArray(data.invalidRecords)) b.invalidRecords = data.invalidRecords;
+
+    const err = data.error ?? data.errorMessage;
+    if (err) {
+      b.error = {
+        title: data.errorCode ? `Validation error (${data.errorCode})` : 'Validation error',
+        detail: typeof err === 'string' ? err : err.message || JSON.stringify(err)
+      };
+    }
+
+    if (isFinalStatus || b.error || b.fieldAccessErrors) {
+      b.terminal = true;
+      this.flushValidationUi();
+    } else {
+      this.scheduleValidationFlush();
+    }
+  }
+
+  private scheduleValidationFlush(): void {
+    if (this.vFlushTimer) return;
+    this.vFlushTimer = setTimeout(() => {
+      this.vFlushTimer = null;
+      this.flushValidationUi();
+    }, ApiMappingComponent.UI_FLUSH_MS);
+  }
+
+  private flushValidationUi(): void {
+    if (this.vFlushTimer) {
+      clearTimeout(this.vFlushTimer);
+      this.vFlushTimer = null;
+    }
+    const b = this.vBuf;
+    if (!b.dirty) return;
+    this.vBuf = this.emptyValidationBuffer();
+
+    this.zone.run(() => {
+      if (this.destroyed) return;
+
+      this.appendLogs(b.logs);
+      if (b.status) this.jobStatus = b.status;
+      if (b.stats) this.aggregateStats = b.stats;
+      if (b.sessionId) this.currentSessionId = b.sessionId;
+
+      if (b.fieldAccessErrors?.length) {
+        const fieldList = b.fieldAccessErrors.map((v: any) => v.label || v.field).join(', ');
+        this.toastr.error(
+          `The connected ${this.targetSystem} user doesn't have write access to: ${fieldList}. Remove them from the mapping and try again.`,
+          'No Field-Level Write Access'
+        );
+      }
+
+      if (b.invalidRecords) {
+        this.indexInvalidRecords(b.invalidRecords, b.errorSummary);
+        if (!this.validationResults) this.validationResults = { invalidRecords: [] };
+        this.validationResults.invalidRecords = b.invalidRecords;
+        this.errorCurrentPage = 1;
+        this.rebuildErrorColumnCache();
+
+        if (b.invalidRecords.length >= 500 || this.aggregateStats.invalid > b.invalidRecords.length) {
+          this.toastr.warning(
+            `Showing the first ${b.invalidRecords.length.toLocaleString()} of ${this.aggregateStats.invalid.toLocaleString()} failing records to keep the browser responsive. Use "Download Full Error Report" for all of them.`,
+            'Errors Truncated'
+          );
+        }
+      }
+
+      if (b.error) {
+        this.validationError = b.error;
+      } else if (b.status === 'Validation Failed' && !b.invalidRecords?.length && !(this.aggregateStats.invalid > 0) && !this.validationError) {
+        const problem = [...b.logs].reverse().find((l) => /error|fail|exception|denied|invalid|limit|timeout/i.test(l));
+        this.validationError = { title: 'Validation failed', detail: problem || 'The engine reported a failure without details. Check the log below.' };
+      }
+
+      if (b.terminal) this.isValidating = false;
+
+      this.cdr.detectChanges();
+      if (b.logs.length) {
+        this.scrollToBottom(!this.terminalRevealed);
+        this.terminalRevealed = true;
+      }
+    });
   }
 
   applyMassUpdate(sourceField: string, value: string | undefined) {
@@ -3479,28 +3635,104 @@ onReviewPanelDragEnd(): void {
   }
 
   hasErrorsInColumn(sourceField: string): boolean {
-    if (!this.validationResults?.invalidRecords) return false;
-    const searchStr = `[${sourceField}:`;
-    return this.validationResults.invalidRecords.some((record: any) => record.errors.includes(searchStr));
-  }
-
-  get sortedErrorTableFields(): MappingRow[] {
-    const mapped = this.mappings.filter((m) => m.targetField);
-    return [...mapped].sort((a, b) => {
-      const aHasError = this.hasErrorsInColumn(a.sourceField) ? 0 : 1;
-      const bHasError = this.hasErrorsInColumn(b.sourceField) ? 0 : 1;
-      return aHasError - bHasError;
-    });
-  }
-
-  get errorColumnCount(): number {
-    return this.sortedErrorTableFields.filter((m) => this.hasErrorsInColumn(m.sourceField)).length;
+    return this.errorColumns.has(sourceField);
   }
 
   hasCellError(record: any, sourceField: string): boolean {
-    if (!record || !record.errors) return false;
-    const searchStr = `[${sourceField}:`;
-    return record.errors.includes(searchStr);
+    return !!record?._errorFields?.has(sourceField);
+  }
+
+  toggleCleanColumns(): void {
+    this.showCleanColumns = !this.showCleanColumns;
+    this.rebuildErrorColumnCache();
+  }
+
+  dismissValidationError(): void {
+    this.validationError = null;
+  }
+
+  private rebuildErrorColumnCache(): void {
+    const cols = new Set<string>();
+    for (const r of this.validationResults?.invalidRecords || []) {
+      r._errorFields?.forEach((f: string) => cols.add(f));
+    }
+    this.errorColumns = cols;
+
+    const mapped = this.mappings.filter((m) => m.targetField);
+    const withErr: MappingRow[] = [];
+    const clean: MappingRow[] = [];
+    for (const m of mapped) (cols.has(m.sourceField) ? withErr : clean).push(m);
+
+    this.sortedErrorTableFields = [...withErr, ...clean];
+    this.errorColumnCount = withErr.length;
+    this.visibleErrorColumns = this.showCleanColumns
+      ? this.sortedErrorTableFields
+      : withErr.length > 0
+        ? withErr
+        : clean.slice(0, 8);
+  }
+
+  private indexInvalidRecords(records: any[], serverSummary?: ErrorSummaryItem[]): void {
+    const groups = new Map<string, ErrorSummaryItem>();
+    const fieldRe = /\[([^\]:]+):/g;
+
+    for (const r of records) {
+      const text = Array.isArray(r.errors) ? r.errors.join(' | ') : String(r.errors ?? '');
+      r.errors = text;
+
+      const fields = new Set<string>();
+      fieldRe.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = fieldRe.exec(text)) !== null) fields.add(m[1].trim());
+      Object.defineProperty(r, '_errorFields', { value: fields, enumerable: false, writable: true, configurable: true });
+
+      if (!serverSummary) {
+        for (const seg of text.match(/\[[^\]]+\]/g) || [text]) {
+          const key = seg.replace(/'[^']*'/g, "'…'").replace(/\d+/g, '#');
+          const g = groups.get(key);
+          if (g) g.count++;
+          else groups.set(key, { message: seg, count: 1 });
+        }
+      }
+    }
+
+    this.errorSummaryIsSample = !serverSummary;
+    this.validationErrorSummary = (serverSummary || Array.from(groups.values()))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 15);
+  }
+
+  private describeSocketClose(event: CloseEvent): ValidationErrorInfo {
+    const code = event.code;
+    const reason = event.reason ? ` (${event.reason})` : '';
+    if (code === 1009) {
+      return { title: 'Validation result too large', detail: `The server sent a message bigger than the connection allows${reason}. Narrow the query/date filter, or ask the backend to cap the invalid-record payload.` };
+    }
+    if (code === 1006) {
+      return { title: 'Connection dropped during validation', detail: 'The stream ended without a final result (proxy idle timeout, server restart or network drop). Re-run validation; for very large sets use a date filter or LIMIT.' };
+    }
+    if (code === 1011) {
+      return { title: 'Validation engine error', detail: `The server hit an internal error while validating${reason}. Check the backend logs.` };
+    }
+    return { title: 'Validation stream closed early', detail: `Closed with code ${code}${reason} before a result arrived.` };
+  }
+
+  logClass(log: string): string {
+    const l = log.toLowerCase();
+    if (l.includes('error') || l.includes('fail')) return 'text-danger fw-bold';
+    if (l.includes('success') || l.includes('passed')) return 'text-success';
+    return 'text-muted';
+  }
+
+  logArrowClass(log: string): string {
+    return log.toLowerCase().includes('error') ? 'text-danger' : 'text-primary';
+  }
+
+  private appendLogs(lines: string[]): void {
+    if (!lines.length) return;
+    const merged = this.logMessages.concat(lines);
+    const max = ApiMappingComponent.MAX_LOG_LINES;
+    this.logMessages = merged.length > max ? merged.slice(merged.length - max) : merged;
   }
 
   markAsEdited(record: any, fieldName: string) {
@@ -4538,10 +4770,10 @@ onReviewPanelDragEnd(): void {
     const rect = panelEl.getBoundingClientRect();
     this.recoveryDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     this.recoveryDragging = true;
+    this.beginDrag((e) => this.onRecoveryPanelDrag(e), () => (this.recoveryDragging = false));
     event.preventDefault();
   }
 
-  @HostListener('document:mousemove', ['$event'])
   onRecoveryPanelDrag(event: MouseEvent): void {
     if (!this.recoveryDragging) return;
     const margin = 60;
@@ -4549,9 +4781,26 @@ onReviewPanelDragEnd(): void {
     this.recoveryTop = Math.min(Math.max(event.clientY - this.recoveryDragOffset.y, 0), window.innerHeight - margin);
   }
 
-  @HostListener('document:mouseup')
-  onRecoveryPanelDragEnd(): void {
-    this.recoveryDragging = false;
+  private beginDrag(onMove: (e: MouseEvent) => void, onEnd: () => void): void {
+    this.zone.runOutsideAngular(() => {
+      let raf = 0;
+      const move = (e: MouseEvent) => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (this.destroyed) return;
+          onMove(e);
+          this.cdr.detectChanges();
+        });
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        onEnd();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
   }
 
   formatCellValue(val: any): string {
@@ -4560,42 +4809,54 @@ onReviewPanelDragEnd(): void {
     return String(val);
   }
 
-  downloadCSV(raw_data: any[], filename: string) {
+  private yieldToBrowser(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async downloadCSV(raw_data: any[], filename: string): Promise<void> {
     if (!raw_data || raw_data.length === 0) return;
 
-    const data = raw_data.map((row) => this.flattenObject(row));
+    const CHUNK = 2000;
+    const big = raw_data.length > 5000;
+    if (big) this.toastr.info(`Preparing ${raw_data.length.toLocaleString()} rows...`, 'Download');
 
+    const flat: any[] = [];
     const headerSet = new Set<string>();
-    data.forEach((row) => Object.keys(row).forEach((key) => headerSet.add(key)));
+    for (let i = 0; i < raw_data.length; i += CHUNK) {
+      const end = Math.min(i + CHUNK, raw_data.length);
+      for (let j = i; j < end; j++) {
+        const row = this.flattenObject(raw_data[j]);
+        flat.push(row);
+        for (const k in row) headerSet.add(k);
+      }
+      if (big) await this.yieldToBrowser();
+    }
     const headers = Array.from(headerSet);
 
-    const csvRows = [];
-    csvRows.push(headers.join(','));
-
-    for (const row of data) {
-      const values = headers.map((header) => {
-        let val = row[header];
-
-        if (val !== null && typeof val === 'object') {
-          val = JSON.stringify(val);
-        }
-
-        const stringVal = String(val !== undefined && val !== null ? val : '');
-
-        if (/^\d{16,}$/.test(stringVal)) {
-          return `"\t${stringVal}"`;
-        }
-
-        const escaped = stringVal.replace(/"/g, '""');
-        return `"${escaped}"`;
-      });
-      csvRows.push(values.join(','));
+    const parts: string[] = [headers.join(',') + '\n'];
+    for (let i = 0; i < flat.length; i += CHUNK) {
+      const lines: string[] = [];
+      const end = Math.min(i + CHUNK, flat.length);
+      for (let j = i; j < end; j++) {
+        const row = flat[j];
+        lines.push(
+          headers
+            .map((header) => {
+              let val = row[header];
+              if (val !== null && typeof val === 'object') val = JSON.stringify(val);
+              const stringVal = String(val !== undefined && val !== null ? val : '');
+              if (/^\d{16,}$/.test(stringVal)) return `"\t${stringVal}"`;
+              return `"${stringVal.replace(/"/g, '""')}"`;
+            })
+            .join(',')
+        );
+      }
+      parts.push(lines.join('\n') + '\n');
+      if (big) await this.yieldToBrowser();
     }
 
-    const csvString = csvRows.join('\n');
-    const blob = new Blob([csvString], { type: 'text/csv' });
+    const blob = new Blob(parts, { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
-
     const a = document.createElement('a');
     a.setAttribute('hidden', '');
     a.setAttribute('href', url);
@@ -4603,6 +4864,7 @@ onReviewPanelDragEnd(): void {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => window.URL.revokeObjectURL(url), 10000);
   }
 
    runMigration() {
@@ -4780,9 +5042,11 @@ onReviewPanelDragEnd(): void {
     return;
   }
 
-  if (type === 'invalid' && this.validationResults?.invalidRecords) {
+  const inMemory: any[] = this.validationResults?.invalidRecords || [];
+  const truncated = this.aggregateStats.invalid > inMemory.length;
+  if (type === 'invalid' && inMemory.length > 0 && !truncated) {
     this.toastr.info(`Generating error audit report...`, 'Downloading');
-    this.downloadCSV(this.validationResults.invalidRecords, 'validation_errors.csv');
+    void this.downloadCSV(inMemory, 'validation_errors.csv');
     return;
   }
 
@@ -4804,7 +5068,17 @@ onReviewPanelDragEnd(): void {
       a.remove();
       window.URL.revokeObjectURL(objectUrl);
     },
-    error: () => this.toastr.error('Failed to download audit report.', 'Download Failed')
+    error: () => {
+      if (type === 'invalid' && inMemory.length > 0) {
+        this.toastr.warning(
+          `The full report is unavailable; exporting the ${inMemory.length.toLocaleString()} errors loaded in the grid instead.`,
+          'Partial Export'
+        );
+        void this.downloadCSV(inMemory, 'validation_errors_partial.csv');
+        return;
+      }
+      this.toastr.error('Failed to download audit report.', 'Download Failed');
+    }
   });
 }
 
@@ -5067,11 +5341,52 @@ onReviewPanelDragEnd(): void {
       .subscribe(() => this.resumeMigration());
   }
 
-  /** Confirmed outages are surfaced by the global toast/overlay; only request-specific failures are reported here. */
   private async notifySocketFailure(context: string): Promise<void> {
     const outage = await this.connectivity.reportFailure();
     if (outage) return;
     this.toastr.error(`${context} failed unexpectedly. Check the server logs and try again.`, 'Engine Error');
+  }
+
+  private isLogOnlyFrame(d: any): boolean {
+    return (
+      !!d &&
+      typeof d.log === 'string' &&
+      !d.status &&
+      !d.errorCode &&
+      !d.mode &&
+      !d.fileMigrationJobResult &&
+      !d.fileMigrationBudget &&
+      !d.successData &&
+      !d.errorData &&
+      !d.skippedData &&
+      (!d.runId || d.runId === this.currentRunId) &&
+      !isSocketAuthExpired(d)
+    );
+  }
+
+  private drainMigrationLogs(): void {
+    if (this.migLogTimer) {
+      clearTimeout(this.migLogTimer);
+      this.migLogTimer = null;
+    }
+    if (!this.migLogBuf.length) return;
+    const lines = this.migLogBuf;
+    this.migLogBuf = [];
+    this.appendLogs(lines);
+  }
+
+  private scheduleMigrationLogFlush(): void {
+    if (this.migLogTimer) return;
+    this.migLogTimer = setTimeout(() => {
+      this.migLogTimer = null;
+      this.zone.run(() => {
+        if (this.destroyed) return;
+        this.drainMigrationLogs();
+        this.cdr.detectChanges();
+        const el = document.querySelector('#terminal-window');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    }, ApiMappingComponent.UI_FLUSH_MS);
   }
 
   private openMigrationSocket(payload: any): void {
@@ -5085,7 +5400,7 @@ onReviewPanelDragEnd(): void {
     }
     this.closeSocket(this.migrationSocket);
 
-    const ws = new WebSocket(`${environment.wsUrl}/ws/migrate`);
+    const ws = this.zone.runOutsideAngular(() => new WebSocket(`${environment.wsUrl}/ws/migrate`));
     this.migrationSocket = ws;
 
     ws.onopen = () => {
@@ -5093,8 +5408,24 @@ onReviewPanelDragEnd(): void {
     };
 
     ws.onmessage = (event) => {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(event.data);
+      } catch {
+        this.migLogBuf.push('Warning: received an unreadable frame from the migration engine.');
+        this.scheduleMigrationLogFlush();
+        return;
+      }
+
+      if (this.isLogOnlyFrame(parsed)) {
+        this.migLogBuf.push(String(parsed.log));
+        this.scheduleMigrationLogFlush();
+        return;
+      }
+
       this.zone.run(() => {
-        const data = JSON.parse(event.data);
+        this.drainMigrationLogs();
+        const data = parsed;
 
         if (isSocketAuthExpired(data)) {
           this.handleSessionExpired(getSocketExpiredSides(data));
@@ -5121,7 +5452,7 @@ onReviewPanelDragEnd(): void {
         }
 
         if (data.log) {
-          this.logMessages = [...this.logMessages, data.log];
+          this.appendLogs([String(data.log)]);
         }
 
         if (data.errorCode === 'ORG_MISMATCH') {
@@ -5256,6 +5587,7 @@ onReviewPanelDragEnd(): void {
 
     ws.onerror = () => {
       this.zone.run(() => {
+        this.drainMigrationLogs();
         if (this.migrationSocket === ws) this.migrationSocket = null;
         this.isGlobalLoading = false;
         this.logMessages.push('FATAL: Connection to migration engine lost or refused.');
@@ -5269,6 +5601,8 @@ onReviewPanelDragEnd(): void {
     ws.onclose = (event: CloseEvent) => {
       if (!event.wasClean) void this.connectivity.reportFailure();
       this.zone.run(() => {
+        if (this.migrationSocket && this.migrationSocket !== ws) return; // superseded by a newer run
+        this.drainMigrationLogs();
         if (this.migrationSocket === ws) this.migrationSocket = null;
         this.isGlobalLoading = false;
         if (this.jobStatus === 'Running' || this.jobStatus === 'Initializing...') {

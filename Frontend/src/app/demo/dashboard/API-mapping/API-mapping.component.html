@@ -2236,11 +2236,22 @@
   </div>
 </div>
 
-@if (isValidating || aggregateStats.total > 0) {
+@if (isValidating || aggregateStats.total > 0 || validationError) {
 <div class="row mb-4 animate__animated animate__fadeIn" id="validation-results-area">
   <div class="col-sm-12">
     <div class="card shadow-sm border-0">
       <div class="card-body p-4">
+
+        @if (validationError) {
+        <div class="alert alert-danger d-flex gap-3 align-items-start mb-4" role="alert">
+          <i class="feather icon-alert-octagon fs-3"></i>
+          <div class="flex-grow-1 min-w-0">
+            <h6 class="fw-bold mb-1">{{ validationError.title }}</h6>
+            <div class="small text-break" style="white-space: pre-wrap;">{{ validationError.detail }}</div>
+            <button type="button" class="btn btn-sm btn-outline-danger mt-2" (click)="dismissValidationError()">Dismiss</button>
+          </div>
+        </div>
+        }
 
         <div class="row text-center g-3">
           <div class="col-md-3">
@@ -2313,6 +2324,39 @@
             </div>
           </div>
 
+          <!-- @if (validationErrorSummary.length > 0) {
+          <div class="border border-danger-subtle rounded bg-white p-3 mb-3">
+            <div class="small fw-bold text-danger mb-2">
+              Most common problems
+              @if (errorSummaryIsSample) {
+              <span class="text-muted fw-normal">(from the {{ validationResults?.invalidRecords?.length || 0 }} rows loaded below)</span>
+              }
+            </div>
+            <ul class="list-unstyled mb-0 small" style="max-height: 150px; overflow-y: auto;">
+              @for (g of validationErrorSummary; track g.message) {
+              <li class="d-flex justify-content-between gap-3 py-1 border-bottom">
+                <span class="text-break">{{ g.message }}</span>
+                <span class="badge bg-danger align-self-start">{{ g.count }}</span>
+              </li>
+              }
+            </ul>
+          </div>
+          } -->
+
+          @if (aggregateStats.invalid > (validationResults?.invalidRecords?.length || 0)) {
+          <div class="alert alert-warning py-2 small mb-3">
+            Showing the first <strong>{{ validationResults?.invalidRecords?.length || 0 }}</strong> of
+            <strong>{{ aggregateStats.invalid }}</strong> failing records so the page stays responsive.
+            Use <strong>Download Full Error Report</strong> for all of them.
+          </div>
+          }
+
+          @if (sortedErrorTableFields.length > visibleErrorColumns.length || showCleanColumns) {
+          <button type="button" class="btn btn-sm btn-link p-0 mb-2" (click)="toggleCleanColumns()">
+            {{ showCleanColumns ? 'Hide clean columns' : 'Show all ' + sortedErrorTableFields.length + ' mapped columns' }}
+          </button>
+          }
+
           @if (errorColumnCount > 0) {
           <div class="small text-muted mb-2 d-flex align-items-center gap-1">
             <i class="feather icon-arrow-left" style="font-size: 0.75rem;"></i>
@@ -2333,7 +2377,7 @@
                     style="min-width: 280px; max-width: 350px; z-index: 11;">
                     <i class="feather icon-alert-triangle me-1"></i> Salesforce Error Rule
                   </th>
-                  @for (mapping of sortedErrorTableFields; track mapping.sourceField; let i = $index) {
+                  @for (mapping of visibleErrorColumns; track mapping.sourceField; let i = $index) {
                   <th class="py-2 px-3 align-middle transition-all" style="min-width: 180px;"
                     [class.bg-danger-subtle]="hasErrorsInColumn(mapping.sourceField)"
                     [class.bg-white]="!hasErrorsInColumn(mapping.sourceField)"
@@ -2383,7 +2427,7 @@
                     style="min-width: 280px; max-width: 350px; font-size: 0.8rem; z-index: 5;">
                     {{ record.errors }}
                   </td>
-                  @for (mapping of sortedErrorTableFields; track mapping.sourceField; let i = $index) {
+                  @for (mapping of visibleErrorColumns; track mapping.sourceField; let i = $index) {
                   <td class="p-2 align-middle" style="min-width: 180px;"
                     [class.border-end]="i === errorColumnCount - 1" [class.border-3]="i === errorColumnCount - 1"
                     [class.border-warning]="i === errorColumnCount - 1">
@@ -2565,13 +2609,8 @@
 
             <!-- 3: Convert legacy *ngFor to the new @for syntax -->
             @for (log of logMessages; track $index) {
-            <div class="mb-1" [ngClass]="{
-                   'text-danger fw-bold': log.toLowerCase().includes('error') || log.toLowerCase().includes('fail'),
-                   'text-success': log.toLowerCase().includes('success') || log.toLowerCase().includes('passed'),
-                   'text-muted': !log.toLowerCase().includes('error') && !log.toLowerCase().includes('success')
-                 }">
-              <span class="fw-bold"
-                [ngClass]="log.toLowerCase().includes('error') ? 'text-danger' : 'text-primary'">&gt;</span>
+            <div class="mb-1" [ngClass]="logClass(log)">
+              <span class="fw-bold" [ngClass]="logArrowClass(log)">&gt;</span>
               {{ log }}
             </div>
             }
