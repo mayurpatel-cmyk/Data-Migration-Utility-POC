@@ -172,7 +172,7 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
   validationError: ValidationErrorInfo | null = null;
   validationErrorSummary: ErrorSummaryItem[] = [];
   errorSummaryIsSample = true;
-  showCleanColumns = false;
+  showCleanColumns = true;
   sortedErrorTableFields: MappingRow[] = [];
   visibleErrorColumns: MappingRow[] = [];
   errorColumnCount = 0;
