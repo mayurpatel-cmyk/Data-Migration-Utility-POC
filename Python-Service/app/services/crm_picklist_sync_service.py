@@ -95,7 +95,7 @@ class _HubspotProvider(_BaseProvider):
             }
             for o in prop.get("options") or []
         ]
-        return {"values": values, "raw": prop}
+        return {"values": values, "raw": prop, "multi": prop.get("fieldType") == "checkbox"}
 
     @classmethod
     async def add(cls, session, obj, field, info, missing) -> List[str]:
@@ -159,7 +159,7 @@ class _ZohoProvider(_BaseProvider):
             if actual in (None, "") or actual == "-None-":
                 continue
             values.append({"value": str(actual), "label": str(display or actual), "active": True})
-        return {"values": values, "raw": f, "module": module}
+        return {"values": values, "raw": f, "module": module, "multi": f.get("data_type") == "multiselectpicklist"}
 
     @classmethod
     async def add(cls, session, obj, field, info, missing) -> List[str]:
@@ -234,7 +234,7 @@ class _ZendeskProvider(_BaseProvider):
             {"value": str(o.get("value", "")), "label": str(o.get("name") or o.get("value", "")), "active": True}
             for o in data.get("custom_field_options") or []
         ]
-        return {"values": values, "raw": data, "loc": loc}
+        return {"values": values, "raw": data, "loc": loc, "multi": data.get("type") == "multiselect"}
 
     @classmethod
     async def add(cls, session, obj, field, info, missing) -> List[str]:
@@ -279,15 +279,26 @@ class _SalesforceProvider(_BaseProvider):
             for v in f.get("picklistValues") or []
             if v.get("value") is not None
         ]
-        return {"values": values}
+        return {
+            "values": values,
+            "multi": f.get("type") == "multipicklist",
+            "controlled": bool(f.get("controllerName")),
+            "meta": f,  # the raw describe entry; PicklistSyncService._add_values needs it as `field_meta`
+        }
 
     @classmethod
     async def add(cls, session: _SalesforceSession, obj, field, info, missing) -> List[str]:
-        added = await PicklistSyncService._add_values(session, obj, field, missing)
+        meta = info.get("meta") or {}
+        # _add_values(session, obj, field, <values>, field_meta): the 4th argument is normally the list of
+        # {"value", "label"} dicts; if this version of the service wants plain strings, retry with those.
+        try:
+            added = await PicklistSyncService._add_values(session, obj, field, missing, meta)
+        except (TypeError, KeyError, AttributeError):
+            added = await PicklistSyncService._add_values(session, obj, field, [m["value"] for m in missing], meta)
         if added:
             try:
                 await PicklistSyncService._add_to_record_types(session, obj, field, added)
-            except PicklistSyncError as e:
+            except Exception as e:  # never fail the whole sync because record-type assignment failed
                 logger.warning("Record type assignment failed for %s.%s: %s", obj, field, e)
         return added
 
@@ -296,6 +307,21 @@ def _make_session(client: httpx.AsyncClient, crm: str, creds: Dict[str, Any], us
     if crm == "salesforce":
         return _SalesforceSession(client, creds, user_id, role)
     return _CrmSession(client, crm, creds, user_id, role)
+
+# Values that the validators treat as "empty" must never become picklist options.
+_EMPTY_TOKENS = {"", "none", "nan", "nat", "<na>", "null"}
+
+# Guard rails for CSV-driven creation: a wrongly toggled free-text column (e.g. Description) must not
+# flood a picklist. Salesforce itself caps a picklist at 1,000 values.
+MAX_NEW_PICKLIST_VALUES = 200
+
+# Mapping types that can never be a picklist: skipped without any API call in auto mode.
+_NON_PICKLIST_TYPES = {
+    "reference", "date", "datetime", "boolean", "int", "integer", "double", "currency", "percent", "number",
+    "email", "phone", "url", "id", "textarea", "base64", "time", "location", "address",
+}
+MAX_PICKLIST_VALUE_LENGTH = 255
+
 
 class MultiCrmPicklistSyncService:
     PROVIDERS = {
@@ -394,5 +420,192 @@ class MultiCrmPicklistSyncService:
                 logger.warning("Picklist sync failed for %s.%s: %s", target_object, tgt_name, e)
                 await send_log(f"[{target_object}] Picklist Sync failed for {tgt_name}: {e}")
                 failed[tgt_name] = str(e)
+
+        return result()
+
+    # ------------------------------------------------------------------
+    # CSV UPLOADS: the "source picklist" is the set of distinct values found in the file
+    # ------------------------------------------------------------------
+    @staticmethod
+    def collect_distinct_values(rows: List[Dict[str, Any]], csv_field: str, multi: bool) -> Dict[str, int]:
+        """Distinct, non-empty values of one CSV column (case-insensitive, first spelling wins) with their row
+        counts. Multi-select cells are split on ';'."""
+        seen: Dict[str, List[Any]] = {}
+        for row in rows:
+            raw = row.get(csv_field)
+            if raw is None or (isinstance(raw, float) and raw != raw):  # None / NaN
+                continue
+            text = str(raw).strip()
+            parts = [p.strip() for p in text.split(";")] if multi else [text]
+            for part in parts:
+                if part.lower() in _EMPTY_TOKENS:
+                    continue
+                key = part.lower()
+                if key in seen:
+                    seen[key][1] += 1
+                else:
+                    seen[key] = [part, 1]
+        return {v[0]: v[1] for v in seen.values()}
+
+    @classmethod
+    async def sync_from_rows(
+        cls,
+        client: httpx.AsyncClient,
+        target_crm: str,
+        target_creds: Dict[str, Any],
+        user_id: str,
+        target_object: str,
+        mappings: List[Dict[str, Any]],
+        rows: List[Dict[str, Any]],
+        send_log,
+        dry_run: bool = False,
+        max_new_values: int = MAX_NEW_PICKLIST_VALUES,
+        auto: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Create, in the TARGET org, every picklist value that appears in the CSV rows but not in the target field.
+        Only mappings with syncPicklistValues=true are touched. Accepts both mapping shapes
+        (csvField/sfField from the CSV screens, sourceField/targetField from the API-mapping screen).
+
+        Returns {"created": {field: [values]}, "failed": {field: msg}, "skipped": {field: msg},
+                 "preview": {field: {...}}}.
+        `failed` aborts the run (credentials / permission / API problems, or too many new values);
+        `skipped` is a field this service cannot change (dependent, State/Country, not a picklist): rows with
+        unknown values are then rejected by the normal picklist guard instead.
+        With dry_run=True nothing is written; `preview` shows what would be created.
+        With auto=True no per-field flag is needed: every mapped field that turns out to be a picklist in the
+        target is synced; non-picklist fields are skipped silently and an over-the-cap field is skipped
+        (its rows are then rejected by the picklist guard) instead of aborting the run.
+        """
+        target_crm = target_crm.lower()
+        created: Dict[str, List[str]] = {}
+        failed: Dict[str, str] = {}
+        skipped: Dict[str, str] = {}
+        preview: Dict[str, Dict[str, Any]] = {}
+
+        def result():
+            return {"created": created, "failed": failed, "skipped": skipped, "preview": preview}
+
+        provider = cls.PROVIDERS.get(target_crm)
+        if not provider:
+            await send_log(f"[{target_object}] Picklist Sync: {target_crm} is not supported as a target.")
+            return result()
+
+        try:
+            target = _make_session(client, target_crm, target_creds, user_id, "target")
+        except PicklistSyncError as e:
+            await send_log(f"[{target_object}] Picklist Sync: {e}")
+            if auto:
+                failed["(connection)"] = str(e)
+            else:
+                for m in mappings:
+                    if m.get("syncPicklistValues"):
+                        failed[m.get("targetField") or m.get("sfField") or "?"] = str(e)
+            return result()
+
+        done_targets = set()
+        for m in mappings:
+            if not auto and not m.get("syncPicklistValues"):
+                continue
+            csv_field = m.get("sourceField") or m.get("csvField")
+            tgt_name = m.get("targetField") or m.get("sfField")
+            if not csv_field or not tgt_name or tgt_name in done_targets:
+                continue
+            if auto and str(m.get("type") or "").lower() in _NON_PICKLIST_TYPES:
+                continue
+            done_targets.add(tgt_name)
+
+            if target_crm == "salesforce" and tgt_name.endswith(("StateCode", "CountryCode")):
+                skipped[tgt_name] = "State/Country picklist values are managed in Setup > State and Country Picklists."
+                if not auto:
+                    await send_log(f"[{target_object}] Picklist Sync: {tgt_name} skipped. {skipped[tgt_name]}")
+                continue
+
+            try:
+                info = await provider.read_field(target, target_object, tgt_name)
+            except (PicklistSyncError, httpx.HTTPError) as e:
+                failed[tgt_name] = f"could not read target field: {e}"
+                await send_log(f"[{target_object}] Picklist Sync: could not read {tgt_name}: {e}")
+                continue
+            if not info:
+                skipped[tgt_name] = "not a picklist in the target"
+                if not auto:
+                    await send_log(f"[{target_object}] Picklist Sync: {tgt_name} is not a picklist in the target; skipped.")
+                continue
+            if info.get("controlled"):
+                skipped[tgt_name] = "dependent picklist (values must also be assigned to a controlling value)"
+                await send_log(
+                    f"[{target_object}] Picklist Sync: {tgt_name} is a dependent picklist; new values would not be valid "
+                    f"for any controlling value. Create them in Setup first. Skipped."
+                )
+                continue
+
+            multi = bool(info.get("multi"))
+            found = cls.collect_distinct_values(rows, csv_field, multi)
+            existing_active = {provider.normalize(v["value"]).lower() for v in info["values"] if v.get("active", True)}
+            existing_inactive = {provider.normalize(v["value"]).lower() for v in info["values"] if not v.get("active", True)}
+
+            missing: List[Dict[str, str]] = []
+            inactive: List[str] = []
+            too_long: List[str] = []
+            for value in found:
+                norm = provider.normalize(value)
+                key = norm.lower()
+                if key in existing_active:
+                    continue
+                if key in existing_inactive:
+                    inactive.append(value)
+                    continue
+                if len(norm) > MAX_PICKLIST_VALUE_LENGTH:
+                    too_long.append(value[:40] + "...")
+                    continue
+                missing.append({"value": norm, "label": value})
+
+            preview[tgt_name] = {
+                "csvField": csv_field,
+                "multi": multi,
+                "distinctInFile": len(found),
+                "missing": [v["value"] for v in missing],
+                "missingRowCounts": {v["value"]: found.get(v["label"], 0) for v in missing},
+                "inactive": inactive,
+                "tooLong": too_long,
+            }
+
+            if inactive:
+                await send_log(
+                    f"[{target_object}] Picklist Sync: {tgt_name}: {len(inactive)} value(s) exist but are INACTIVE in the "
+                    f"target and will not be recreated ({', '.join(inactive[:5])}). Reactivate them or fix the data."
+                )
+            if too_long:
+                await send_log(
+                    f"[{target_object}] Picklist Sync: {tgt_name}: {len(too_long)} value(s) longer than "
+                    f"{MAX_PICKLIST_VALUE_LENGTH} characters were not created."
+                )
+            if not missing:
+                if not auto:
+                    await send_log(f"[{target_object}] Picklist Sync: {tgt_name} already contains every value in '{csv_field}'.")
+                continue
+            if len(missing) > max_new_values:
+                (skipped if auto else failed)[tgt_name] = (
+                    f"'{csv_field}' has {len(missing)} distinct new values (limit {max_new_values}); this looks like a "
+                    f"free-text column. Turn off 'Create missing values' for it or clean the data."
+                )
+                await send_log(f"[{target_object}] Picklist Sync: {tgt_name}: {(skipped if auto else failed)[tgt_name]}")
+                continue
+
+            sample = ", ".join(v["value"] for v in missing[:20]) + (" ..." if len(missing) > 20 else "")
+            if dry_run:
+                await send_log(f"[{target_object}] Picklist Sync (dry run): would create {len(missing)} value(s) in {tgt_name}: {sample}")
+                continue
+
+            await send_log(f"[{target_object}] Picklist Sync: creating {len(missing)} missing value(s) in {tgt_name}: {sample}")
+            try:
+                added = await provider.add(target, target_object, tgt_name, info, missing)
+                created[tgt_name] = added
+                await send_log(f"[{target_object}] Picklist Sync: {tgt_name} updated ({len(added)} value(s) added).")
+            except (PicklistSyncError, httpx.HTTPError) as e:
+                logger.warning("CSV picklist sync failed for %s.%s: %s", target_object, tgt_name, e)
+                failed[tgt_name] = str(e)
+                await send_log(f"[{target_object}] Picklist Sync failed for {tgt_name}: {e}")
 
         return result()

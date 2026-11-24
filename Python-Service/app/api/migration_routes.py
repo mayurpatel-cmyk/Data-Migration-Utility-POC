@@ -751,6 +751,26 @@ async def websocket_migration(ws: WebSocket):
                     store.save_extracted(job_index, source_records)  # the freeze point: resume never re-extracts
                     store.save_ref_raw(job_index, ref_raw)          # lets a retry re-link children to parents created later
 
+                # ---------------- picklist sync for CSV uploads (the distinct values come from the file itself) ----------------
+                # Runs after the rows are loaded/frozen and before the picklist guard below, so freshly created values
+                # count as valid. Also runs on retry / resume: rows edited since the last attempt may carry new values.
+                if source_crm == "csv" and op_mode != "delete" and not job.get("isPass3Patch", False):
+                    if mappings:
+                        # auto=True: no per-field toggle; every mapped field that is a picklist in the target is synced
+                        csv_sync = await MultiCrmPicklistSyncService.sync_from_rows(
+                            client, target_crm, target_creds, user_id, target_object,
+                            mappings, source_records, send_log, auto=True,
+                        )
+                        if csv_sync["failed"]:
+                            final_status = "failed"
+                            await websocket.send_json({
+                                "log": f"[{target_object}] FATAL: picklist sync failed for "
+                                       f"{', '.join(csv_sync['failed'])}. Aborting before data load.",
+                                "status": "Failed",
+                            })
+                            await websocket.close()
+                            return
+
                 # ---------------- plan passes ----------------
                 options_base = {
                     "targetObject": target_object, "targetExtIdField": ext_id_field, "operationMode": op_mode,

@@ -3,6 +3,7 @@ import re
 import difflib
 from typing import List, Dict, Any, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,7 @@ from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
 from app.services.crm_metadata_service import CrmMetadataService
 from app.services.crm_query_service import CrmQueryService
+from app.services.crm_picklist_sync_service import MultiCrmPicklistSyncService
 from app.services.ai_services import LocalAiService
 from app.services.id_mapping_service import IdMappingService
 from app.services.parent_scope_service import ParentScopeService, ParentScopeError, ScopeContext
@@ -351,3 +353,45 @@ async def ai_auto_map_fields(payload: AiAutoMapPayload, current_user = Depends(g
     except Exception as e:
         logger.exception("AI auto-map route crashed")
         raise HTTPException(status_code=500, detail="Internal Server Error while generating field mappings.")
+
+
+# =========================================================
+# PICKLIST ANALYSIS (dry run): which CSV values are missing in the TARGET picklist?
+# =========================================================
+class PicklistAnalyzeField(BaseModel):
+    csvField: str
+    targetField: str
+    values: List[str] = Field(default_factory=list, max_length=50000)  # distinct values of that CSV column
+
+
+class PicklistAnalyzePayload(BaseModel):
+    targetCrmId: str
+    targetObject: str
+    fields: List[PicklistAnalyzeField] = Field(..., max_length=100)
+
+
+@router.post("/api/metadata/picklist-analyze")
+async def analyze_csv_picklists(payload: PicklistAnalyzePayload, current_user=Depends(get_current_user)):
+    """Reads the target picklists and reports, per field, which of the supplied CSV values do not exist yet.
+    Nothing is created. The migration itself creates them when the mapping's syncPicklistValues flag is on."""
+    crm = payload.targetCrmId.lower()
+    if crm not in MultiCrmPicklistSyncService.SUPPORTED_CRMS:
+        raise HTTPException(status_code=400, detail=f"Picklist analysis is not supported for {crm}.")
+
+    creds = CrmService.get_active_crm_credentials(current_user.id, crm, "target")
+    mappings, rows = [], []
+    for f in payload.fields:
+        mappings.append({"csvField": f.csvField, "sfField": f.targetField, "syncPicklistValues": True})
+        rows.extend({f.csvField: v} for v in f.values)
+
+    async def _quiet(_msg: str, *_a, **_k):
+        return None
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            res = await MultiCrmPicklistSyncService.sync_from_rows(
+                client, crm, creds, current_user.id, payload.targetObject, mappings, rows, _quiet, dry_run=True,
+            )
+        except (httpx.HTTPError, HTTPException) as e:
+            raise HTTPException(status_code=502, detail=str(getattr(e, "detail", e))[:500])
+    return {"success": True, "fields": res["preview"], "skipped": res["skipped"], "failed": res["failed"]}

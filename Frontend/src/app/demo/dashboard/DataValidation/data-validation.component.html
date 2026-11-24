@@ -1,53 +1,290 @@
 <style>
-  /* Floating Review Panel (AI Auto-Map results) */
+  /* ===================================================================== */
+  /* AUTO-MAP REVIEW PANEL                                                  */
+  /* ===================================================================== */
   .floating-review-panel {
+    --rp-ink: #141a26;
+    --rp-soft: #f4f6fb;
+    --rp-line: #e6e9f2;
+    --rp-muted: #6b7385;
+    --rp-brand: #4f46e5;
+    --rp-brand-2: #7c3aed;
+    --rp-green: #12a06a;  --rp-green-soft: #e8f8f1;
+    --rp-blue: #2f6fd6;   --rp-blue-soft: #eaf2ff;
+    --rp-amber: #c77700;  --rp-amber-soft: #fff6e5;
+    --rp-red: #e5484d;    --rp-red-soft: #fff0f0;
+    --rp-violet: #7c3aed; --rp-violet-soft: #f3edff;
     position: fixed;
-    bottom: 25px;
-    right: 25px;
-    width: 650px;
-    height: 550px;
-    max-height: 85vh;
-    background-color: #ffffff;
-    border-radius: 0.5rem;
-    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.3);
-    z-index: 1100;
+    width: 920px;
+    height: 640px;
+    max-width: 96vw;
+    max-height: 92vh;
+    min-width: min(520px, 96vw);
+    min-height: 380px;
     display: flex;
     flex-direction: column;
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    border: 1px solid #dee2e6;
-    resize: both;
+    background: #fff;
+    color: var(--rp-ink);
+    border: 1px solid rgba(20, 26, 38, .1);
+    border-radius: 16px;
+    box-shadow: 0 24px 64px -16px rgba(20, 26, 38, .45), 0 6px 20px rgba(20, 26, 38, .12);
+    z-index: 1100;
     overflow: hidden;
-    min-width: 450px;
-    min-height: 350px;
+    resize: both;
+    container-type: inline-size;
+    transition: box-shadow .2s ease;
+    animation: rpPop .22s ease-out;
+  }
+
+  .floating-review-panel.dragging {
+    box-shadow: 0 34px 80px -16px rgba(20, 26, 38, .55), 0 10px 28px rgba(20, 26, 38, .18);
+    user-select: none;
   }
 
   .floating-review-panel.expanded {
-    width: 90vw !important;
-    height: 90vh !important;
-    max-height: 90vh !important;
-    bottom: 5vh;
-    right: 5vw;
+    top: 4vh !important;
+    left: 4vw !important;
+    width: 92vw !important;
+    height: 92vh !important;
+    max-width: none;
+    max-height: none;
     resize: none;
   }
 
   .floating-review-panel.minimized {
-    width: 280px;
-    height: 48px;
-    min-width: 280px;
+    width: 300px !important;
+    height: 48px !important;
+    min-width: 300px;
     min-height: 48px;
-    cursor: pointer;
     resize: none;
+    border-radius: 14px;
   }
 
   .floating-review-panel.minimized:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+    box-shadow: 0 12px 28px -8px rgba(20, 26, 38, .4);
   }
 
-  .floating-review-panel .panel-body {
-    overflow-y: auto;
-    flex-grow: 1;
-    background-color: #f8f9fa;
+  .rp .min-w-0 { min-width: 0; }
+
+  /* ---------- header ---------- */
+  .rp-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 14px; flex-shrink: 0; color: #fff; cursor: move; user-select: none;
+    background: radial-gradient(120% 220% at 0% 0%, #3b3a8f 0%, #1c2033 55%, #12151f 100%);
+  }
+  .floating-review-panel.minimized .rp-header { cursor: pointer; height: 100%; padding: 0 10px; }
+  .rp-header-icon {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; font-size: 16px;
+    background: radial-gradient(circle at 30% 25%, #8b8cf8 0%, #4f46e5 55%, #7c3aed 100%);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .18), 0 6px 16px rgba(124, 58, 237, .5);
+  }
+  .floating-review-panel.minimized .rp-header-icon { width: 28px; height: 28px; font-size: 14px; }
+  .rp-header-title { font-weight: 700; font-size: .95rem; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .rp-header-sub { font-size: .7rem; color: rgba(255, 255, 255, .6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rp-mini-badge { font-size: .66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--rp-brand); }
+  .rp-icon-btn {
+    width: 28px; height: 28px; border-radius: 9px; border: 0; display: grid; place-items: center; cursor: pointer; flex-shrink: 0;
+    background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .85); transition: background .15s, transform .12s;
+  }
+  .rp-icon-btn:hover { background: rgba(255, 255, 255, .18); transform: translateY(-1px); }
+  .rp-icon-btn svg { width: 14px; height: 14px; display: block; }
+  .rp-icon-btn.rp-close { background: rgba(229, 72, 77, .9); color: #fff; }
+  .rp-icon-btn.rp-close:hover { background: #cf3338; }
+
+  /* ---------- body ---------- */
+  .rp-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; background: var(--rp-soft); }
+
+  .rp-summary {
+    display: flex; align-items: center; gap: 16px; padding: 12px 16px; flex-shrink: 0;
+    background: #fff; border-bottom: 1px solid var(--rp-line);
+  }
+  .rp-ring {
+    --pct: 0; width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
+    background: conic-gradient(var(--rp-green) calc(var(--pct) * 1%), #e9ecf4 0); transition: background .5s ease;
+  }
+  .rp-ring-in { width: 42px; height: 42px; border-radius: 50%; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; }
+  .rp-ring-in b { font-size: .8rem; }
+  .rp-ring-in span { font-size: .5rem; color: var(--rp-muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+  .rp-summary-main { flex: 1 1 auto; min-width: 0; }
+  .rp-summary-title { font-weight: 700; font-size: .9rem; }
+  .rp-summary-title small { font-weight: 500; color: var(--rp-muted); margin-left: 6px; }
+  .rp-bar { display: flex; height: 7px; border-radius: 999px; overflow: hidden; background: #edf0f7; margin: 7px 0 6px; }
+  .rp-bar .seg { height: 100%; transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+  .rp-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: .72rem; color: var(--rp-muted); }
+  .rp-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .rp-legend b { color: var(--rp-ink); margin-right: 3px; }
+  .seg.auto, .dot.auto { background: var(--rp-green); }
+  .seg.ai, .dot.ai { background: var(--rp-blue); }
+  .seg.manual, .dot.manual { background: #8b93a7; }
+  .dot.none { background: #d5d9e6; }
+
+  .rp-notice {
+    display: flex; gap: 10px; align-items: flex-start; margin: 10px 16px 0; padding: 8px 12px; border-radius: 12px;
+    font-size: .78rem; border: 1px solid transparent; flex-shrink: 0;
+  }
+  .rp-notice i { margin-top: 2px; }
+  .rp-notice.warn { background: var(--rp-amber-soft); color: #8a5300; border-color: #f6dfb0; }
+
+  /* ---------- toolbar: tabs + search + source chips ---------- */
+  .rp-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; flex-shrink: 0; }
+  .rp-tabs { display: inline-flex; padding: 3px; background: #e9ecf5; border-radius: 11px; gap: 2px; flex-shrink: 0; }
+  .rp-tab {
+    display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; padding: 5px 12px;
+    font-size: .76rem; font-weight: 700; border-radius: 9px; color: var(--rp-muted); cursor: pointer; transition: all .15s;
+  }
+  .rp-tab:hover { color: var(--rp-ink); }
+  .rp-tab .cnt { font-size: .64rem; padding: 1px 8px; border-radius: 999px; background: #dde2ee; color: #4b5368; }
+  .rp-tab.on { background: #fff; box-shadow: 0 2px 6px rgba(20, 26, 38, .12); }
+  .rp-tab.on.mapped { color: var(--rp-brand); }
+  .rp-tab.on.mapped .cnt { background: var(--rp-brand); color: #fff; }
+  .rp-tab.on.unmapped { color: var(--rp-amber); }
+  .rp-tab.on.unmapped .cnt { background: var(--rp-amber); color: #fff; }
+  .rp-tab.on.ignored { color: var(--rp-muted); }
+  .rp-tab.on.ignored .cnt { background: #8b93a7; color: #fff; }
+
+  .rp-search { position: relative; flex: 1 1 180px; max-width: 320px; margin-left: auto; }
+  .rp-search > i { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--rp-muted); font-size: 14px; pointer-events: none; }
+  .rp-search input {
+    width: 100%; height: 32px; padding: 0 30px 0 32px; border-radius: 10px; border: 1px solid var(--rp-line);
+    background: #fff; font-size: .8rem; outline: none; transition: all .15s;
+  }
+  .rp-search input:focus { border-color: var(--rp-brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .15); }
+  .rp-search button {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: #e3e7f1;
+    width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; cursor: pointer; padding: 0;
+  }
+
+  .rp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 16px 8px; flex-shrink: 0; }
+  .rp-chip {
+    border: 1px solid var(--rp-line); background: #fff; color: var(--rp-muted); border-radius: 999px; padding: 2px 10px;
+    font-size: .7rem; font-weight: 700; cursor: pointer; transition: all .15s;
+  }
+  .rp-chip:hover { border-color: var(--rp-brand); color: var(--rp-brand); }
+  .rp-chip.on { background: var(--rp-brand); border-color: var(--rp-brand); color: #fff; }
+  .rp-chips .lbl { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--rp-muted); font-weight: 700; margin-right: 2px; }
+
+  /* ---------- list ---------- */
+  .rp-list { flex: 1 1 auto; min-height: 0; overflow: auto; background: #fff; border-top: 1px solid var(--rp-line); scrollbar-width: thin; }
+  .rp-list.dd-open { padding-bottom: 260px; }
+  .rp-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; margin: 0; }
+  .rp-table thead th {
+    position: sticky; top: 0; z-index: 3; background: #f8f9fd; padding: 8px 10px; border-bottom: 1px solid var(--rp-line);
+    font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--rp-muted); white-space: nowrap;
+  }
+  .rp-row td { padding: 8px 10px; border-bottom: 1px solid #eef0f6; vertical-align: middle; }
+  .rp-row { animation: rpPop .2s ease both; }
+  .rp-row:hover td { background: #fafbff; }
+  .rp-col-src { width: 38%; }
+  .rp-col-arrow { width: 36px; }
+  .rp-col-tgt { width: auto; }
+  .rp-col-act { width: 92px; }
+  .rp-arrow { text-align: center; color: #b0b8c9; }
+  .rp-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+  .rp-src-box {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 34px; border: 1px solid var(--rp-line);
+    background: #f8f9fc; border-radius: 9px; font-size: .8rem; font-weight: 600; min-width: 0;
+  }
+  .rp-src-box i { color: var(--rp-muted); flex-shrink: 0; font-size: .85rem; }
+  .rp-row.ignored .rp-src-box { opacity: .6; text-decoration: line-through; }
+
+  .rp-select {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; min-height: 34px;
+    border: 1.5px solid #cfd8ea; border-radius: 9px; background: #fff; cursor: pointer; font-size: .8rem; outline: none;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  .rp-select:hover { border-color: #aab6d3; }
+  .rp-select:focus-visible, .rp-select.open { border-color: var(--rp-brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .15); }
+  .rp-select.empty { border-style: dashed; background: #fbfbfe; }
+  .rp-select.rule { background: var(--rp-green-soft); border-color: #8fd5b7; }
+  .rp-select.ai { background: var(--rp-blue-soft); border-color: #a9c8f5; }
+  .rp-select.lookup { box-shadow: inset 3px 0 0 var(--rp-violet); }
+  .rp-select.open.lookup { box-shadow: inset 3px 0 0 var(--rp-violet), 0 0 0 3px rgba(79, 70, 229, .15); }
+  .rp-select-main { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; font-weight: 600; }
+  .rp-select-end { display: flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--rp-muted); }
+
+  .rp-tag {
+    display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: .6rem; font-weight: 700; line-height: 1;
+    padding: 3px 7px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .rp-tag.auto { background: #fff; color: #0c6b47; border-color: #8fd5b7; }
+  .rp-tag.ai { background: #fff; color: #1f4fa0; border-color: #a9c8f5; }
+  .rp-tag.lookup { background: var(--rp-violet-soft); color: var(--rp-violet); border-color: #cdb8fb; }
+  .rp-tag.req { background: var(--rp-red-soft); color: #a52529; border-color: #f7c9cb; }
+
+  /* ---------- target dropdown ---------- */
+  .rp-dd {
+    top: 100%; left: 0; right: 0; width: auto; margin-top: 4px; max-height: 260px; overflow-y: auto; padding: 6px;
+    z-index: 1060; background: #fff; border: 1px solid var(--rp-line); border-radius: 12px; scrollbar-width: thin;
+  }
+  .rp-dd-search { position: sticky; top: -6px; z-index: 2; background: #fff; padding: 6px 0 8px; margin-top: -6px; }
+  .rp-dd-search > i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--rp-muted); font-size: 13px; pointer-events: none; }
+  .rp-dd-search input { padding-left: 30px; border-radius: 9px; }
+  .rp-dd-ignore { display: flex; align-items: center; gap: 6px; border-radius: 8px; padding: 7px 10px; font-size: .78rem; font-weight: 700; color: var(--rp-red); cursor: pointer; }
+  .rp-dd-ignore:hover { background: var(--rp-red-soft); }
+  .rp-dd-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 8px; padding: 6px 10px;
+    cursor: pointer; border-left: 3px solid transparent; white-space: normal;
+  }
+  .rp-dd-item:hover { background: #f1f3fb; }
+  .rp-dd-item.selected { background: #eef0ff; border-left-color: var(--rp-brand); }
+  .rp-dd-item.lookup { background: var(--rp-violet-soft); border-left-color: var(--rp-violet); }
+  .rp-dd-item.lookup:hover { background: #eadffd; }
+  .rp-dd-text { display: flex; flex-direction: column; min-width: 0; }
+  .rp-dd-label { font-weight: 700; font-size: .78rem; color: var(--rp-ink); display: flex; align-items: center; gap: 5px; }
+  .rp-dd-name { font-family: 'SFMono-Regular', Consolas, Menlo, monospace; font-size: .68rem; color: var(--rp-muted); overflow-wrap: anywhere; }
+  .rp-dd-end { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .rp-used { font-size: .6rem; font-weight: 700; color: var(--rp-amber); background: var(--rp-amber-soft); border-radius: 999px; padding: 2px 7px; }
+  .rp-dd-empty { padding: 14px; text-align: center; font-size: .78rem; color: var(--rp-muted); }
+  .rp-lookup-ico { color: var(--rp-violet); font-size: .7rem; flex-shrink: 0; }
+
+  /* ---------- row actions ---------- */
+  .rp-actions { display: flex; align-items: center; justify-content: center; gap: 4px; }
+  .rp-actions .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .rp-ignored-note { font-size: .78rem; color: var(--rp-muted); display: inline-flex; align-items: center; gap: 6px; }
+  .rp-restore {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cfd8ea; background: #fff; color: var(--rp-brand);
+    font-size: .72rem; font-weight: 700; border-radius: 9px; padding: 5px 10px; cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .rp-restore:hover { background: #eef0ff; border-color: var(--rp-brand); }
+
+  /* ---------- empty state ---------- */
+  .rp-empty { text-align: center; padding: 44px 20px; color: var(--rp-muted); }
+  .rp-empty-icon { width: 60px; height: 60px; margin: 0 auto 12px; border-radius: 18px; display: grid; place-items: center; font-size: 26px; background: var(--rp-soft); color: var(--rp-muted); }
+  .rp-empty.ok .rp-empty-icon { background: var(--rp-green-soft); color: var(--rp-green); }
+  .rp-empty h6 { color: var(--rp-ink); font-weight: 700; margin-bottom: 4px; }
+  .rp-empty p { font-size: .8rem; max-width: 340px; margin: 0 auto 12px; }
+
+  /* ---------- footer ---------- */
+  .rp-footer {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0;
+    padding: 10px 16px; background: #fff; border-top: 1px solid var(--rp-line);
+  }
+  .rp-footer-status { display: flex; align-items: center; gap: 8px; font-size: .78rem; font-weight: 600; color: var(--rp-muted); min-width: 0; }
+  .rp-footer-status.warn { color: var(--rp-amber); }
+  .rp-footer-status.ok { color: var(--rp-green); }
+  .rp-btn {
+    display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 11px; padding: 7px 16px;
+    font-size: .8rem; font-weight: 700; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .rp-btn:hover { transform: translateY(-2px); }
+  .rp-btn-soft { color: var(--rp-brand); background: #eceafd; }
+  .rp-btn-soft:hover { background: #e0ddfb; }
+  .rp-btn-primary { color: #fff; background: linear-gradient(135deg, var(--rp-brand), var(--rp-brand-2)); box-shadow: 0 8px 20px -6px rgba(79, 70, 229, .6); }
+
+  @keyframes rpPop { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .floating-review-panel, .floating-review-panel * { animation: none !important; transition: none !important; } }
+
+  /* ---------- responsive (container = the panel itself) ---------- */
+  @container (max-width: 700px) {
+    .rp-header-sub { display: none; }
+    .rp-search { max-width: none; flex-basis: 100%; margin-left: 0; order: 3; }
+    .rp-col-src { width: 34%; }
+    .rp-select-end .badge { display: none; }
+  }
+  @container (max-width: 560px) {
+    .rp-legend .lbl { display: none; }
+    .rp-col-act { width: 76px; }
   }
 
   /* Trendy trash action button (row-level clear mapping) */
@@ -149,27 +386,59 @@
         <h6 class="fw-bold text-primary mb-3"><i class="feather icon-settings"></i> Map Rules for Target Object {{
           getSfObjectLabel(selectedObject) }}</h6>
 
-        <div class="d-flex justify-content-between align-items-end mb-2 px-1">
-          <div class="text-muted small fw-bold">
-            Mapped: <span class="text-primary">{{ getConfirmedCount() }} / {{ mappings.length }}</span> columns
+        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle shadow-sm mb-3">
+          <h6 class="fw-bold text-primary-emphasis m-0 mb-2"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
+
+          <div class="d-flex flex-wrap gap-3 mb-2">
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpInsert"
+                value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpInsert">Insert</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpdate"
+                value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpdate">Update</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpsert"
+                value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
+              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpsert">Upsert</label>
+            </div>
           </div>
-          <div class="d-flex gap-2">
-            @if (getConfirmedCount() > 0) {
-            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
-              (click)="clearAllMappings()">
-              <i class="feather icon-trash-2"></i> Clear All
-            </button>
-            }
-            <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
-              (click)="autoMapFields()" [disabled]="isAutoMapping">
-              <i class="feather fs-6" [ngClass]="isAutoMapping ? 'icon-loader fa-spin' : 'icon-cpu'"></i>
-              {{ isAutoMapping ? 'Mapping...' : 'Auto-Map Fields' }}
-            </button>
-            <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
-              (click)="showReviewPanel = true; reviewPanelMinimized = false"
-              [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
-              <i class="feather icon-eye"></i> Open Review
-            </button>
+
+          @if (operationMode === 'upsert') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Matches each row against {{ targetCrmId | titlecase }} using the Ext ID field below — updates it if found, inserts it if not.
+          </div>
+          } @else if (operationMode === 'update') {
+          <div class="small text-muted mb-2">
+            <i class="feather icon-info me-1"></i>Only updates records that already exist in {{ targetCrmId | titlecase }}, matched by the Ext ID field below. Unmatched rows are skipped.
+          </div>
+          }
+
+          <div class="row g-2">
+            <div class="col-md-6">
+              <div class="input-group input-group-sm shadow-sm"
+                [title]="operationMode === 'insert' ? 'Optional: used only to flag duplicates during validation.' : 'Required: the unique field used to match existing records.'">
+                <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold">
+                  <i class="feather icon-key text-secondary me-1"></i> Ext ID
+                  @if (operationMode !== 'insert') {<span class="text-danger ms-1">*</span>}
+                </span>
+                <select class="form-select border-secondary-subtle" [(ngModel)]="dedupeKey">
+                  <option value="" selected>-- Select Field --</option>
+                  @for (field of (operationMode === 'insert' ? sfFields : getExternalIdEligibleFields()); track field.name) {
+                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
+                  }
+                </select>
+              </div>
+              @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
+              <div class="small text-danger mt-1">
+                No fields on {{ selectedObject }} are marked as a matchable unique/external key in {{ targetCrmId | titlecase }}.
+                Mark one in {{ targetCrmId | titlecase }} Setup before running {{ operationMode.toUpperCase() }}.
+              </div>
+              }
+            </div>
           </div>
         </div>
 
@@ -454,63 +723,25 @@
           </table>
         </div>
 
-        <div class="bg-primary-subtle p-3 rounded border border-primary-subtle shadow-sm mt-3">
-          <h6 class="fw-bold text-primary-emphasis m-0 mb-2"><i class="feather icon-sliders me-1"></i> Migration Settings</h6>
-
-          <div class="d-flex flex-wrap gap-3 mb-2">
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpInsert"
-                value="insert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpInsert">Insert</label>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpdate"
-                value="update" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpdate">Update</label>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input cursor-pointer" type="radio" name="csvOpMode" id="csvOpUpsert"
-                value="upsert" [(ngModel)]="operationMode" (change)="onOperationModeChange()">
-              <label class="form-check-label fw-bold cursor-pointer small" for="csvOpUpsert">Upsert</label>
-            </div>
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2 shadow-sm"
+              (click)="autoMapFields()" [disabled]="isAutoMapping">
+              <i class="feather fs-6" [ngClass]="isAutoMapping ? 'icon-loader fa-spin' : 'icon-cpu'"></i>
+              {{ isAutoMapping ? 'Mapping...' : 'Auto-Map Fields' }}
+            </button>
+            @if (getConfirmedCount() > 0) {
+            <button class="btn btn-sm btn-outline-danger d-flex align-items-center gap-2 shadow-sm"
+              (click)="clearAllMappings()">
+              <i class="feather icon-trash-2"></i> Clear All
+            </button>
+            }
+            <button class="btn btn-sm btn-outline-info d-flex align-items-center gap-2 shadow-sm"
+              (click)="openReviewPanel()"
+              [disabled]="mappings.length === 0 || isAutoMapping" title="Open Review Panel">
+              <i class="feather icon-eye"></i> Open Review
+            </button>
           </div>
-
-          @if (operationMode === 'upsert') {
-          <div class="small text-muted mb-2">
-            <i class="feather icon-info me-1"></i>Matches each row against {{ targetCrmId | titlecase }} using the Ext ID field below — updates it if found, inserts it if not.
-          </div>
-          } @else if (operationMode === 'update') {
-          <div class="small text-muted mb-2">
-            <i class="feather icon-info me-1"></i>Only updates records that already exist in {{ targetCrmId | titlecase }}, matched by the Ext ID field below. Unmatched rows are skipped.
-          </div>
-          }
-
-          <div class="row g-2">
-            <div class="col-md-6">
-              <div class="input-group input-group-sm shadow-sm"
-                [title]="operationMode === 'insert' ? 'Optional: used only to flag duplicates during validation.' : 'Required: the unique field used to match existing records.'">
-                <span class="input-group-text bg-light border-secondary-subtle text-muted fw-bold">
-                  <i class="feather icon-key text-secondary me-1"></i> Ext ID
-                  @if (operationMode !== 'insert') {<span class="text-danger ms-1">*</span>}
-                </span>
-                <select class="form-select border-secondary-subtle" [(ngModel)]="dedupeKey">
-                  <option value="" selected>-- Select Field --</option>
-                  @for (field of (operationMode === 'insert' ? sfFields : getExternalIdEligibleFields()); track field.name) {
-                  <option [value]="field.name">{{ field.label }} ({{ field.name }})</option>
-                  }
-                </select>
-              </div>
-              @if (operationMode !== 'insert' && getExternalIdEligibleFields().length === 0) {
-              <div class="small text-danger mt-1">
-                No fields on {{ selectedObject }} are marked as a matchable unique/external key in {{ targetCrmId | titlecase }}.
-                Mark one in {{ targetCrmId | titlecase }} Setup before running {{ operationMode.toUpperCase() }}.
-              </div>
-              }
-            </div>
-          </div>
-        </div>
-
-        <div class="text-end mt-3">
           <button class="btn btn-outline-primary d-flex align-items-center gap-2 ms-auto shadow-sm"
             (click)="addToQueue()">
             <i class="feather icon-plus"></i> Add to Validation Queue
@@ -830,157 +1061,302 @@
 <!-- FLOATING REVIEW PANEL (AUTO-MAP RESULTS)                   -->
 <!-- ========================================================= -->
 @if (showReviewPanel) {
-<div class="floating-review-panel animate__animated animate__fadeInUp" [class.minimized]="reviewPanelMinimized"
-  [class.expanded]="reviewPanelExpanded">
+<div class="floating-review-panel rp" [class.minimized]="reviewPanelMinimized" [class.expanded]="reviewPanelExpanded"
+  [class.dragging]="reviewPanelDragging" [style.top.px]="reviewPanelTop" [style.left.px]="reviewPanelLeft"
+  role="dialog" aria-label="Auto-Map Review">
 
-  <!-- Panel Header -->
-  <div class="bg-dark text-white p-2 px-3 d-flex justify-content-between align-items-center flex-shrink-0"
-    style="border-radius: 8px 8px 0 0; cursor: pointer;"
-    (click)="reviewPanelMinimized ? reviewPanelMinimized = false : null">
-    <div class="d-flex align-items-center gap-2">
-      <i class="feather icon-check-circle text-success fs-5"></i>
-      <h6 class="m-0 fw-bold">Auto-Map Review</h6>
-      @if (reviewPanelMinimized) {
-      <span class="badge bg-primary ms-2">{{ getConfirmedCount() }} / {{ mappings.length }}</span>
-      }
+  <!-- ============ Header (drag to move; click to restore when minimized) ============ -->
+  <div class="rp-header" (mousedown)="startReviewPanelDrag($event)" (click)="onReviewHeaderClick()"
+    (dblclick)="toggleReviewPanelExpanded()"
+    [title]="reviewPanelMinimized ? 'Click to restore' : 'Drag to move · double-click for full screen'">
+    <div class="d-flex align-items-center gap-2 min-w-0">
+      <span class="rp-header-icon"><i class="feather icon-git-merge"></i></span>
+      <div class="min-w-0">
+        <div class="rp-header-title">
+          Auto-Map Review
+          @if (reviewPanelMinimized) {
+          <span class="rp-mini-badge">{{ reviewMappedCount }} / {{ reviewActiveMappings.length }}</span>
+          }
+        </div>
+        @if (!reviewPanelMinimized) {
+        <div class="rp-header-sub">Check each match, fix anything that looks off, then carry on</div>
+        }
+      </div>
     </div>
-    <div class="d-flex gap-2">
+    <div class="d-flex align-items-center gap-2">
       @if (!reviewPanelMinimized) {
-      <button class="btn btn-sm btn-link text-white-50 p-0"
-        (click)="reviewPanelExpanded = !reviewPanelExpanded; $event.stopPropagation()" title="Toggle Fullscreen">
-        <i class="feather fs-5" [ngClass]="reviewPanelExpanded ? 'icon-minimize' : 'icon-maximize'"></i>
+      <button type="button" class="rp-icon-btn" [title]="reviewPanelExpanded ? 'Exit full screen' : 'Full screen'"
+        (click)="toggleReviewPanelExpanded(); $event.stopPropagation()">
+        @if (reviewPanelExpanded) {
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+        } @else {
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+        }
       </button>
-      <button class="btn btn-sm btn-link text-white-50 p-0"
-        (click)="reviewPanelMinimized = true; reviewPanelExpanded = false; $event.stopPropagation()" title="Minimize">
-        <i class="feather icon-minus fs-5"></i>
-      </button>
-      <button class="btn btn-sm btn-link text-white-50 p-0"
-        (click)="showReviewPanel = false; $event.stopPropagation()" title="Close">
-        <i class="feather icon-x fs-5"></i>
+      <button type="button" class="rp-icon-btn" title="Minimize (Esc)"
+        (click)="minimizeReviewPanel(); $event.stopPropagation()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="19"></line></svg>
       </button>
       } @else {
-      <button class="btn btn-sm btn-link text-white-50 p-0"><i class="feather icon-maximize-2 fs-5"></i></button>
+      <button type="button" class="rp-icon-btn" title="Restore"
+        (click)="restoreReviewPanel(); $event.stopPropagation()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+      </button>
       }
+      <button type="button" class="rp-icon-btn rp-close" title="Close"
+        (click)="closeReviewPanel(); $event.stopPropagation()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
     </div>
   </div>
 
   @if (!reviewPanelMinimized) {
-  <!-- Tabs -->
-  <div class="bg-white p-2 border-bottom d-flex gap-2 flex-shrink-0 shadow-sm z-1">
-    <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2"
-      [class.btn-primary]="reviewFilter === 'mapped'" [class.btn-outline-primary]="reviewFilter !== 'mapped'"
-      (click)="reviewFilter = 'mapped'">
-      Mapped <span class="badge" [class.bg-white]="reviewFilter === 'mapped'"
-        [class.text-primary]="reviewFilter === 'mapped'" [class.bg-primary]="reviewFilter !== 'mapped'">{{
-        getConfirmedCount() }}</span>
-    </button>
-    <button class="btn btn-sm flex-grow-1 fw-bold d-flex justify-content-center align-items-center gap-2"
-      [class.btn-warning]="reviewFilter === 'unmapped'" [class.btn-outline-warning]="reviewFilter !== 'unmapped'"
-      (click)="reviewFilter = 'unmapped'">
-      Unmapped <span class="badge" [class.bg-yellow]="reviewFilter === 'unmapped'"
-        [class.text-warning]="reviewFilter === 'unmapped'" [class.bg-warning]="reviewFilter !== 'unmapped'">{{
-        mappings.length - getConfirmedCount() }}</span>
-    </button>
-  </div>
+  <div class="rp-body">
 
-  <!-- Scrollable Mapping Area -->
-  <div class="panel-body p-0">
-    <table class="table table-hover table-borderless align-middle mb-0 w-100">
-      <tbody>
-        @for (mapping of mappings; track mapping.csvField) {
-        @if ((reviewFilter === 'mapped' && mapping.sfField) || (reviewFilter === 'unmapped' && !mapping.sfField)) {
-        <tr class="border-bottom">
-          <td class="px-3 py-2 w-50" title="{{ mapping.csvField }}">
-            <div
-              class="form-control form-control-sm bg-light border-secondary text-truncate cursor-not-allowed d-flex justify-content-between align-items-center">
-              <small class="fw-bold text-dark text-truncate">{{ mapping.csvField }}</small>
-            </div>
-          </td>
-          <td class="text-center text-muted px-0" style="width: 20px;">
-            <i class="feather icon-arrow-right small"></i>
-          </td>
-          <td class="px-3 py-2 w-50">
-            <div class="position-relative" (click)="$event.stopPropagation()">
-              <div
-                class="form-select form-select-sm cursor-pointer shadow-sm d-flex justify-content-between align-items-center"
-                [ngClass]="{
-                  'bg-success-subtle border-success text-dark': mapping._mappedBy === 'rule',
-                  'bg-info-subtle border-info text-dark': mapping._mappedBy === 'ai',
-                  'bg-white border-info': !mapping._mappedBy
-                }" (click)="toggleDropdown(mapping, $event)">
+    <!-- ============ Progress summary ============ -->
+    <section class="rp-summary">
+      <div class="rp-ring" [style.--pct]="reviewProgressPct" [title]="reviewProgressPct + '% of columns are mapped'">
+        <div class="rp-ring-in"><b>{{ reviewProgressPct }}%</b><span>mapped</span></div>
+      </div>
+      <div class="rp-summary-main">
+        <div class="rp-summary-title">
+          {{ reviewMappedCount }} of {{ reviewActiveMappings.length }} columns mapped
+          @if (reviewIgnoredCount > 0) { <small>· {{ reviewIgnoredCount }} ignored</small> }
+        </div>
+        <div class="rp-bar" title="Auto / AI / manual / not mapped yet">
+          <span class="seg auto" [style.width.%]="reviewPct(reviewAutoCount)"></span>
+          <span class="seg ai" [style.width.%]="reviewPct(reviewAiCount)"></span>
+          <span class="seg manual" [style.width.%]="reviewPct(reviewManualCount)"></span>
+        </div>
+        <div class="rp-legend">
+          <span><i class="dot auto"></i><b>{{ reviewAutoCount }}</b><span class="lbl">Auto</span></span>
+          <span><i class="dot ai"></i><b>{{ reviewAiCount }}</b><span class="lbl">AI</span></span>
+          <span><i class="dot manual"></i><b>{{ reviewManualCount }}</b><span class="lbl">Manual</span></span>
+          <span><i class="dot none"></i><b>{{ reviewUnmappedCount }}</b><span class="lbl">Not mapped</span></span>
+        </div>
+      </div>
+    </section>
 
-                <div class="d-flex align-items-center gap-2 text-truncate">
-                  <span class="text-truncate" [class.text-muted]="!mapping.sfField">
-                    {{ getSfFieldLabel(mapping.sfField) || '-- Select Target --' }}
-                  </span>
+    <!-- ============ Required-field warning ============ -->
+    @if (reviewMissing; as rm) {
+    @if (rm.count > 0) {
+    <div class="rp-notice warn">
+      <i class="feather icon-alert-triangle"></i>
+      <div>
+        <b>{{ rm.count }} required field{{ rm.count === 1 ? '' : 's' }} not mapped yet:</b>
+        {{ rm.text }}@if (rm.extra > 0) { <span> +{{ rm.extra }} more</span> }
+      </div>
+    </div>
+    }
+    }
 
-                  @if (mapping.sfField) {
-                  @if (mapping._mappedBy === 'rule') {
-                  <span
-                    class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill py-1"
-                    style="font-size: 0.6rem;">
-                    <i class="feather icon-zap"></i> Rule
-                  </span>
-                  } @else if (mapping._mappedBy === 'ai') {
-                  <span class="badge text-primary-emphasis border border-primary-subtle rounded-pill py-1"
-                    style="font-size: 0.6rem; background-color: #e0f2fe;">
-                    <i class="feather icon-cpu"></i> AI
-                  </span>
+    <!-- ============ Tabs + search ============ -->
+    <div class="rp-toolbar">
+      <div class="rp-tabs" role="tablist">
+        <button type="button" role="tab" class="rp-tab mapped" [class.on]="reviewFilter === 'mapped'" (click)="setReviewFilter('mapped')">
+          <i class="feather icon-check-circle"></i> Mapped <span class="cnt">{{ reviewMappedCount }}</span>
+        </button>
+        <button type="button" role="tab" class="rp-tab unmapped" [class.on]="reviewFilter === 'unmapped'" (click)="setReviewFilter('unmapped')">
+          <i class="feather icon-alert-circle"></i> Unmapped <span class="cnt">{{ reviewUnmappedCount }}</span>
+        </button>
+        @if (reviewIgnoredCount > 0) {
+        <button type="button" role="tab" class="rp-tab ignored" [class.on]="reviewFilter === 'ignored'" (click)="setReviewFilter('ignored')">
+          <i class="feather icon-eye-off"></i> Ignored <span class="cnt">{{ reviewIgnoredCount }}</span>
+        </button>
+        }
+      </div>
+      <div class="rp-search">
+        <i class="feather icon-search"></i>
+        <input type="text" placeholder="Search column or target field…" [(ngModel)]="reviewSearch" (ngModelChange)="closeAllDropdowns()">
+        @if (reviewSearch) {
+        <button type="button" title="Clear search" (click)="clearReviewSearch()"><i class="feather icon-x"></i></button>
+        }
+      </div>
+    </div>
+
+    @if (reviewFilter === 'mapped' && reviewMappedCount > 0 && (reviewAutoCount > 0 || reviewAiCount > 0)) {
+    <div class="rp-chips">
+      <span class="lbl">Matched by</span>
+      <button type="button" class="rp-chip" [class.on]="reviewSourceFilter === 'all'" (click)="reviewSourceFilter = 'all'">All {{ reviewMappedCount }}</button>
+      @if (reviewAutoCount > 0) {
+      <button type="button" class="rp-chip" [class.on]="reviewSourceFilter === 'rule'" (click)="reviewSourceFilter = 'rule'"><i class="feather icon-zap"></i> Auto {{ reviewAutoCount }}</button>
+      }
+      @if (reviewAiCount > 0) {
+      <button type="button" class="rp-chip" [class.on]="reviewSourceFilter === 'ai'" (click)="reviewSourceFilter = 'ai'"><i class="feather icon-cpu"></i> AI {{ reviewAiCount }}</button>
+      }
+      @if (reviewManualCount > 0) {
+      <button type="button" class="rp-chip" [class.on]="reviewSourceFilter === 'manual'" (click)="reviewSourceFilter = 'manual'">Manual {{ reviewManualCount }}</button>
+      }
+    </div>
+    }
+
+    <!-- ============ Mapping list ============ -->
+    <div class="rp-list" [class.dd-open]="hasOpenReviewDropdown">
+      @if (reviewRows; as rows) {
+      @if (rows.length === 0) {
+      <div class="rp-empty" [class.ok]="reviewFilter === 'unmapped' && !reviewSearch.trim()">
+        @if (reviewSearch.trim()) {
+        <div class="rp-empty-icon"><i class="feather icon-search"></i></div>
+        <h6>No columns match “{{ reviewSearch.trim() }}”</h6>
+        <p>Try a different spelling, or search by the target field's API name.</p>
+        <button type="button" class="rp-btn rp-btn-soft" (click)="clearReviewSearch()">Clear search</button>
+        } @else if (reviewFilter === 'mapped' && reviewSourceFilter !== 'all') {
+        <div class="rp-empty-icon"><i class="feather icon-filter"></i></div>
+        <h6>No columns matched this way</h6>
+        <p>None of the mapped columns were matched by this method.</p>
+        <button type="button" class="rp-btn rp-btn-soft" (click)="reviewSourceFilter = 'all'">Show all mapped</button>
+        } @else if (reviewFilter === 'mapped') {
+        <div class="rp-empty-icon"><i class="feather icon-inbox"></i></div>
+        <h6>Nothing is mapped yet</h6>
+        <p>Run Auto-Map, or pick a target for each column from the Unmapped tab.</p>
+        @if (reviewUnmappedCount > 0) {
+        <button type="button" class="rp-btn rp-btn-soft" (click)="setReviewFilter('unmapped')">Go to unmapped columns</button>
+        }
+        } @else if (reviewFilter === 'unmapped') {
+        <div class="rp-empty-icon"><i class="feather icon-check-circle"></i></div>
+        <h6>All columns are mapped</h6>
+        <p>Nothing left to review here. You can double-check the matches in the Mapped tab.</p>
+        <button type="button" class="rp-btn rp-btn-soft" (click)="setReviewFilter('mapped')">Review mapped columns</button>
+        } @else {
+        <div class="rp-empty-icon"><i class="feather icon-eye"></i></div>
+        <h6>No ignored columns</h6>
+        <p>Columns you ignore will show up here so you can restore them.</p>
+        }
+      </div>
+      } @else {
+      <table class="rp-table">
+        <thead>
+          <tr>
+            <th class="rp-col-src">Source column</th>
+            <th class="rp-col-arrow"></th>
+            <th class="rp-col-tgt">{{ reviewFilter === 'ignored' ? 'Status' : 'Target field' }}</th>
+            <th class="rp-col-act text-center">{{ reviewFilter === 'ignored' ? '' : 'Actions' }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (mapping of rows; track mapping.csvField) {
+          <tr class="rp-row" [class.ignored]="reviewFilter === 'ignored'">
+            <td class="rp-src" [title]="mapping.csvField">
+              <div class="rp-src-box"><i class="feather icon-columns"></i><span class="rp-ellipsis">{{ mapping.csvField }}</span></div>
+            </td>
+            <td class="rp-arrow"><i class="feather icon-arrow-right small"></i></td>
+
+            @if (reviewFilter === 'ignored') {
+            <td>
+              <span class="rp-ignored-note"><i class="feather icon-eye-off"></i> Ignored — not included in the migration</span>
+            </td>
+            <td class="rp-actions">
+              <button type="button" class="rp-restore" (click)="restoreReviewMapping(mapping)" title="Include this column again">
+                <i class="feather icon-rotate-ccw"></i> Restore
+              </button>
+            </td>
+            } @else {
+            <td>
+              <div class="position-relative" (click)="$event.stopPropagation()">
+                <div class="rp-select" role="button" tabindex="0"
+                  [class.rule]="mapping.sfField && mapping._mappedBy === 'rule'"
+                  [class.ai]="mapping.sfField && mapping._mappedBy === 'ai'"
+                  [class.empty]="!mapping.sfField"
+                  [class.lookup]="mapping.sfField && isLookupMeta(getSfFieldMeta(mapping.sfField))"
+                  [class.open]="mapping.isDropdownOpen"
+                  (click)="reviewToggleDropdown(mapping, $event)" (keydown.enter)="reviewToggleDropdown(mapping, $event)">
+                  <div class="rp-select-main">
+                    @if (mapping.sfField && isLookupMeta(getSfFieldMeta(mapping.sfField))) {
+                    <i class="feather icon-link rp-lookup-ico" title="Lookup / Relationship field"></i>
+                    }
+                    <span class="rp-ellipsis" [class.text-muted]="!mapping.sfField" [class.fw-normal]="!mapping.sfField">
+                      {{ getSfFieldLabel(mapping.sfField) || 'Select target field…' }}
+                    </span>
+                    @if (mapping.sfField) {
+                    @if (mapping._mappedBy === 'rule') {
+                    <span class="rp-tag auto" title="Matched by exact naming rules"><i class="feather icon-zap"></i> Auto</span>
+                    } @else if (mapping._mappedBy === 'ai') {
+                    <span class="rp-tag ai" title="Matched by AI semantic matching"><i class="feather icon-cpu"></i> AI</span>
+                    }
+                    @if (isLookupMeta(getSfFieldMeta(mapping.sfField))) {
+                    <span class="rp-tag lookup" title="Lookup / Relationship field"><i class="feather icon-link"></i> Lookup</span>
+                    }
+                    @if (isRequiredMeta(getSfFieldMeta(mapping.sfField))) {
+                    <span class="rp-tag req" title="Required in the target"><i class="feather icon-alert-circle"></i> Required</span>
+                    }
+                    }
+                  </div>
+                  <div class="rp-select-end">
+                    @if (mapping.sfField && getSfFieldMeta(mapping.sfField)?.type) {
+                    <span class="badge {{ getFieldTypeBadge(getSfFieldMeta(mapping.sfField)?.type) }}" style="font-size: 0.6rem;">{{ getSfFieldMeta(mapping.sfField)?.type }}</span>
+                    }
+                    <i class="feather" [ngClass]="mapping.isDropdownOpen ? 'icon-chevron-up' : 'icon-chevron-down'"></i>
+                  </div>
+                </div>
+
+                @if (mapping.isDropdownOpen) {
+                <div class="dropdown-menu show rp-dd shadow-lg position-absolute">
+                  <div class="rp-dd-search">
+                    <i class="feather icon-search"></i>
+                    <input type="text" class="form-control form-control-sm" placeholder="Search target fields…" [(ngModel)]="mapping.searchQuery">
+                  </div>
+                  <div class="rp-dd-ignore" (click)="selectField(mapping, '')">
+                    <i class="feather icon-slash"></i> Leave unmapped
+                  </div>
+                  @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
+                  <div class="rp-dd-item" [class.selected]="mapping.sfField === field.name" [class.lookup]="isLookupMeta(field)"
+                    (click)="selectField(mapping, field.name)">
+                    <div class="rp-dd-text">
+                      <span class="rp-dd-label">
+                        @if (isLookupMeta(field)) { <i class="feather icon-link rp-lookup-ico" title="Lookup / Relationship field"></i> }
+                        {{ field.label }}
+                        @if (isRequiredMeta(field)) { <span class="text-danger">*</span> }
+                      </span>
+                      <span class="rp-dd-name">{{ field.name }}</span>
+                    </div>
+                    <div class="rp-dd-end">
+                      @if (isReviewTargetUsed(field.name)) {
+                      <span class="rp-used" title="Already mapped to another column">in use</span>
+                      }
+                      <span class="badge {{ getFieldTypeBadge(field.type) }}" style="font-size: 0.6rem;">{{ field.type || 'string' }}</span>
+                    </div>
+                  </div>
+                  } @empty {
+                  <div class="rp-dd-empty">No target fields match “{{ mapping.searchQuery }}”</div>
                   }
-                  }
-                </div>
-              </div>
-
-              @if (mapping.isDropdownOpen) {
-              <div
-                class="dropdown-menu show w-100 p-2 shadow-lg border-primary-subtle position-absolute start-0 mt-1 bg-white"
-                style="max-height: 200px; overflow-y: auto; z-index: 9999; top: 100%;">
-                <div class="position-sticky top-0 bg-white pb-2" style="z-index: 10;">
-                  <input type="text" class="form-control form-control-sm" placeholder="Search..."
-                    [(ngModel)]="mapping.searchQuery" autofocus>
-                </div>
-                <div class="dropdown-item cursor-pointer py-2 text-wrap text-danger fw-bold small"
-                  (click)="selectField(mapping, '')">
-                  <i class="feather icon-slash"></i> -- Ignore --
-                </div>
-                @for (field of getFilteredSfFields(mapping.searchQuery); track field.name) {
-                <div class="dropdown-item cursor-pointer py-1 text-wrap d-flex justify-content-between align-items-center"
-                  (click)="selectField(mapping, field.name)">
-                  <span class="fw-bold text-dark small">{{ field.label }}</span>
                 </div>
                 }
               </div>
-              }
-            </div>
-          </td>
-          <td class="px-2 text-center">
-            <div class="d-flex align-items-center justify-content-center gap-1">
-              <button
-                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
-                (click)="clearMapping(mapping)" title="Clear target field">
+            </td>
+            <td class="rp-actions">
+              <button type="button" class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                [disabled]="!mapping.sfField" (click)="clearMapping(mapping)" title="Clear target field">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
               </button>
-              <button
-                class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
-                (click)="removeMapping(mapping)" title="Cancel: remove this field from mapping entirely">
+              <button type="button" class="btn btn-sm btn-light border-0 text-danger p-1 rounded hover-danger btn-hover-lift m-0 d-flex align-items-center justify-content-center"
+                (click)="removeMapping(mapping)" title="Ignore this column — it will be left out of the migration">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
               </button>
-            </div>
-          </td>
-        </tr>
-        }
-        }
-      </tbody>
-    </table>
-  </div>
+            </td>
+            }
+          </tr>
+          }
+        </tbody>
+      </table>
+      }
+      }
+    </div>
 
-  <!-- Footer Action -->
-  <div
-    class="p-3 bg-white border-top flex-shrink-0 text-end rounded-bottom d-flex justify-content-between align-items-center">
-    <span class="small text-muted fw-bold">Review mappings before validating.</span>
-    <button class="btn btn-sm btn-primary px-4 shadow-sm fw-bold" (click)="showReviewPanel = false">
-      Done Reviewing
-    </button>
+    <!-- ============ Footer ============ -->
+    <footer class="rp-footer">
+      @if (reviewMissing; as rm) {
+      @if (rm.count > 0) {
+      <div class="rp-footer-status warn"><i class="feather icon-alert-triangle"></i> {{ rm.count }} required field{{ rm.count === 1 ? '' : 's' }} still unmapped</div>
+      } @else if (reviewUnmappedCount > 0) {
+      <div class="rp-footer-status"><i class="feather icon-info"></i> Review before validating — {{ reviewUnmappedCount }} column{{ reviewUnmappedCount === 1 ? '' : 's' }} not mapped.</div>
+      } @else {
+      <div class="rp-footer-status ok"><i class="feather icon-check-circle"></i> Looks good — you can go ahead and validate.</div>
+      }
+      }
+      <button type="button" class="rp-btn rp-btn-primary" (click)="closeReviewPanel()">
+        <i class="feather icon-check"></i> Done Reviewing
+      </button>
+    </footer>
   </div>
   }
 </div>

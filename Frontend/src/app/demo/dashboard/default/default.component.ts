@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Component, OnInit, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, NgZone, inject, ChangeDetectorRef, HostListener, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { read, utils, WorkBook, write } from 'xlsx';
@@ -21,6 +21,7 @@ interface MappingMeta {
   relationalExtIdField?: string;
   parentObjectName?: string;
   isLoadingParentFields?: boolean;
+  syncPicklistValues?: boolean;
 
   isDropdownOpen?: boolean;
   searchQuery?: string;
@@ -50,7 +51,7 @@ interface JobQueueItem {
   templateUrl: './default.component.html',
   styleUrls: ['./default.component.scss']
 })
-export class DefaultComponent implements OnInit {
+export class DefaultComponent implements OnInit, OnDestroy {
   private migrationService = inject(MigrationService);
   private cdr = inject(ChangeDetectorRef);
   private toastr = inject(ToastrService);
@@ -116,7 +117,21 @@ export class DefaultComponent implements OnInit {
   showReviewPanel = false;
   reviewPanelMinimized = false;
   reviewPanelExpanded = false;
-  reviewFilter: 'mapped' | 'unmapped' = 'mapped';
+  reviewFilter: 'mapped' | 'unmapped' | 'ignored' = 'mapped';
+  reviewSearch = '';
+  reviewSourceFilter: 'all' | 'rule' | 'ai' | 'manual' = 'all';
+  readonly reviewPanelDefaultWidth = 920;
+  readonly reviewPanelDefaultHeight = 640;
+  reviewPanelTop = 80;
+  reviewPanelLeft = 80;
+  reviewPanelDragging = false;
+  private reviewPanelMoved = false;
+  private reviewPanelDragStart = { x: 0, y: 0 };
+  private reviewPanelDragOffset = { x: 0, y: 0 };
+  private reviewUsedTargets = new Set<string>();
+  private zone = inject(NgZone);
+  private destroyed = false;
+  private stopReviewDrag: (() => void) | null = null;
 
   ngOnInit() {
     const navState = history.state;
@@ -159,7 +174,8 @@ export class DefaultComponent implements OnInit {
           referenceTo: m.referenceTo,
           relationshipName: m.relationshipName,
           relationalExtIdField: m.relationalExtIdField || '',
-          parentObjectName: m.parentObjectName
+          parentObjectName: m.parentObjectName,
+          syncPicklistValues: !!m.syncPicklistValues
         }));
 
         this.migrationQueue.push({
@@ -471,6 +487,11 @@ export class DefaultComponent implements OnInit {
 
   getSfFieldMeta(fieldName: string): any {
     return this.sfFields.find((f) => f.name === fieldName);
+  }
+
+  isPicklistField(fieldName: string): boolean {
+    const t = this.getSfFieldMeta(fieldName)?.type;
+    return t === 'picklist' || t === 'multipicklist';
   }
 
   getMissingRequiredFields(): string[] {
@@ -903,6 +924,262 @@ export class DefaultComponent implements OnInit {
     });
   }
 
+  // =====================================================================
+  // AUTO-MAP REVIEW PANEL
+  // =====================================================================
+  get reviewActiveMappings(): any[] {
+    return this.mappings.filter((m: any) => m.isActive !== false);
+  }
+
+  private get reviewMappedRows(): any[] {
+    return this.reviewActiveMappings.filter((m: any) => !!m.sfField);
+  }
+
+  get reviewMappedCount(): number {
+    return this.reviewMappedRows.length;
+  }
+
+  get reviewUnmappedCount(): number {
+    return this.reviewActiveMappings.length - this.reviewMappedCount;
+  }
+
+  get reviewIgnoredCount(): number {
+    return this.mappings.filter((m: any) => m.isActive === false).length;
+  }
+
+  get reviewAutoCount(): number {
+    return this.reviewMappedRows.filter((m: any) => m._mappedBy === 'rule').length;
+  }
+
+  get reviewAiCount(): number {
+    return this.reviewMappedRows.filter((m: any) => m._mappedBy === 'ai').length;
+  }
+
+  get reviewManualCount(): number {
+    return this.reviewMappedRows.filter((m: any) => !m._mappedBy).length;
+  }
+
+  get reviewProgressPct(): number {
+    const total = this.reviewActiveMappings.length;
+    return total ? Math.round((this.reviewMappedCount / total) * 100) : 0;
+  }
+
+  reviewPct(count: number): number {
+    const total = this.reviewActiveMappings.length;
+    return total ? (count / total) * 100 : 0;
+  }
+
+  get reviewMissing(): { count: number; text: string; extra: number } {
+    const missing = this.getMissingRequiredFields();
+    const shown = 5;
+    return { count: missing.length, text: missing.slice(0, shown).join(', '), extra: Math.max(0, missing.length - shown) };
+  }
+
+  get reviewRows(): any[] {
+    const q = this.reviewSearch.trim().toLowerCase();
+    return this.mappings.filter((m: any) => {
+      const ignored = m.isActive === false;
+      if (this.reviewFilter === 'ignored') {
+        if (!ignored) return false;
+      } else {
+        if (ignored) return false;
+        const mapped = !!m.sfField;
+        if (this.reviewFilter === 'mapped' ? !mapped : mapped) return false;
+        if (this.reviewFilter === 'mapped' && this.reviewSourceFilter !== 'all') {
+          if (this.reviewSourceFilter === 'manual' ? !!m._mappedBy : m._mappedBy !== this.reviewSourceFilter) return false;
+        }
+      }
+      if (!q) return true;
+      const meta = this.getSfFieldMeta(m.sfField);
+      return [m.csvField, m.sfField, meta?.label].some((v) => (v || '').toString().toLowerCase().includes(q));
+    });
+  }
+
+  get hasOpenReviewDropdown(): boolean {
+    return this.mappings.some((m: any) => m.isDropdownOpen);
+  }
+
+  getFieldTypeBadge(type: string | undefined): string {
+    if (!type) return 'bg-secondary';
+    const t = type.toLowerCase();
+    if (t.includes('string') || t.includes('text') || t.includes('email')) return 'bg-info text-dark';
+    if (t.includes('number') || t.includes('int') || t.includes('double') || t.includes('currency')) return 'bg-success';
+    if (t.includes('boolean')) return 'bg-warning text-dark';
+    if (t.includes('reference') || t.includes('lookup')) return 'bg-primary';
+    if (t.includes('date') || t.includes('time')) return 'bg-danger';
+    return 'bg-secondary';
+  }
+
+  isLookupMeta(meta: any): boolean {
+    const t = (meta?.type || '').toString().toLowerCase();
+    return t === 'reference' || t === 'lookup';
+  }
+
+  isRequiredMeta(meta: any): boolean {
+    return !!meta && (!!meta.isRequired || (!meta.nillable && !!meta.createable));
+  }
+
+  isReviewTargetUsed(fieldName: string): boolean {
+    return this.reviewUsedTargets.has(fieldName);
+  }
+
+  setReviewFilter(filter: 'mapped' | 'unmapped' | 'ignored'): void {
+    this.reviewFilter = filter;
+    this.closeAllDropdowns();
+  }
+
+  clearReviewSearch(): void {
+    this.reviewSearch = '';
+  }
+
+  reviewToggleDropdown(mapping: any, event: Event): void {
+    const trigger = event.currentTarget as HTMLElement | null;
+    const wasOpen = !!mapping.isDropdownOpen;
+    this.toggleDropdown(mapping, event);
+    if (wasOpen || !mapping.isDropdownOpen) return;
+
+    // Snapshot which targets other columns already use so the dropdown can flag them.
+    this.reviewUsedTargets = new Set(
+      this.mappings.filter((m: any) => m !== mapping && m.isActive !== false && m.sfField).map((m: any) => m.sfField as string)
+    );
+    // Keep the dropdown fully visible inside the scrolling list and ready for typing.
+    setTimeout(() => {
+      const menu = trigger?.parentElement?.querySelector('.rp-dd') as HTMLElement | null;
+      menu?.scrollIntoView({ block: 'nearest' });
+      (menu?.querySelector('input') as HTMLInputElement | null)?.focus();
+    });
+  }
+
+  restoreReviewMapping(mapping: any): void {
+    mapping.isActive = true;
+    this.mappings = [...this.mappings];
+    if (this.reviewIgnoredCount === 0) this.reviewFilter = 'unmapped';
+    this.cdr.detectChanges();
+  }
+
+  openReviewPanel(): void {
+    this.reviewPanelMinimized = false;
+    if (this.showReviewPanel) return;
+    this.reviewPanelExpanded = false;
+    const w = Math.min(this.reviewPanelDefaultWidth, window.innerWidth * 0.96);
+    const h = Math.min(this.reviewPanelDefaultHeight, window.innerHeight * 0.92);
+    this.reviewPanelLeft = Math.max(12, (window.innerWidth - w) / 2);
+    this.reviewPanelTop = Math.max(12, (window.innerHeight - h) / 2);
+    this.showReviewPanel = true;
+  }
+
+  closeReviewPanel(): void {
+    this.showReviewPanel = false;
+    this.reviewPanelExpanded = false;
+    this.reviewSearch = '';
+    this.reviewSourceFilter = 'all';
+    this.closeAllDropdowns();
+  }
+
+  minimizeReviewPanel(): void {
+    this.reviewPanelMinimized = true;
+    this.reviewPanelExpanded = false;
+    this.closeAllDropdowns();
+  }
+
+  restoreReviewPanel(): void {
+    this.reviewPanelMinimized = false;
+    this.clampReviewPanel();
+  }
+
+  toggleReviewPanelExpanded(): void {
+    if (this.reviewPanelMinimized) return;
+    this.reviewPanelExpanded = !this.reviewPanelExpanded;
+    this.closeAllDropdowns();
+  }
+
+  onReviewHeaderClick(): void {
+    // A drag on the minimized pill must not count as a click that restores it.
+    if (this.reviewPanelMinimized && !this.reviewPanelMoved) this.restoreReviewPanel();
+  }
+
+  private clampReviewPanel(): void {
+    const minVisible = 120;
+    this.reviewPanelLeft = Math.min(Math.max(this.reviewPanelLeft, 0), Math.max(0, window.innerWidth - 320));
+    this.reviewPanelTop = Math.min(Math.max(this.reviewPanelTop, 0), Math.max(0, window.innerHeight - minVisible));
+  }
+
+  startReviewPanelDrag(event: MouseEvent): void {
+    if (event.button !== 0 || this.reviewPanelExpanded) return;
+    if ((event.target as HTMLElement).closest('button')) return;
+    const panelEl = (event.currentTarget as HTMLElement).closest('.floating-review-panel') as HTMLElement | null;
+    if (!panelEl) return;
+
+    const rect = panelEl.getBoundingClientRect();
+    this.reviewPanelDragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    this.reviewPanelDragStart = { x: event.clientX, y: event.clientY };
+    this.reviewPanelMoved = false;
+    this.reviewPanelDragging = true;
+    this.beginReviewDrag((e) => this.onReviewPanelDrag(e), () => (this.reviewPanelDragging = false));
+    event.preventDefault();
+  }
+
+  private onReviewPanelDrag(event: MouseEvent): void {
+    if (!this.reviewPanelDragging) return;
+    if (Math.abs(event.clientX - this.reviewPanelDragStart.x) > 3 || Math.abs(event.clientY - this.reviewPanelDragStart.y) > 3) {
+      this.reviewPanelMoved = true;
+    }
+    const margin = 60;
+    this.reviewPanelLeft = Math.min(Math.max(event.clientX - this.reviewPanelDragOffset.x, 0), window.innerWidth - margin);
+    this.reviewPanelTop = Math.min(Math.max(event.clientY - this.reviewPanelDragOffset.y, 0), window.innerHeight - margin);
+  }
+
+  // Runs the drag outside Angular's zone (one change-detection pass per animation frame instead of per mousemove).
+  private beginReviewDrag(onMove: (e: MouseEvent) => void, onEnd: () => void): void {
+    this.stopReviewDrag?.();
+    this.zone.runOutsideAngular(() => {
+      let raf = 0;
+      const move = (e: MouseEvent) => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (this.destroyed) return;
+          onMove(e);
+          this.cdr.detectChanges();
+        });
+      };
+      const cleanup = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        if (raf) cancelAnimationFrame(raf);
+        this.stopReviewDrag = null;
+      };
+      const up = () => {
+        cleanup();
+        if (this.destroyed) return;
+        this.zone.run(onEnd);
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+      this.stopReviewDrag = cleanup;
+    });
+  }
+
+  @HostListener('document:keydown.escape')
+  onReviewPanelEscape(): void {
+    if (!this.showReviewPanel || this.reviewPanelMinimized || Swal.isVisible()) return;
+    if (this.hasOpenReviewDropdown) {
+      this.closeAllDropdowns();
+      return;
+    }
+    this.minimizeReviewPanel();
+  }
+
+  @HostListener('window:resize')
+  onReviewWindowResize(): void {
+    if (this.showReviewPanel && !this.reviewPanelExpanded) this.clampReviewPanel();
+  }
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    this.stopReviewDrag?.();
+  }
+
   private finishAutoMap(ruleMatchCount: number, aiMatchCount: number) {
     this.isAutoMapping = false;
     const totalMapped = ruleMatchCount + aiMatchCount;
@@ -915,8 +1192,7 @@ export class DefaultComponent implements OnInit {
       this.reviewFilter = 'unmapped';
     }
 
-    this.showReviewPanel = true;
-    this.reviewPanelMinimized = false;
+    this.openReviewPanel();
     this.mappings = [...this.mappings];
     this.cdr.detectChanges();
   }
@@ -1032,6 +1308,7 @@ export class DefaultComponent implements OnInit {
 
   onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
+    mapping.syncPicklistValues = false; // a new target field needs a fresh decision
 
     if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
       let parentObj = fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0 ? fieldMeta.referenceTo[0] : null;
@@ -1712,6 +1989,7 @@ export class DefaultComponent implements OnInit {
     this.currentStep = 2;
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.cdr.detectChanges();
+    this.router.navigate(['/data-validation']);
   }
 
   getDynamicSequenceWarning(): string | null {
