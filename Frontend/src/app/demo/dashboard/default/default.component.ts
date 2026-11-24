@@ -174,8 +174,7 @@ export class DefaultComponent implements OnInit, OnDestroy {
           referenceTo: m.referenceTo,
           relationshipName: m.relationshipName,
           relationalExtIdField: m.relationalExtIdField || '',
-          parentObjectName: m.parentObjectName,
-          syncPicklistValues: !!m.syncPicklistValues
+          parentObjectName: m.parentObjectName
         }));
 
         this.migrationQueue.push({
@@ -489,7 +488,7 @@ export class DefaultComponent implements OnInit, OnDestroy {
     return this.sfFields.find((f) => f.name === fieldName);
   }
 
-  isPicklistField(fieldName: string): boolean {
+    isPicklistField(fieldName: string): boolean {
     const t = this.getSfFieldMeta(fieldName)?.type;
     return t === 'picklist' || t === 'multipicklist';
   }
@@ -1308,7 +1307,7 @@ export class DefaultComponent implements OnInit, OnDestroy {
 
   onSfFieldChange(mapping: MappingMeta) {
     const fieldMeta = this.getSfFieldMeta(mapping.sfField);
-    mapping.syncPicklistValues = false; // a new target field needs a fresh decision
+    mapping.syncPicklistValues = false;
 
     if (this.supportsRelationalLookups && fieldMeta && fieldMeta.type === 'reference') {
       let parentObj = fieldMeta.referenceTo && fieldMeta.referenceTo.length > 0 ? fieldMeta.referenceTo[0] : null;
@@ -1363,6 +1362,39 @@ export class DefaultComponent implements OnInit, OnDestroy {
       mapping.relationalExtIdField = '';
     }
   }
+
+  readonly dataValidationRoute = '/data-validation';
+
+  async goToDataValidation(): Promise<void> {
+    const queued = this.migrationQueue.length;
+    const mappedNow = this.getConfirmedCount(this.mappings);
+
+    // Only interrupt the user when leaving would discard work in this page.
+    if (queued > 0 || mappedNow > 0) {
+      const details: string[] = [];
+      if (queued > 0) details.push(`${queued} queued object${queued === 1 ? '' : 's'}`);
+      if (mappedNow > 0) details.push(`${mappedNow} mapped field${mappedNow === 1 ? '' : 's'} in the current mapping`);
+      const result = await Swal.fire({
+        title: 'Start a new migration?',
+        html: `You will be taken to Data Validation. Your ${details.join(' and ')} on this page will not be kept.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#0d6efd',
+        confirmButtonText: 'Yes, continue',
+        cancelButtonText: 'Stay here'
+      });
+      if (!result.isConfirmed) return;
+    }
+
+    this.router
+      .navigateByUrl(this.dataValidationRoute, {
+        state: { sourceCrm: this.sourceCrmId, targetCrm: this.targetCrmId }
+      })
+      .then((success) => {
+        if (!success) this.toastr.error('Could not open the Data Validation page.', 'Navigation Error');
+      });
+  }
+
   queueAnotherObject() {
     const isDuplicate = this.migrationQueue.some((job) => job.targetObject === this.selectedObject);
     if (isDuplicate) {

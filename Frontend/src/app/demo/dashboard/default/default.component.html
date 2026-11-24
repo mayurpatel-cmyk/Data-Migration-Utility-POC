@@ -951,15 +951,6 @@
                   }
                 </div>
                 }
-
-                <!-- CREATE MISSING PICKLIST VALUES IN THE TARGET (CSV uploads) -->
-                @if (getSfFieldMeta(mapping.sfField)?.type === 'picklist' || getSfFieldMeta(mapping.sfField)?.type === 'multipicklist') {
-                <label class="form-check form-switch small mb-0 d-flex align-items-center gap-2"
-                  title="Values found in your file that do not exist in the target picklist are created in the target org right before the data load.">
-                  <input class="form-check-input mt-0" type="checkbox" role="switch" [(ngModel)]="mapping.syncPicklistValues">
-                  <span class="text-muted" style="font-size: 0.7rem;">Create missing picklist values in target</span>
-                </label>
-                }
                 }
               </td>
 
@@ -985,9 +976,17 @@
 
       <div
         class="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded border mb-4 gap-3 shadow-sm">
-        <div>
+        <div class="d-flex flex-wrap align-items-center gap-2">
           <button class="btn btn-info d-flex align-items-center gap-2 text-white" (click)="previewCurrentMapping()">
             <i class="feather icon-eye"></i> Preview Data
+          </button>
+          <button class="btn btn-outline-primary d-flex align-items-center gap-2" (click)="goToDataValidation()"
+            [disabled]="isAutoMapping" title="Start a new migration from the Data Validation page">
+            <i class="feather icon-plus-circle"></i> New Migration
+            @if (migrationQueue.length > 0) {
+            <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill"
+              title="Objects currently queued on this page">{{ migrationQueue.length }} queued</span>
+            }
           </button>
         </div>
         <div class="d-flex flex-wrap gap-2">
