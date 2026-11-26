@@ -4,7 +4,9 @@ import json
 from fastapi import HTTPException
 import urllib.parse
 
+from app.services.zendesk_common import flatten_record, in_time_bounds
 from app.services.time_filter_service import (
+    zendesk_time_bounds,
     merge_time_clause,
     build_salesforce_time_clause,
     build_zoho_time_clause,
@@ -83,7 +85,6 @@ class CrmQueryService:
 
         try:
             time_clause = build_zendesk_time_clause(time_filter)
-            custom_time_filters = build_zendesk_custom_object_time_filter(time_filter)
         except TimeFilterError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -94,12 +95,13 @@ class CrmQueryService:
                 query_parts = [p for p in [clean_query, time_clause] if p]
                 full_query = f"{' '.join(query_parts)} type:{safe_obj}" if query_parts else f"type:{safe_obj}"
                 
-                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page={limit}"
+                url = f"https://{zd_subdomain}.zendesk.com/api/v2/search.json?query={urllib.parse.quote(full_query)}&per_page={min(max(int(limit or 1), 1), 100)}"
                 res = await client.get(url, headers=headers)
                 
                 if res.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Zendesk Error: {res.text}")
-                return {"records": res.json().get("results", []), "queryUsed": full_query}
+                # same flattening as the real extraction, so the preview shows the field names you will map
+                return {"records": [flatten_record(r) for r in res.json().get("results", [])], "queryUsed": full_query}
                 
             else:
                 explicit_fields = None
@@ -118,10 +120,9 @@ class CrmQueryService:
                         if cleaned:
                             explicit_fields = cleaned
 
-                if custom_time_filters:
-                    json_payload = CrmQueryService._merge_zendesk_custom_filter(json_payload, custom_time_filters)
+                # the date filter is applied client-side (below), exactly like the real extraction
 
-                if had_explicit_query or custom_time_filters:
+                if had_explicit_query:
                     url = f"https://{zd_subdomain}.zendesk.com/api/v2/custom_objects/{safe_obj}/records/search?page[size]={limit}"
                     res = await client.post(url, headers=headers, json=json_payload)
                 else:
@@ -132,15 +133,11 @@ class CrmQueryService:
                     raise HTTPException(status_code=400, detail=f"Zendesk Custom Object Error: {res.text}")
                 
                 flattened_records = []
+                bounds = zendesk_time_bounds(time_filter)
                 for rec in res.json().get("custom_object_records", []):
-                    flat_rec = {}
-                    for k, v in rec.items():
-                        if k == "custom_fields" and isinstance(v, list):
-                            for cf in v: flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                        elif k == "custom_object_fields" and isinstance(v, dict):
-                            for cf_key, cf_val in v.items(): flat_rec[cf_key] = cf_val
-                        elif not isinstance(v, (dict, list)): 
-                            flat_rec[k] = v
+                    if bounds and not in_time_bounds(rec, bounds):
+                        continue
+                    flat_rec = flatten_record(rec)
                     if explicit_fields is not None:
                         always_keep = {"id", "name", "external_id"}
                         flat_rec = {k: v for k, v in flat_rec.items() if k in explicit_fields or k in always_keep}

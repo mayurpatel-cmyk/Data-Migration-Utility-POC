@@ -1,4 +1,5 @@
 import httpx
+from app.services import zendesk_metadata_service
 import urllib.parse 
 from fastapi import HTTPException
 
@@ -171,151 +172,18 @@ class CrmMetadataService:
 
     @staticmethod
     async def fetch_zendesk_fields(zd_token: str, subdomain: str, object_name: str):
+        """Zendesk field metadata now lives in zendesk_metadata_service (static system-field catalog, real
+        createable/updateable flags, picklistValues, referenceTo, user_field_/organization_field_ naming)."""
         if not zd_token or not subdomain:
             raise _session_expired("zendesk")
-            
-        headers = {"Authorization": f"Bearer {zd_token}", "Content-Type": "application/json"}
-        base_url = f"https://{subdomain}.zendesk.com/api/v2"
-        safe_object_name = object_name.lower()
-        
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                schema_fields_map = {}
-                sample_records = []
-                
-                standard_objects = ["tickets", "users", "organizations", "groups", "macros", "triggers", "views"]
-                is_standard = safe_object_name in standard_objects
-                
-                if is_standard:
-                    # ==========================================
-                    # STANDARD ZENDESK OBJECTS
-                    # ==========================================
-                    singular_name = safe_object_name[:-1] if safe_object_name.endswith('s') else safe_object_name
-                    
-                    # 1. Fetch Schema
-                    if safe_object_name in ["tickets", "users", "organizations"]:
-                        meta_url = f"{base_url}/{singular_name}_fields.json"
-                        meta_res = await client.get(meta_url, headers=headers)
-                        
-                        if meta_res.status_code == 200:
-                            for f in meta_res.json().get(f"{singular_name}_fields", []):
-                                field_id = f.get("id")
-                                is_custom = isinstance(field_id, int)
-                                api_name = f"custom_field_{field_id}" if is_custom else str(field_id)
-                                
-                                schema_fields_map[api_name] = {
-                                    "name": api_name,
-                                    "label": f.get("title", api_name),
-                                    "type": f.get("type", "string"),
-                                    "isRequired": f.get("required", False) or f.get("required_in_portal", False),
-                                    "custom": is_custom,
-                                    "referenceTo": None,
-                                    "externalId": api_name in ("id", "external_id") or (api_name == "email" and singular_name == "user"),
-                                    "createable": True,
-                                    "updateable": True
-                                }
-                                
-                    # 2. Fetch Sample Data
-                    data_url = f"{base_url}/{safe_object_name}.json?per_page=5"
-                    data_res = await client.get(data_url, headers=headers)
-                    data_res.raise_for_status()
-                    
-                    raw_records = data_res.json().get(safe_object_name, [])
-                    for rec in raw_records:
-                        flat_rec = {}
-                        for k, v in rec.items():
-                            if k == "custom_fields" and isinstance(v, list):
-                                for cf in v:
-                                    flat_rec[f"custom_field_{cf['id']}"] = cf.get("value")
-                            elif not isinstance(v, (dict, list)): 
-                                flat_rec[k] = v
-                                # Discover missing system fields dynamically
-                                if k not in schema_fields_map:
-                                    field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
-                                    schema_fields_map[k] = {
-                                        "name": k, "label": k.replace("_", " ").title(), "type": field_type,
-                                        "isRequired": False,
-                                        "custom": False, "referenceTo": None,
-                                        "externalId": k in ("id", "external_id"),
-                                        "createable": k != "id",
-                                        "updateable": k != "id"
-                                    }
-                        sample_records.append(flat_rec)
-
-                else:
-                    # ==========================================
-                    # NATIVE CUSTOM OBJECTS (Admin Center)
-                    # ==========================================
-                    # 1. Fetch Schema using the modern endpoint
-                    meta_url = f"{base_url}/custom_objects/{safe_object_name}/fields"
-                    meta_res = await client.get(meta_url, headers=headers)
-                    
-                    if meta_res.status_code == 200:
-                        for f in meta_res.json().get("custom_object_fields", []):
-                            api_name = f.get("key")
-                            schema_fields_map[api_name] = {
-                                "name": api_name,
-                                "label": f.get("title", api_name),
-                                "type": f.get("type", "string"),
-                                "isRequired": False,
-                                "custom": True,
-                                "referenceTo": None,
-                                "externalId": api_name in ("id", "external_id"),
-                                "unique": False,
-                                "createable": True,
-                                "updateable": True
-                            }
-                            
-                    # 2. Fetch Sample Data using the modern records endpoint
-                    data_url = f"{base_url}/custom_objects/{safe_object_name}/records?per_page=5"
-                    data_res = await client.get(data_url, headers=headers)
-                    data_res.raise_for_status()
-                    
-                    raw_records = data_res.json().get("custom_object_records", [])
-                    for rec in raw_records:
-                        # Extract standard native system fields
-                        flat_rec = {
-                            "id": rec.get("id"), 
-                            "name": rec.get("name"), 
-                            "created_at": rec.get("created_at"), 
-                            "updated_at": rec.get("updated_at")
-                        }
-                        
-                        # Flatten custom_object_fields payload
-                        c_fields = rec.get("custom_object_fields", {})
-                        for k, v in c_fields.items():
-                            flat_rec[k] = v
-                            
-                        # Discover missing system fields dynamically
-                        for k, v in flat_rec.items():
-                            if k not in schema_fields_map:
-                                field_type = "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string"
-                                schema_fields_map[k] = {
-                                    "name": k, "label": k.replace("_", " ").title(), "type": field_type,
-                                    "isRequired": k == "id", "custom": False, "referenceTo": None,
-                                    "externalId": k in ("id", "external_id"),
-                                    "createable": k not in ("id", "created_at", "updated_at"),
-                                    "updateable": k not in ("id", "created_at", "updated_at")
-                                }
-                        sample_records.append(flat_rec)
-
-                # Format and Sort Output to match Salesforce structure
-                fields_list = list(schema_fields_map.values())
-                fields_list = sorted(fields_list, key=lambda x: (not x["isRequired"], x["name"]))
-                headers_preview = [f["name"] for f in fields_list[:12]] 
-                
-            return {
-                "headers": headers_preview,
-                "sampleRecords": sample_records,
-                "fields": fields_list
-            }
-            
+            return await zendesk_metadata_service.fetch_fields(zd_token, subdomain, object_name)
+        except ValueError as e:                       # invalid subdomain
+            raise HTTPException(status_code=400, detail=str(e))
         except httpx.HTTPStatusError as e:
             raise _upstream_error(e, "zendesk", f"Zendesk data fetch error for '{object_name}': {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Zendesk network connection failed: {str(e)}")
-
-
 
    # =========================================================
     # ZOHO CRM METADATA EXTRACTION ENGINE

@@ -264,6 +264,8 @@ class CrmService:
                             "client_secret": os.getenv("ZD_CLIENT_SECRET"),
                             "refresh_token": refresh_token,
                             "scope": "read write",
+                            "expires_in": int(os.getenv("ZD_ACCESS_TOKEN_TTL", "7200")),
+                            "refresh_token_expires_in": int(os.getenv("ZD_REFRESH_TOKEN_TTL", "2592000")),
                         },
                     )
                 elif crm == "hubspot":

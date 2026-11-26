@@ -187,13 +187,17 @@ class PayloadBuilderService:
                     zd_obj_lower = (target_object or "").strip().lower()
                     zd_is_standard = zd_obj_lower in zd_standard_objects or f"{zd_obj_lower}s" in zd_standard_objects
 
+                    # multi-selects arrive as "a;b;c" (or a tag string): Zendesk needs a JSON array
+                    if mapping.get("type") in ("multipicklist", "multiselect") and isinstance(csv_val, str):
+                        csv_val = [p.strip() for p in csv_val.split(";") if p.strip()]
+
                     if target_ext_id_field and target_field == target_ext_id_field:
                         target_record["external_id"] = csv_val
-                    elif target_field.startswith("custom_field_"):
+                    elif target_field.startswith("custom_field_") and target_field[len("custom_field_"):].isdigit():
                         if "custom_fields" not in target_record:
                             target_record["custom_fields"] = []
-                        
-                        cf_id = int(target_field.replace("custom_field_", ""))
+
+                        cf_id = int(target_field[len("custom_field_"):])
                         target_record["custom_fields"].append({"id": cf_id, "value": csv_val})
                     elif not zd_is_standard and target_field not in ("name", "external_id", "id"):
                         if "custom_object_fields" not in target_record:

@@ -245,3 +245,15 @@ def build_hubspot_time_filters(time_filter: Optional[dict]) -> List[dict]:
         {"propertyName": field, "operator": "GTE", "value": _epoch_millis(start_dt)},
         {"propertyName": field, "operator": "LTE", "value": _epoch_millis(end_dt)},
     ]
+
+def zendesk_time_bounds(time_filter: Optional[dict], default_field: str = "updated_at") -> Optional[Tuple[str, datetime, datetime]]:
+    """(field, start_dt, end_dt) for filtering Zendesk custom-object records CLIENT-SIDE, or None when no filter applies.
+    The custom-object search API's filter dialect varies by Zendesk version, so records are fetched and filtered on
+    their *_at timestamp (naive UTC) instead of trusting a server-side filter. Same validation/errors as the other builders."""
+    parsed = _parse_date_range(time_filter, default_field, apply_offset=False)
+    if not parsed:
+        return None
+    field, start_dt, end_dt = parsed
+    if not field.endswith("_at"):
+        field = f"{field}_at"
+    return field, start_dt, end_dt

@@ -10,6 +10,7 @@ import httpx
 from app.api.dependencies.auth import get_current_user
 from app.services.crm_service import CrmService
 from app.utils.config import supabase
+from app.services.zendesk_common import normalize_subdomain
 
 router = APIRouter()
 
@@ -27,6 +28,9 @@ ZOHO_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zoho/callback"
 ZD_CLIENT_ID = os.getenv("ZD_CLIENT_ID", "").strip()
 ZD_CLIENT_SECRET = os.getenv("ZD_CLIENT_SECRET", "").strip()
 ZD_REDIRECT_URI = f"{FASTAPI_BACKEND_URL}/api/crm/auth/zendesk/callback"
+# Zendesk OAuth tokens expire; ask for a refresh token so the session can be renewed silently.
+ZD_ACCESS_TOKEN_TTL = int(os.getenv("ZD_ACCESS_TOKEN_TTL", "7200"))              # allowed: 300 - 172800 s
+ZD_REFRESH_TOKEN_TTL = int(os.getenv("ZD_REFRESH_TOKEN_TTL", "2592000"))         # allowed: 604800 - 7776000 s
 
 ZOHO_REGIONS = {
     "us": "https://accounts.zoho.com",
@@ -192,9 +196,11 @@ async def zoho_callback(code: str, state: str, request: Request):
 # =========================================================
 @router.get("/auth/zendesk/login")
 def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_current_user)):
-    if not subdomain:
-        raise HTTPException(status_code=400, detail="Subdomain parameter is missing.")
-        
+    try:
+        subdomain = normalize_subdomain(subdomain)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Enter your Zendesk subdomain (the 'acme' in acme.zendesk.com).")
+
     custom_state = f"{side}::{current_user.id}::{subdomain}"
     
     params = {
@@ -213,6 +219,7 @@ def get_zendesk_url(side: str, subdomain: str, current_user = Depends(get_curren
 async def zendesk_callback(code: str, state: str):
     try:
         side, user_id, subdomain = state.split("::")
+        subdomain = normalize_subdomain(subdomain)   # never build a URL (that receives the client secret) from raw input
     except ValueError:
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
 
@@ -223,7 +230,9 @@ async def zendesk_callback(code: str, state: str):
             "client_id": ZD_CLIENT_ID,
             "client_secret": ZD_CLIENT_SECRET,
             "redirect_uri": ZD_REDIRECT_URI,
-            "scope": "read write"
+            "scope": "read write",
+            "expires_in": ZD_ACCESS_TOKEN_TTL,
+            "refresh_token_expires_in": ZD_REFRESH_TOKEN_TTL,
         })
         if response.status_code != 200:
             return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")
@@ -238,6 +247,7 @@ async def zendesk_callback(code: str, state: str):
             "crm_type": "zendesk",
             "connection_role": side,
             "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token", ""),
             "subdomain": subdomain
         }).execute()
     except Exception:

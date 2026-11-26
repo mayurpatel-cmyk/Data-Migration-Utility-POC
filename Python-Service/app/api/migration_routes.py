@@ -658,13 +658,19 @@ async def websocket_migration(ws: WebSocket):
                     return
 
                 # ---------------- picklist sync (only for fields whose Sync toggle is ON; also on retry / resume) ----------------
-                if source_crm == "salesforce" and target_crm == "salesforce" and not job.get("isPass3Patch", False):
+                if source_crm != "csv" and not job.get("isPass3Patch", False):
                     picklist_sync_mappings = [m for m in mappings if m.get("syncPicklistValues")]
                     if picklist_sync_mappings:
-                        sync_result = await PicklistSyncService.sync(
-                            client, source_creds, target_creds, user_id,
-                            source_object, target_object, picklist_sync_mappings, send_log,
-                        )
+                        if source_crm == "salesforce" and target_crm == "salesforce":
+                            sync_result = await PicklistSyncService.sync(
+                                client, source_creds, target_creds, user_id,
+                                source_object, target_object, picklist_sync_mappings, send_log,
+                            )
+                        else:   # Zendesk / Zoho / HubSpot on either side
+                            sync_result = await MultiCrmPicklistSyncService.sync(
+                                client, source_crm, target_crm, source_creds, target_creds, user_id,
+                                source_object, target_object, picklist_sync_mappings, send_log,
+                            )
                         if sync_result["failed"]:
                             final_status = "failed"
                             await websocket.send_json({

@@ -61,19 +61,19 @@ class ZendeskValidator:
                     df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Duplicate value found. This Zendesk field must be Unique.] "
                     valid_mask &= ~invalid_duplicates
 
-            if target_field == 'status':
+            if target_field == 'status' and field_rules.get('context', 'ticket') == 'ticket':
                 is_invalid_status = ~str_col.isin(self.ZD_TICKET_STATUSES) & ~is_empty
                 if is_invalid_status.any():
                     df.loc[is_invalid_status, '_errors'] += f"[{csv_col}: Invalid status. Allowed: {', '.join(self.ZD_TICKET_STATUSES)}.] "
                     valid_mask &= ~is_invalid_status
                     
-            elif target_field == 'priority':
+            elif target_field == 'priority' and field_rules.get('context', 'ticket') == 'ticket':
                 is_invalid_prio = ~str_col.isin(self.ZD_TICKET_PRIORITIES) & ~is_empty
                 if is_invalid_prio.any():
                     df.loc[is_invalid_prio, '_errors'] += f"[{csv_col}: Invalid priority. Allowed: {', '.join(self.ZD_TICKET_PRIORITIES)}.] "
                     valid_mask &= ~is_invalid_prio
 
-            elif target_field == 'type' and 'ticket' in field_rules.get('context', 'ticket'):
+            elif target_field == 'type' and field_rules.get('context', 'ticket') == 'ticket':
                 is_invalid_type = ~str_col.isin(self.ZD_TICKET_TYPES) & ~is_empty
                 if is_invalid_type.any():
                     df.loc[is_invalid_type, '_errors'] += f"[{csv_col}: Invalid ticket type. Allowed: {', '.join(self.ZD_TICKET_TYPES)}.] "
@@ -111,6 +111,10 @@ class ZendeskValidator:
                     if is_invalid_dropdown.any():
                         df.loc[is_invalid_dropdown, '_errors'] += f"[{csv_col}: Invalid Dropdown value. Must match a Zendesk field Tag.] "
                         valid_mask &= ~is_invalid_dropdown
+                    # send the exact option tag Zendesk expects, not the user's casing
+                    canonical = {str(v).strip().lower(): v for v in valid_values}
+                    mapped = str_col.map(canonical)
+                    df[csv_col] = df[csv_col].where(is_empty | mapped.isna(), mapped)
 
             elif zd_type in ['multiselect', 'multipicklist']:
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'[,|]', ';', regex=True)
@@ -130,7 +134,7 @@ class ZendeskValidator:
                 
                 df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s*;\s*', ';', regex=True)
 
-            elif zd_type in ['integer', 'decimal', 'numeric']:
+            elif zd_type in ['integer', 'decimal', 'numeric', 'number', 'double', 'float']:
                 cleaned_nums = df[csv_col].astype(str).str.replace(r'[^\d\.-]', '', regex=True)
                 numeric_col = pd.to_numeric(cleaned_nums, errors='coerce')
                 is_invalid = numeric_col.isna() & ~is_empty
@@ -158,7 +162,7 @@ class ZendeskValidator:
                 df[csv_col] = df[csv_col].astype(object)
                 df.loc[is_true, csv_col] = True
                 df.loc[is_false, csv_col] = False
-                df.loc[is_empty, csv_col] = False 
+                df.loc[is_empty, csv_col] = None   # an empty cell must not overwrite an existing value with False
 
                 df.loc[~valid_bools, '_errors'] += f"[{csv_col}: Must be TRUE/FALSE/Yes/No.] "
                 valid_mask &= valid_bools
