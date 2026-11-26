@@ -1776,15 +1776,17 @@
             </div>
           </div>
 
-          @if (isSalesforceToSalesforce) {
+          @if (fileMigrationSupported) {
           <div class="d-flex flex-wrap gap-3 mt-2 pt-2 border-top border-primary-subtle">
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateAttachmentsCheck"
                 [(ngModel)]="migrateAttachments" (ngModelChange)="onFileMigrationCheckboxToggle()">
               <label class="form-check-label fw-bold cursor-pointer small" for="migrateAttachmentsCheck">
-                <i class="feather icon-paperclip me-1"></i> Migrate Attachments (legacy)
+                <i class="feather icon-paperclip me-1"></i>
+                {{ isSourceSingleFileType ? 'Migrate Files / Attachments' : 'Migrate Attachments (legacy)' }}
               </label>
             </div>
+            @if (!isSourceSingleFileType) {
             <div class="form-check">
               <input class="form-check-input cursor-pointer" type="checkbox" id="migrateFilesCheck"
                 [(ngModel)]="migrateFiles" (ngModelChange)="onFileMigrationCheckboxToggle()">
@@ -1792,7 +1794,16 @@
                 <i class="feather icon-file me-1"></i> Migrate Files
               </label>
             </div>
+            }
           </div>
+
+          @if (fileMigrationNotes.length) {
+            <div class="mt-2 small text-muted">
+              @for (note of fileMigrationNotes; track note) {
+                <div><i class="feather icon-info me-1"></i>{{ note }}</div>
+              }
+            </div>
+          }
 
           @if (migrateAttachments || migrateFiles) {
             <div class="mt-2">

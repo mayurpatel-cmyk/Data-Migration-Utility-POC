@@ -345,8 +345,8 @@ isProfileDropdownOpen = false;
     return this.sourceCrmId?.toLowerCase() === 'salesforce' && this.targetCrmId?.toLowerCase() === 'salesforce';
   }
 
-  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot'];
-  private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot'];
+  private readonly FILE_MIGRATION_CRMS = ['salesforce', 'zoho', 'hubspot', 'zendesk'];
+  private readonly SINGLE_FILE_TYPE_CRMS = ['zoho', 'hubspot', 'zendesk'];
 
   canSyncPicklist(mapping: MappingRow): boolean {
     if (!this.isPicklistSyncSupported || !mapping.sourceField || !mapping.targetField) return false;
@@ -377,13 +377,23 @@ get isSourceSingleFileType(): boolean {
   return this.SINGLE_FILE_TYPE_CRMS.includes(this.sourceCrmId?.toLowerCase());
 }
 
+private crmLabel(crm: string): string {
+  const labels: Record<string, string> = { salesforce: 'Salesforce', zoho: 'Zoho', hubspot: 'HubSpot', zendesk: 'Zendesk' };
+  return labels[crm] || crm;
+}
+
 get fileMigrationNotes(): string[] {
   const s = this.sourceCrmId?.toLowerCase();
   const t = this.targetCrmId?.toLowerCase();
   const notes: string[] = [];
+  if (s === 'salesforce' && t === 'salesforce') notes.push('Attachments (legacy) and Salesforce Files can be migrated separately; select one or both.');
+  if (s === 'salesforce' && t !== 'salesforce') notes.push('Both legacy Attachments and Files from Salesforce are sent to ' + this.crmLabel(t) + ' as attachments on the migrated record.');
+  if (s === 'zoho') notes.push('Zoho has a single attachment type, so one option migrates all attachments on the record.');
+  if (s === 'zendesk') notes.push('Zendesk ticket/comment attachments are migrated as one file type.');
   if (t === 'zoho') notes.push('Zoho accepts attachments up to 20 MB per file; larger files are reported as errors.');
   if (s === 'hubspot') notes.push('Files attached to a record\'s Notes, Calls, Meetings and Tasks are migrated from HubSpot (files in the standalone Files tool are not).');
   if (s === 'zoho' && t === 'salesforce') notes.push('Zoho attachments are created as Salesforce Files.');
+  if (notes.length) notes.push('Files are moved only for records that are migrated in this run, and each file transfer uses API calls from the daily limit.');
   return notes;
 }
 
@@ -5122,7 +5132,7 @@ onReviewPanelDrag(event: MouseEvent): void {
       targetCrm: this.targetCrmId.toLowerCase(),
       migrationTimeFilter: this.migrationTimeFilter,
       migrateAttachments: this.migrateAttachments,
-      migrateFiles: this.migrateFiles
+      migrateFiles: this.isSourceSingleFileType ? false : this.migrateFiles
     };
 
     this.http.post<FileMigrationBudgetPreview>(
