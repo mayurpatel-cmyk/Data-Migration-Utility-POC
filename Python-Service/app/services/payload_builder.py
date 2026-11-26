@@ -209,7 +209,10 @@ class PayloadBuilderService:
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
 
                 elif target_crm == "hubspot":
-                    if mapping.get("type") == "reference":
+                    if str(target_field).startswith("__assoc__"):
+                        # association pseudo-field: carried to the migrator, which links the record after writing it
+                        target_record[target_field] = csv_val
+                    elif mapping.get("type") == "reference":
                         pass 
                     else:
                         target_record[target_field] = csv_val

@@ -257,6 +257,14 @@ async def zendesk_callback(code: str, state: str):
 # =========================================================
 # HUBSPOT OAUTH FLOW
 # =========================================================
+HS_DEFAULT_OPTIONAL_SCOPES = (
+    "files files.ui_hidden.read crm.objects.owners.read "
+    "crm.schemas.contacts.read crm.schemas.companies.read crm.schemas.deals.read crm.schemas.tickets.read "
+    "crm.schemas.contacts.write crm.schemas.companies.write crm.schemas.deals.write crm.schemas.tickets.write "
+    "crm.objects.custom.read crm.objects.custom.write"
+)
+
+
 @router.get("/auth/hubspot/login")
 def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
     import urllib.parse
@@ -273,6 +281,9 @@ def get_hubspot_url(side: str, current_user = Depends(get_current_user)):
         "scope": scopes,
         "state": custom_state
     }
+    optional_scopes = os.getenv("HS_OPTIONAL_SCOPES", HS_DEFAULT_OPTIONAL_SCOPES).strip()
+    if optional_scopes:
+        params["optional_scope"] = optional_scopes
 
     auth_url = f"https://app.hubspot.com/oauth/authorize?{urllib.parse.urlencode(params)}"
     return {"url": auth_url}
@@ -303,17 +314,34 @@ async def hubspot_callback(code: str, state: str):
 
         token_data = response.json()
 
+    # The portal id is the stable identity of this HubSpot account (api.hubapi.com is shared by every portal).
+    portal_id = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as id_client:
+            info = await id_client.get(f"https://api.hubapi.com/oauth/v1/access-tokens/{token_data.get('access_token')}")
+            if info.status_code == 200:
+                portal_id = str(info.json().get("hub_id") or "") or None
+    except Exception:
+        portal_id = None
+
     try:
         supabase.table("crm_connections").delete().eq("user_id", user_id).eq("connection_role", side).execute()
-        
-        supabase.table("crm_connections").insert({
+
+        row = {
             "user_id": user_id,
             "crm_type": "hubspot",
             "connection_role": side,
             "access_token": token_data.get("access_token"),
             "refresh_token": token_data.get("refresh_token", ""),
-            "api_domain": "https://api.hubapi.com" 
-        }).execute()
+            "api_domain": "https://api.hubapi.com"
+        }
+        try:
+            # `portal_id` is an optional column (org_identity.py reads it); databases without it keep working
+            supabase.table("crm_connections").insert({**row, "portal_id": portal_id} if portal_id else row).execute()
+        except Exception:
+            if not portal_id:
+                raise
+            supabase.table("crm_connections").insert(row).execute()
     except Exception as e:
         print(f"Hubspot DB Insert Error: {e}")
         return RedirectResponse(url=f"{ANGULAR_FRONTEND_URL}/connection?status=error")

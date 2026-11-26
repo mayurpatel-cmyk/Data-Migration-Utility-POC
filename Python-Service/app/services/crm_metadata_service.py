@@ -1,5 +1,6 @@
 import httpx
 from app.services import zendesk_metadata_service
+from app.services import hubspot_associations
 import urllib.parse 
 from fastapi import HTTPException
 
@@ -407,9 +408,17 @@ class CrmMetadataService:
                         "unique": f.get("hasUniqueValue", False),
                         "externalId": api_name in ("hs_object_id", "id"),
                         "createable": not hs_read_only,
-                        "updateable": not hs_read_only
+                        "updateable": not hs_read_only,
+                        # option values so the validator / picklist tooling have something to check against
+                        "picklistValues": [str(o.get("value")) for o in (f.get("options") or [])
+                                           if f.get("type") == "enumeration" and not o.get("hidden")
+                                           and o.get("value") not in (None, "")],
+                        "isMultiValue": f.get("type") == "enumeration" and f.get("fieldType") == "checkbox",
                     })
 
+
+                # associations are not properties: expose them as mappable pseudo-fields (__assoc__companies, ...)
+                parsed_fields.extend(hubspot_associations.pseudo_fields(object_name))
 
                 sample_fields = select_fields_list[:50] 
                 properties_query = "&".join([f"properties={urllib.parse.quote(p)}" for p in sample_fields])

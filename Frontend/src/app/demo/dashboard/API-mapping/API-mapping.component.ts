@@ -182,8 +182,32 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     salesforce: ['picklist', 'multipicklist'],
     hubspot: ['picklist'],
     zoho: ['picklist'],
-    zendesk: ['tagger', 'dropdown', 'multiselect'],
+    zendesk: ['tagger', 'dropdown', 'multiselect', 'status', 'priority', 'tickettype', 'customstatus', 'custom_status'],
   };
+
+  private normalizeFieldType(type: string | undefined | null): string {
+    return (type || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  private isPicklistTypeForCrm(crm: string, type: string | undefined | null): boolean {
+    const t = this.normalizeFieldType(type);
+    if (!t) return false;
+    const known = (this.PICKLIST_TYPES_BY_CRM[crm] || []).map((x) => this.normalizeFieldType(x));
+    if (known.includes(t)) return true;
+    return /picklist|dropdown|tagger|multiselect|singleselect|enumeration/.test(t);
+  }
+
+  private picklistDebugSeen = new Set<string>();
+  private debugPicklistSync(mapping: MappingRow, s: string | undefined, t: string | undefined, ok: boolean): void {
+    const key = `${mapping.sourceField}|${mapping.targetField}|${s}|${t}|${ok}`;
+    if (this.picklistDebugSeen.has(key)) return;
+    this.picklistDebugSeen.add(key);
+    console.debug('[PicklistSync]', {
+      source: `${this.sourceCrmId}:${mapping.sourceField}`, sourceType: s,
+      target: `${this.targetCrmId}:${mapping.targetField}`, targetType: t,
+      visible: ok
+    });
+  }
 
   private readonly SYSTEM_MANAGED_FIELDS = new Set<string>([
     'hs_object_id',
@@ -215,8 +239,44 @@ export class ApiMappingComponent implements OnInit, OnDestroy {
     'iscustomerportal'     // "Customer Portal Account"
   ]);
 
-  private isSystemManagedField(fieldName: string): boolean {
-    return this.SYSTEM_MANAGED_FIELDS.has((fieldName || '').toLowerCase());
+  // Extra system-managed (read-only / auto-populated) fields per CRM, on top of the common list above.
+  private readonly SYSTEM_MANAGED_FIELDS_BY_CRM: Record<string, Set<string>> = {
+    salesforce: new Set<string>([
+      'lastvieweddate', 'lastreferenceddate', 'lastactivitydate', 'lastcurequestdate',
+      'lastcuupdatedate', 'photourl', 'masterrecordid'
+    ]),
+    hubspot: new Set<string>([
+      'hs_all_owner_ids', 'hs_all_team_ids', 'hs_all_accessible_team_ids',
+      'hs_created_by_user_id', 'hs_updated_by_user_id', 'hs_merged_object_ids',
+      'hs_user_ids_of_all_owners', 'hs_object_source', 'hs_object_source_id',
+      'hs_object_source_label', 'hs_object_source_detail_1', 'hs_object_source_detail_2',
+      'hs_object_source_detail_3', 'hs_object_source_user_id', 'lastmodifieddate', 'notes_last_updated',
+      'notes_last_contacted', 'notes_next_activity_date', 'num_notes', 'num_contacted_notes'
+    ]),
+    zendesk: new Set<string>([
+      'generated_timestamp', 'has_incidents', 'is_public', 'followup_ids', 'forum_topic_id',
+      'satisfaction_rating', 'satisfaction_probability', 'last_login_at', 'result_type',
+      'permanently_deleted', 'raw_subject', 'raw_description', 'ticket_form_id_readonly'
+    ]),
+    zoho: new Set<string>([
+      'last_activity_time', 'locked__s', 'record_image', 'change_log_time__s',
+      'unsubscribed_mode', 'unsubscribed_time', 'converted__s', 'process_flow', 'approved',
+      'approval', 'editable', 'review_process', 'review', 'orchestration', 'in_merge'
+    ])
+  };
+
+  private readonly SYSTEM_MANAGED_PREFIXES_BY_CRM: Record<string, string[]> = {
+    hubspot: ['hs_analytics_', 'hs_date_entered_', 'hs_date_exited_', 'hs_time_in_', 'hs_v2_date_', 'hs_v2_latest_time_'],
+    zoho: ['$']
+  };
+
+  private isSystemManagedField(fieldName: string, crm?: string): boolean {
+    const name = (fieldName || '').toLowerCase();
+    if (this.SYSTEM_MANAGED_FIELDS.has(name)) return true;
+    const c = (crm || '').toLowerCase();
+    if (!c) return false;
+    if (this.SYSTEM_MANAGED_FIELDS_BY_CRM[c]?.has(name)) return true;
+    return (this.SYSTEM_MANAGED_PREFIXES_BY_CRM[c] || []).some((prefix) => name.startsWith(prefix));
   }
 
   private isStandardZendeskObject(name: string): boolean {
@@ -350,11 +410,16 @@ isProfileDropdownOpen = false;
 
   canSyncPicklist(mapping: MappingRow): boolean {
     if (!this.isPicklistSyncSupported || !mapping.sourceField || !mapping.targetField) return false;
-    const sourceTypes = this.PICKLIST_TYPES_BY_CRM[this.sourceCrmId.toLowerCase()];
-    const targetTypes = this.PICKLIST_TYPES_BY_CRM[this.targetCrmId.toLowerCase()];
-    const s = this.getFieldMeta(mapping.sourceField, 'source')?.type?.toLowerCase();
-    const t = this.getFieldMeta(mapping.targetField, 'target')?.type?.toLowerCase();
-    return !!s && !!t && sourceTypes.includes(s) && targetTypes.includes(t);
+    const s = this.getFieldMeta(mapping.sourceField, 'source')?.type;
+    const t = this.getFieldMeta(mapping.targetField, 'target')?.type;
+    const targetIsZendeskSystemField =
+      this.targetCrmId.toLowerCase() === 'zendesk' &&
+      ['status', 'priority', 'tickettype', 'type', 'customstatus'].includes(this.normalizeFieldType(t));
+    const ok = !targetIsZendeskSystemField &&
+               this.isPicklistTypeForCrm(this.sourceCrmId.toLowerCase(), s) &&
+               this.isPicklistTypeForCrm(this.targetCrmId.toLowerCase(), t);
+    this.debugPicklistSync(mapping, s, t, ok);
+    return ok;
   }
 
    get isPicklistSyncSupported(): boolean {
@@ -2034,7 +2099,7 @@ onReviewPanelDrag(event: MouseEvent): void {
     let filtered = this.targetFields.filter(
       (t) =>
         !claimedByOtherRows.has(t.name) &&
-        !this.isSystemManagedField(t.name) &&
+        !this.isSystemManagedField(t.name, this.targetCrmId) &&
         this.isFieldWritable(t)
     );
 
@@ -2864,7 +2929,7 @@ onReviewPanelDrag(event: MouseEvent): void {
           this.targetFields = this.normalizeFields(targetData.fields || []);
           this.allSourceFields = this.normalizeFields(sourceData.fields || []);
           this.sourceFields = this.allSourceFields.filter(
-            (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name)
+            (field: FieldMeta) => this.isSourceFieldWritable(field) && !this.isSystemManagedField(field.name, this.sourceCrmId)
           );
           this.sourceFieldMap = new Map(this.sourceFields.map((f) => [f.name, f] as [string, FieldMeta]));
           this.targetFieldMap = new Map(this.targetFields.map((f) => [f.name, f] as [string, FieldMeta]));
@@ -3004,7 +3069,7 @@ onReviewPanelDrag(event: MouseEvent): void {
 
       this.targetFields.forEach((t) => {
         const tgtApiExact = t.name.toLowerCase();
-        if (this.isSystemManagedField(tgtApiExact)) return;
+        if (this.isSystemManagedField(tgtApiExact, this.targetCrmId)) return;
         if (claimedTargetFields.has(t.name)) return;
         const fieldIsWritable = this.isFieldWritable(t);
 

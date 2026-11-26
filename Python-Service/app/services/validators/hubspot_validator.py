@@ -58,7 +58,16 @@ class HubspotValidator:
                     df.loc[invalid_duplicates, '_errors'] += f"[{csv_col}: Duplicate value found. This HubSpot property must be unique.] "
                     valid_mask &= ~invalid_duplicates
 
-            if hs_type in ['string', 'text']:
+            if hs_type == 'email' or target_field == 'email':
+                df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s+', '', regex=True)
+                email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+                is_invalid_email = ~df[csv_col].astype(str).str.match(email_regex) & ~is_empty
+                
+                if is_invalid_email.any():
+                    df.loc[is_invalid_email, '_errors'] += f"[{csv_col}: Invalid Email format. HubSpot will reject this.] "
+                    valid_mask &= ~is_invalid_email
+
+            elif hs_type in ['string', 'text']:
                 max_len = int(field_rules.get('length', mapping.get('maxLength', 65536))) 
                 str_lengths = df[csv_col].astype(str).str.len()
                 is_too_long = (str_lengths > max_len) & ~is_empty
@@ -70,7 +79,22 @@ class HubspotValidator:
                 valid_values = field_rules.get('picklistValues', mapping.get('picklistValues', []))
 
                 if valid_values and not mapping.get('syncPicklistValues'):
-                    is_invalid_dropdown = ~str_col.isin([str(v).lower() for v in valid_values]) & ~is_empty
+                    canonical = {str(v).strip().lower(): str(v) for v in valid_values}
+                    if field_rules.get('isMultiValue'):
+                        # a checkbox property holds several options ("a;b"): check and normalise each one
+                        def _multi(val, _canonical=canonical):
+                            if val is None or str(val).strip() == '':
+                                return None, True
+                            parts = [p.strip() for p in re.split(r'[;,|]', str(val)) if p.strip()]
+                            fixed = [_canonical.get(p.lower()) for p in parts]
+                            return (';'.join(x for x in fixed if x), all(x is not None for x in fixed))
+                        checked = df[csv_col].apply(_multi)
+                        is_invalid_dropdown = ~checked.apply(lambda r: r[1]) & ~is_empty
+                        df.loc[~is_empty & ~is_invalid_dropdown, csv_col] = checked.apply(lambda r: r[0])[~is_empty & ~is_invalid_dropdown]
+                    else:
+                        is_invalid_dropdown = ~str_col.isin(list(canonical)) & ~is_empty
+                        mapped = str_col.map(canonical)
+                        df[csv_col] = df[csv_col].where(is_empty | mapped.isna(), mapped)
                     if is_invalid_dropdown.any():
                         df.loc[is_invalid_dropdown, '_errors'] += f"[{csv_col}: Invalid Dropdown value. Must match a valid HubSpot internal option.] "
                         valid_mask &= ~is_invalid_dropdown
@@ -135,14 +159,6 @@ class HubspotValidator:
                 df.loc[is_invalid, '_errors'] += f"[{csv_col}: Invalid Date Format. Could not parse.] "
                 valid_mask &= ~is_invalid
 
-            elif hs_type == 'email' or target_field == 'email':
-                df.loc[~is_empty, csv_col] = df.loc[~is_empty, csv_col].astype(str).str.replace(r'\s+', '', regex=True)
-                email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-                is_invalid_email = ~df[csv_col].astype(str).str.match(email_regex) & ~is_empty
-                
-                if is_invalid_email.any():
-                    df.loc[is_invalid_email, '_errors'] += f"[{csv_col}: Invalid Email format. HubSpot will reject this.] "
-                    valid_mask &= ~is_invalid_email
 
         df = df.astype(object).where(pd.notna(df), None)
         valid_df = df[valid_mask].drop(columns=['_errors'])

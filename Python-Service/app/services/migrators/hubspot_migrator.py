@@ -8,6 +8,9 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 from app.services.crm_service import CrmService, CrmSessionExpired
 from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN
 from app.services.time_filter_service import build_hubspot_time_filters, TimeFilterError
+from app.services.hubspot_associations import (
+    ASSOC_PREFIX, assoc_target, associate_default, clean_id, is_assoc_field, read_associations,
+)
 
 DEFAULT_DOMAIN = "https://api.hubapi.com"
 SEARCH_PAGE_SIZE = 100
@@ -154,8 +157,11 @@ class HubspotMigrator:
         properties = ["hs_object_id"]
         for mapping in mappings:
             source_field = mapping.get("sourceField") or mapping.get("csvField")
-            if source_field and source_field not in properties:
+            if source_field and source_field not in properties and not is_assoc_field(source_field):
                 properties.append(source_field)
+        assoc_fields = list(dict.fromkeys(
+            (m.get("sourceField") or m.get("csvField")) for m in mappings
+            if is_assoc_field(m.get("sourceField") or m.get("csvField"))))
 
         try:
             time_filters = build_hubspot_time_filters(time_filter)
@@ -201,6 +207,9 @@ class HubspotMigrator:
                     await send_log(f"[{obj_name}] Extracted {len(source_records)} records...")
                     next_log = (len(source_records) // 1000 + 1) * 1000
 
+            if assoc_fields and source_records:
+                await self._fill_source_associations(client, headers, domain, user_id, obj, source_records, assoc_fields, send_log)
+
             await send_log(f"[{obj_name}] Extraction Complete! Total: {len(source_records)}")
             return source_records, effective_query
 
@@ -217,7 +226,7 @@ class HubspotMigrator:
         props = rec.get("properties") if isinstance(rec.get("properties"), dict) else rec
         out: Dict[str, Any] = {}
         for k, v in props.items():
-            if k in _READ_ONLY_PROPS or v is None or v == "":
+            if k in _READ_ONLY_PROPS or v is None or v == "" or is_assoc_field(k):
                 continue
             if isinstance(v, bool):
                 v = "true" if v else "false"
@@ -349,14 +358,20 @@ class HubspotMigrator:
                            or container.get("hs_object_id") or container.get("id"))
             else:
                 ext_val = props.get(ext) if ext else None
+            assoc = {assoc_target(k): v for k, v in container.items()
+                     if is_assoc_field(k) and v not in (None, "")}
             items.append({"idx": entry["originalIndex"], "trace": str(entry["originalIndex"]),
-                          "props": props, "ext_val": None if ext_val in (None, "") else str(ext_val)})
+                          "props": props, "ext_val": None if ext_val in (None, "") else str(ext_val),
+                          "assoc": assoc})
 
+        assoc_only: List[dict] = []     # patch-pass rows that carry associations but no properties
         if op_mode != "delete":
             writable = []
             for it in items:
                 if it["props"]:
                     writable.append(it)
+                elif it["assoc"] and op_mode in ("update", "upsert") and it["ext_val"]:
+                    assoc_only.append(it)
                 else:
                     skip(it, "No writable properties for HubSpot in this row (reference-only pass; "
                              "HubSpot associations are not migrated).")
@@ -521,7 +536,101 @@ class HubspotMigrator:
         for mode in ("insert", "update", "upsert"):
             await run_group(mode, groups[mode])
 
+        # ---- associations (links to other records); runs only when the mapping contains __assoc__ fields
+        if any(i["assoc"] for i in items) or assoc_only:
+            try:
+                await self._write_associations(client, options, headers, base, obj, ext, user_id, send_log,
+                                               items, assoc_only, source_records, succ, ok, skip)
+            except asyncio.CancelledError:
+                raise
+            except _PROPAGATE as exc:   # rows above are already written and must be returned; the next request raises again
+                await send_log(f"[{obj}] {pass_name}: associations stopped early ({type(exc).__name__}); "
+                               f"those links were not created.")
+            except Exception as exc:
+                await send_log(f"[{obj}] {pass_name}: associations could not be completed: {type(exc).__name__}: {exc}")
+
         return result()
+
+    # ==========================================
+    # ASSOCIATIONS
+    # ==========================================
+    async def _write_associations(self, client, options, headers, base, obj, ext, user_id, send_log,
+                                  items, assoc_only, source_records, succ, ok, skip):
+        succ_ids = {id(r) for r in succ}
+        rows: List[Tuple[dict, str]] = []          # (item, HubSpot id of the record that was just written)
+        for it in items:
+            rec = source_records[it["idx"]]
+            if it["assoc"] and id(rec) in succ_ids and rec.get("Target_Id"):
+                rows.append((it, str(rec["Target_Id"])))
+
+        if assoc_only:                              # patch pass: find the already-migrated records by their match key
+            if ext.lower() in _ID_FIELDS:
+                resolved = {it["ext_val"]: it["ext_val"] for it in assoc_only}
+            else:
+                resolved = await self.find_existing(client, options, ext, [it["ext_val"] for it in assoc_only])
+            for it in assoc_only:
+                hs_id = resolved.get(it["ext_val"])
+                if hs_id:
+                    ok(it, hs_id)
+                    rows.append((it, str(hs_id)))
+                else:
+                    skip(it, f"[{ext}] No matching record found in HubSpot to attach associations to.")
+
+        by_target: Dict[str, List[Tuple[str, str]]] = {}
+        unmapped = 0
+        for it, hs_id in rows:
+            for to_obj, raw in it["assoc"].items():
+                parent = clean_id(raw)
+                if parent:
+                    by_target.setdefault(normalize_hubspot_object(to_obj), []).append((hs_id, parent))
+                else:
+                    unmapped += 1
+        if unmapped:
+            await send_log(f"[{obj}] Associations: {unmapped} value(s) skipped because they are not HubSpot ids "
+                           f"(the parent record was not migrated through this tool, so there is nothing to link to).")
+
+        for to_obj, pairs in by_target.items():
+            failed = await associate_default(self, client, headers, base, user_id, send_log, obj, to_obj, pairs)
+            await send_log(f"[{obj}] Associations -> {to_obj}: {len(set(pairs)) - len(set(failed))} created, "
+                           f"{len(set(failed))} failed.")
+
+    async def _fill_source_associations(self, client, headers, domain, user_id, obj, records, assoc_fields, send_log):
+        """Adds `__assoc__<object>` columns (the associated record's id) to extracted records."""
+        ids = [str(r["id"]) for r in records if r.get("id") not in (None, "")]
+        for field in assoc_fields:
+            to_obj = normalize_hubspot_object(assoc_target(field))
+            found = await read_associations(self, client, headers, domain, user_id, send_log, obj, to_obj, ids)
+            for r in records:
+                r[field] = found.get(str(r.get("id")))
+            await send_log(f"[{obj}] Associations <- {to_obj}: {len(found)}/{len(ids)} records have one.")
+
+    # ==========================================
+    # REVERT (delete records this run created)
+    # ==========================================
+    async def revert_created(self, client, options, record_ids, send_log):
+        """Archives records this run created. Returns the ids NOT confirmed archived ([] = all reverted)."""
+        obj = normalize_hubspot_object(options["targetObject"])
+        base = (options.get("instance_url") or DEFAULT_DOMAIN).rstrip("/")
+        if not base.startswith("http"):
+            base = f"https://{base}"
+        headers = {"Authorization": f"Bearer {options['token']}", "Content-Type": "application/json"}
+        failed: List[str] = []
+        ids = [str(r) for r in dict.fromkeys(record_ids) if r]
+        for chunk in chunk_dataset(ids, BATCH_SIZE):
+            try:
+                res = await self._request(client, "POST", f"{base}/crm/v3/objects/{obj}/batch/archive", headers,
+                                          options.get("userId"), "target", send_log,
+                                          json={"inputs": [{"id": i} for i in chunk]})
+            except _PROPAGATE:
+                raise
+            except Exception as exc:
+                await send_log(f"[{obj}] Revert failed: {exc}")
+                failed.extend(chunk)
+                continue
+            if res.status_code not in (200, 202, 204):
+                await send_log(f"[{obj}] Revert batch failed ({res.status_code}): {res.text[:300]}")
+                failed.extend(chunk)
+        return failed
 
     # ==========================================
     # RECONCILE (used by an interrupted INSERT on resume)
