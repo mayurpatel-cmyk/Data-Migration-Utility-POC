@@ -51,6 +51,7 @@ class CrossCrmFileMigrator:
             "apiLimitReached": False,
         }
         old_ids = list(id_map.keys())
+        id_by_text = {str(k): v for k, v in id_map.items()}
         if not old_ids:
             return results
 
@@ -88,7 +89,7 @@ class CrossCrmFileMigrator:
                     if limit_error or session_error:  # rate limit / dead login already hit; leave un-checkpointed so a re-run resumes here
                         return
 
-                    new_parent = id_map.get(f.parent_id)
+                    new_parent = id_map.get(f.parent_id) or id_by_text.get(str(f.parent_id))
                     if not new_parent:
                         bucket["skipped"] += 1
                         await send_log(f"[Files] Skipped '{f.name}' ({f.source_id}): source record "

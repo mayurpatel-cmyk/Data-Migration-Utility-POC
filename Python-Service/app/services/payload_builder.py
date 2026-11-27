@@ -205,13 +205,23 @@ class PayloadBuilderService:
                         target_record["custom_object_fields"][target_field] = csv_val
                     else:
                         target_record[target_field] = csv_val
-                        
+
+                    _rel_key = mapping.get("relationalExtIdField")
+                    if mapping.get("type") == "reference" and _rel_key and str(_rel_key).lower() != "id":
+                        _parent = mapping.get("parentObjectName") or next(iter(mapping.get("referenceTo") or []), None)
+                        if _parent:
+                            target_record.setdefault("__relext__", {})[target_field] = {"object": _parent, "key": _rel_key}
+
                     if is_patch_mode and mapping.get("type") == "reference": has_patch_data = True
 
                 elif target_crm == "hubspot":
                     if str(target_field).startswith("__assoc__"):
-                        # association pseudo-field: carried to the migrator, which links the record after writing it
                         target_record[target_field] = csv_val
+                        _rel_key = mapping.get("relationalExtIdField")
+                        if _rel_key and str(_rel_key).lower() not in ("id", "hs_object_id"):
+                            _parent = (mapping.get("parentObjectName") or next(iter(mapping.get("referenceTo") or []), None)
+                                       or str(target_field)[len("__assoc__"):])
+                            target_record.setdefault("__relext__", {})[target_field] = {"object": _parent, "key": _rel_key}
                     elif mapping.get("type") == "reference":
                         pass 
                     else:

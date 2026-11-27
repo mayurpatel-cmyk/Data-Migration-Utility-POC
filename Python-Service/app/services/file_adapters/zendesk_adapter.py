@@ -92,7 +92,9 @@ class ZendeskFileAdapter(FileAdapter):
         files = []
         for tid, a in rows:
             name = a.get("file_name") or "attachment"
-            sf = SourceFile(str(a["id"]), str(tid), name, int(a.get("size") or 0), "attachment",
+            # parent_id must be the SAME object the caller keyed its id map with (an in-run id map built from Zendesk
+            # records has int keys), otherwise the orchestrator reports "source record N is outside this migration batch"
+            sf = SourceFile(str(a["id"]), tid, name, int(a.get("size") or 0), "attachment",
                             a.get("content_type") or mimetypes.guess_type(name)[0], meta={"url": a.get("content_url")})
             if not a.get("content_url"):
                 sf.skip_reason = "attachment has no download URL"

@@ -17,6 +17,8 @@ Writes
   macros / triggers / views are read-only (their rules embed ids that differ per account).
 """
 import asyncio
+import contextlib
+import copy
 import json
 import logging
 import os
@@ -25,7 +27,7 @@ import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.crm_service import CrmService, CrmSessionExpired, crm_session_expired
-from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN
+from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN, idempotent_posts
 from app.services.time_filter_service import TimeFilterError, build_zendesk_time_clause, zendesk_time_bounds
 from app.services.zendesk_common import (
     LIST_ENDPOINT_OBJECTS, SEARCH_EXPORT_TYPES, WRITABLE_STANDARD, api_base, classify_object, flatten_record,
@@ -43,6 +45,8 @@ MAX_RETRY_AFTER = 120.0
 JOB_TIMEOUT_SECONDS = float(os.getenv("ZENDESK_JOB_TIMEOUT_SECONDS", "900"))
 _PROPAGATE = (ApiQuotaExhausted, CircuitOpen, asyncio.CancelledError, CrmSessionExpired)
 
+_PARENT_CACHE: Dict[Tuple[str, str, str, str], str] = {}   # (api base, parent object, key, value) -> Zendesk id
+_PARENT_CACHE_MAX = 100_000
 _REFRESH_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}   # Zendesk refresh tokens rotate: refresh once at a time
 
 _READ_ONLY = {"url", "generated_timestamp", "via", "has_incidents", "last_login_at", "active", "Id",
@@ -87,7 +91,16 @@ def _fmt_error(item: Optional[dict]) -> str:
 
 
 def _fmt_http(res) -> str:
-    return f"HTTP {res.status_code}: {res.text[:400]}"
+    # "Temporary" makes resumable_runner.TRANSIENT_ROW_RE re-send the row automatically (Zendesk's own wording,
+    # e.g. "RateLimited", would not match it).
+    prefix = "Temporary (rate limit / service unavailable): " if res.status_code in (429, 503) else ""
+    return f"{prefix}HTTP {res.status_code}: {res.text[:400]}"
+
+
+def _no_replay(mode: str):
+    """An INSERT must never be replayed by RetryingClient after an ambiguous failure, even when the runner has switched
+    idempotent_posts ON for the pass (tickets/groups UPSERT is lookup + insert, and the insert half is not idempotent)."""
+    return idempotent_posts(False) if mode == "insert" else contextlib.nullcontext()
 
 
 def align_results(results: Any, n: int) -> Optional[List[Optional[dict]]]:
@@ -124,6 +137,11 @@ class _Session:
         self.singles = asyncio.Semaphore(SINGLE_CONCURRENCY)
         self.label = name
 
+    def for_object(self, kind: str, name: str) -> "_Session":
+        other = copy.copy(self)
+        other.kind, other.name, other.label = kind, name, name
+        return other
+
     def ok(self, it, zd_id):
         rec = self.source_records[it["idx"]]
         rec["Target_Id"] = str(zd_id)
@@ -153,7 +171,10 @@ class _Session:
 
     def settle_ambiguous(self, mode, items, msg):
         for it in self.undecided(items):
-            (self.unknown if mode == "insert" else self.fail)(it, msg if mode == "insert" else f"{msg} (safe to retry)")
+            if mode == "insert":
+                self.unknown(it, msg)      # looked up by its correlation key before any re-send
+            else:
+                self.fail(it, f"Temporary: {msg} (the write is idempotent, so it is safe to send again)")
 
 
 class ZendeskMigrator:
@@ -375,10 +396,129 @@ class ZendeskMigrator:
         by = "id" if key == "id" else ("name" if s.name == "groups" and key == "name" else "external_id")
         return await self._lookup(s, by, [str(v) for v in values])
 
+    # ================================================================== RELATIONAL LINKS BY BUSINESS KEY
+    @staticmethod
+    def _get_ref(raw: dict, field: str):
+        if field in raw:
+            return raw[field]
+        nested = raw.get("custom_object_fields")
+        return nested.get(field) if isinstance(nested, dict) else None
+
+    @staticmethod
+    def _set_ref(raw: dict, field: str, value) -> None:
+        if field in raw or not isinstance(raw.get("custom_object_fields"), dict):
+            raw[field] = value
+        else:
+            raw["custom_object_fields"][field] = value
+
+    async def _search_exact(self, ps: _Session, plural: str, field: str, values: List[str]) -> Dict[str, str]:
+        """Exact (case-insensitive) match on users.email / organizations.name. The search endpoints are fuzzy,
+        so the result list is filtered client-side."""
+        found: Dict[str, str] = {}
+        sem = asyncio.Semaphore(LOOKUP_CONCURRENCY)
+        path = "users/search.json?query=" if plural == "users" else "organizations/search.json?name="
+
+        async def one(v: str):
+            async with sem:
+                res = await self._request(ps.client, "GET", f"{ps.base}/{path}{urllib.parse.quote(v)}", ps.headers,
+                                          ps.user_id, ps.role, ps.send_log)
+                res.raise_for_status()
+                for r in res.json().get(plural) or []:
+                    if str(r.get(field) or "").strip().lower() == v.strip().lower():
+                        found[v] = str(r["id"])
+                        return
+
+        await asyncio.gather(*[one(v) for v in values])
+        return found
+
+    async def _resolve_parent_ids(self, s: _Session, parent_obj: str, key: str, values: List[str]) -> Dict[str, str]:
+        """{key value: Zendesk id of the parent}. Supported keys: id, external_id (users, organizations, tickets,
+        custom objects), email (users), name (organizations, groups). ValueError for anything else."""
+        kind, name = classify_object(parent_obj)
+        key_l = (key or "").strip().lower()
+        values = [str(v) for v in dict.fromkeys(values)]
+        if key_l == "id":
+            return {v: v for v in values}
+
+        found: Dict[str, str] = {}
+        todo: List[str] = []
+        for v in values:
+            hit = _PARENT_CACHE.get((s.base, name, key_l, v))
+            if hit:
+                found[v] = hit
+            else:
+                todo.append(v)
+        if not todo:
+            return found
+
+        ps = s.for_object(kind, name)
+        if key_l == "external_id" and not (kind == "standard" and name in ("groups", "macros", "triggers", "views")):
+            got = await self._lookup(ps, "external_id", todo)
+        elif kind == "standard" and name == "groups" and key_l == "name":
+            got = await self._lookup(ps, "name", todo)
+        elif kind == "standard" and name == "users" and key_l == "email":
+            got = await self._search_exact(ps, "users", "email", todo)
+        elif kind == "standard" and name == "organizations" and key_l == "name":
+            got = await self._search_exact(ps, "organizations", "name", todo)
+        else:
+            raise ValueError(f"Matching {parent_obj} by '{key}' is not supported "
+                             f"(use Id, external_id, users: email, organizations / groups: name).")
+
+        if len(_PARENT_CACHE) > _PARENT_CACHE_MAX:
+            _PARENT_CACHE.clear()
+        for v, zid in got.items():
+            _PARENT_CACHE[(s.base, name, key_l, v)] = zid
+            found[v] = zid
+        return found
+
+    async def _resolve_relational(self, s: _Session, items: List[dict]) -> List[dict]:
+        """Rows whose lookup field was mapped with 'Match <parent> By <key>' (not Id) carry the parent's KEY value.
+        Look the parents up in Zendesk, swap in their ids, and fail only the rows whose parent does not exist."""
+        need: Dict[Tuple[str, str], set] = {}
+        for it in items:
+            for field, spec in (it["raw"].get("__relext__") or {}).items():
+                v = self._get_ref(it["raw"], field)
+                if v not in (None, ""):
+                    need.setdefault((spec["object"], spec["key"]), set()).add(str(v))
+        if not need:
+            return items
+
+        resolved: Dict[Tuple[str, str], Any] = {}
+        for (obj, key), vals in need.items():
+            try:
+                resolved[(obj, key)] = await self._resolve_parent_ids(s, obj, key, sorted(vals))
+            except ValueError as e:
+                resolved[(obj, key)] = str(e)
+            await s.send_log(f"[{s.name}] Resolved {obj} by {key}: "
+                             f"{len(resolved[(obj, key)]) if isinstance(resolved[(obj, key)], dict) else 0}/{len(vals)} found.")
+
+        keep: List[dict] = []
+        for it in items:
+            problem = None
+            for field, spec in (it["raw"].get("__relext__") or {}).items():
+                v = self._get_ref(it["raw"], field)
+                if v in (None, ""):
+                    continue
+                res = resolved[(spec["object"], spec["key"])]
+                if isinstance(res, str):
+                    problem = res
+                elif str(v) not in res:
+                    problem = (f"{field}: no {spec['object']} with {spec['key']} = '{v}' exists in Zendesk "
+                               f"(migrate the parent first, or match it by Id).")
+                else:
+                    self._set_ref(it["raw"], field, res[str(v)])
+                if problem:
+                    break
+            if problem:
+                s.fail(it, problem)
+            else:
+                keep.append(it)
+        return keep
+
     # ================================================================== WIRE PAYLOADS
     def _wire(self, s: _Session, raw: dict, mode: str, known_id: Optional[str] = None) -> dict:
         """One mapped record -> the JSON Zendesk expects. ValueError(message) marks just this row as failed."""
-        rec = {k: v for k, v in raw.items() if v is not None and not str(k).startswith("Target_")}
+        rec = {k: v for k, v in raw.items() if v is not None and not str(k).startswith("Target_") and k != "__relext__"}
         is_ticket = s.kind == "standard" and s.name == "tickets"
         keep_ts = is_ticket and s.use_import and mode == "insert"
         for k in list(rec):
@@ -480,9 +620,14 @@ class ZendeskMigrator:
                 value = raw.get("external_id") or raw.get(s.ext)
             items.append({"idx": e["originalIndex"], "raw": raw, "ext_val": None if value in (None, "") else str(value)})
 
+        all_items = list(items)
         try:
             if op_mode == "delete":
                 await self._write_group(s, "delete", [i for i in items if self._need_value(s, i, "No Zendesk id to delete.")])
+            else:
+                items = await self._resolve_relational(s, items)    # parent keys -> parent ids (only when mapped that way)
+            if op_mode == "delete":
+                pass
             elif op_mode == "insert":
                 await self._write_group(s, "insert", items)
             else:
@@ -511,9 +656,9 @@ class ZendeskMigrator:
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"[:300]
             await send_log(f"[{label}] {pass_name}: stopped by an error: {detail}")
-            s.settle_ambiguous(op_mode if op_mode == "insert" else "update", items, detail)
+            s.settle_ambiguous(op_mode if op_mode == "insert" else "update", all_items, detail)
 
-        for i in items:   # nothing may be left undecided
+        for i in all_items:   # nothing may be left undecided
             if i["idx"] not in s.decided:
                 s.fail(i, "No result was returned for this record.")
         await send_log(f"[{label}] {pass_name}: {len(s.succ)} succeeded, {len(s.errs)} failed, {len(s.skips)} skipped.")
@@ -588,8 +733,9 @@ class ZendeskMigrator:
             method, url, body = self._job_request(s, mode, wires)
             kwargs = {"json": body} if body is not None else {}
             try:
-                res = await self._request(s.client, method, url, s.headers, s.user_id, s.role, s.send_log,
-                                          idempotent=(mode != "insert"), **kwargs)
+                with _no_replay(mode):
+                    res = await self._request(s.client, method, url, s.headers, s.user_id, s.role, s.send_log,
+                                              idempotent=(mode != "insert"), **kwargs)
             except _PROPAGATE:
                 raise
             except Exception as exc:
@@ -644,8 +790,9 @@ class ZendeskMigrator:
                     gid = wire.pop("id")
                     res = await self._request(s.client, "PUT", f"{s.base}/groups/{gid}.json", s.headers, s.user_id, s.role, s.send_log, json={"group": wire})
                 else:
-                    res = await self._request(s.client, "POST", f"{s.base}/groups.json", s.headers, s.user_id, s.role, s.send_log,
-                                              idempotent=False, json={"group": wire})
+                    with _no_replay("insert"):
+                        res = await self._request(s.client, "POST", f"{s.base}/groups.json", s.headers, s.user_id, s.role, s.send_log,
+                                                  idempotent=False, json={"group": wire})
                 if res.status_code in (200, 201):
                     s.ok(it, res.json()["group"]["id"])
                 elif mode == "insert" and res.status_code >= 500 and res.status_code != 503:

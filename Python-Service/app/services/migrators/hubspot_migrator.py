@@ -9,7 +9,8 @@ from app.services.crm_service import CrmService, CrmSessionExpired
 from app.services.resilience.retry import ApiQuotaExhausted, CircuitOpen, OUTCOME_UNKNOWN
 from app.services.time_filter_service import build_hubspot_time_filters, TimeFilterError
 from app.services.hubspot_associations import (
-    ASSOC_PREFIX, assoc_target, associate_default, clean_id, is_assoc_field, read_associations,
+    ASSOC_PREFIX, assoc_target, associate_default, clean_id, is_assoc_field, is_internal_field, read_associations,
+    resolve_parent_ids,
 )
 
 DEFAULT_DOMAIN = "https://api.hubapi.com"
@@ -226,7 +227,7 @@ class HubspotMigrator:
         props = rec.get("properties") if isinstance(rec.get("properties"), dict) else rec
         out: Dict[str, Any] = {}
         for k, v in props.items():
-            if k in _READ_ONLY_PROPS or v is None or v == "" or is_assoc_field(k):
+            if k in _READ_ONLY_PROPS or v is None or v == "" or is_internal_field(k):
                 continue
             if isinstance(v, bool):
                 v = "true" if v else "false"
@@ -362,7 +363,7 @@ class HubspotMigrator:
                      if is_assoc_field(k) and v not in (None, "")}
             items.append({"idx": entry["originalIndex"], "trace": str(entry["originalIndex"]),
                           "props": props, "ext_val": None if ext_val in (None, "") else str(ext_val),
-                          "assoc": assoc})
+                          "assoc": assoc, "relext": container.get("__relext__") or {}})
 
         assoc_only: List[dict] = []     # patch-pass rows that carry associations but no properties
         if op_mode != "delete":
@@ -576,11 +577,42 @@ class HubspotMigrator:
                 else:
                     skip(it, f"[{ext}] No matching record found in HubSpot to attach associations to.")
 
+        # parents mapped as "Match <parent> By <business key>" arrive as that key's value: resolve them to HubSpot ids first
+        def _spec(it, to_obj):
+            s = (it.get("relext") or {}).get(f"{ASSOC_PREFIX}{to_obj}")
+            return s if s and str(s.get("key", "")).lower() not in ("id", "hs_object_id") else None
+
+        need: Dict[Tuple[str, str], set] = {}
+        for it, _hs_id in rows:
+            for to_obj, raw in it["assoc"].items():
+                sp = _spec(it, to_obj)
+                if sp:
+                    need.setdefault((normalize_hubspot_object(sp.get("object") or to_obj), sp["key"]), set()).add(str(raw))
+        resolved: Dict[Tuple[str, str], Dict[str, str]] = {}
+        for (p_obj, key), vals in need.items():
+            try:
+                resolved[(p_obj, key)] = await resolve_parent_ids(self, client, headers, base, user_id, send_log,
+                                                                  p_obj, key, sorted(vals))
+            except _PROPAGATE:
+                raise
+            except Exception as exc:
+                await send_log(f"[{obj}] Associations: could not look up {p_obj} by '{key}': {exc}")
+                resolved[(p_obj, key)] = {}
+            await send_log(f"[{obj}] Resolved {p_obj} by {key}: {len(resolved[(p_obj, key)])}/{len(vals)} found.")
+
         by_target: Dict[str, List[Tuple[str, str]]] = {}
         unmapped = 0
+        unmatched = 0
         for it, hs_id in rows:
             for to_obj, raw in it["assoc"].items():
-                parent = clean_id(raw)
+                sp = _spec(it, to_obj)
+                if sp:
+                    parent = resolved.get((normalize_hubspot_object(sp.get("object") or to_obj), sp["key"]), {}).get(str(raw), "")
+                    if not parent:
+                        unmatched += 1
+                        continue
+                else:
+                    parent = clean_id(raw)
                 if parent:
                     by_target.setdefault(normalize_hubspot_object(to_obj), []).append((hs_id, parent))
                 else:
@@ -588,6 +620,9 @@ class HubspotMigrator:
         if unmapped:
             await send_log(f"[{obj}] Associations: {unmapped} value(s) skipped because they are not HubSpot ids "
                            f"(the parent record was not migrated through this tool, so there is nothing to link to).")
+        if unmatched:
+            await send_log(f"[{obj}] Associations: {unmatched} value(s) skipped because no parent record in HubSpot "
+                           f"has that key value (migrate the parent first, or match it by Id).")
 
         for to_obj, pairs in by_target.items():
             failed = await associate_default(self, client, headers, base, user_id, send_log, obj, to_obj, pairs)

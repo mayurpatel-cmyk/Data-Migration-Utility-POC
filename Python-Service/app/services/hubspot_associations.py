@@ -32,6 +32,11 @@ def is_assoc_field(name: Any) -> bool:
     return isinstance(name, str) and name.startswith(ASSOC_PREFIX)
 
 
+def is_internal_field(name: Any) -> bool:
+    """Keys that instruct the migrator and must never be sent to HubSpot as properties."""
+    return is_assoc_field(name) or name == "__relext__"
+
+
 def assoc_target(name: str) -> str:
     return name[len(ASSOC_PREFIX):].strip().lower()
 
@@ -108,3 +113,60 @@ async def read_associations(migrator, client, headers: dict, base: str, user_id,
                                                       for a in (t.get("associationTypes") or []))), targets[0])
             out[str((r.get("from") or {}).get("id"))] = str(primary.get("toObjectId"))
     return out
+
+
+PARENT_ID_CACHE: Dict[Tuple[str, str, str, str], str] = {}     # (api base, object, property, value) -> HubSpot id
+_PARENT_CACHE_MAX = 100_000
+_SEARCH_PAGE = 100
+
+
+async def resolve_parent_ids(migrator, client, headers: dict, base: str, user_id, send_log,
+                             obj: str, key: str, values: List[str]) -> Dict[str, str]:
+    """{value of `key` -> HubSpot id} for parents matched by a business key ('Match <parent> By <key>'), looked up with
+    the Search API (IN, case-insensitive, oldest record wins when the key is not actually unique).
+    `id` / `hs_object_id` need no lookup."""
+    key_l = (key or "").strip().lower()
+    values = [str(v) for v in dict.fromkeys(values) if v not in (None, "")]
+    if key_l in ("id", "hs_object_id"):
+        return {v: clean_id(v) for v in values if clean_id(v)}
+
+    found: Dict[str, str] = {}
+    todo: List[str] = []
+    for v in values:
+        hit = PARENT_ID_CACHE.get((base, obj, key_l, v))
+        if hit:
+            found[v] = hit
+        else:
+            todo.append(v)
+
+    by_lower: Dict[str, str] = {}
+    for v in todo:
+        by_lower.setdefault(v.strip().lower(), v)
+    wanted = list(by_lower)
+    url = f"{base}/crm/v3/objects/{obj}/search"
+    for chunk in _chunks(wanted, _SEARCH_PAGE):
+        after = None
+        while True:
+            body: Dict[str, Any] = {
+                "filterGroups": [{"filters": [{"propertyName": key, "operator": "IN", "values": chunk}]}],
+                "properties": [key], "limit": _SEARCH_PAGE,
+                "sorts": [{"propertyName": "hs_object_id", "direction": "ASCENDING"}],
+            }
+            if after:
+                body["after"] = after
+            res = await migrator._request(client, "POST", url, headers, user_id, "target", send_log, json=body)
+            if res.status_code != 200:
+                raise RuntimeError(f"HubSpot lookup of {obj} by '{key}' failed ({res.status_code}): {res.text[:300]}")
+            data = res.json()
+            for r in data.get("results") or []:
+                raw = (r.get("properties") or {}).get(key)
+                original = by_lower.get(str(raw or "").strip().lower())
+                if original is not None and original not in found:
+                    found[original] = str(r["id"])
+                    PARENT_ID_CACHE[(base, obj, key_l, original)] = str(r["id"])
+            after = ((data.get("paging") or {}).get("next") or {}).get("after")
+            if not after:
+                break
+    if len(PARENT_ID_CACHE) > _PARENT_CACHE_MAX:
+        PARENT_ID_CACHE.clear()
+    return found

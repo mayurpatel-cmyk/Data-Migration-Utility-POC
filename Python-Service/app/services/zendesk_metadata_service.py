@@ -65,7 +65,9 @@ async def fetch_fields(zd_token: str, subdomain: str, object_name: str) -> Dict[
                 fields[fname] = _entry(fname, label, type_, required=required, ref=ref, writable=writable,
                                        options=options, context=ctx,
                                        external_id=fname in _EXTERNAL_ID_NAMES or (fname == "email" and name == "users"),
-                                       unique=fname == "external_id")
+                                       # business keys Zendesk enforces as unique: offered by "Match <parent> By"
+                                       unique=fname == "external_id" or (fname == "email" and name == "users")
+                                       or (fname == "name" and name in ("organizations", "groups")))
 
             if name == "tickets":
                 for f in await _get_all(client, f"{base}/ticket_fields.json?page[size]=100", headers, "ticket_fields"):
